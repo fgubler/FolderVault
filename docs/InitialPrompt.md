@@ -1,8 +1,11 @@
 # Build Prompt: "FolderVault" — an incremental folder-backup app for Android
 
-You are building a **new, standalone Android app**. Its job is to back up a
-user-selected local folder (and all of its subfolders, recursively) to a cloud destination
-(Google Drive first), incrementally and efficiently, with optional client-side encryption.
+You are building a **new, standalone Android app**. It lets the user define **multiple independent
+backups**; each backup maps **one user-selected local folder (and all its subfolders, recursively)**
+to **one cloud destination folder** (Google Drive first), and runs incrementally, efficiently, and
+with optional client-side encryption. The backups are independent of one another — each has its own
+source folder, destination, schedule, encryption, and settings, and they run and are managed
+separately.
 
 **Starting point:** a fresh, empty "standard" Android Studio project already exists (Compose
 template, `MainActivity`, default Gradle setup, version catalog). Do **not** scaffold a new
@@ -24,19 +27,23 @@ worker → UI) and keep each slice compiling.
 
 ## 1. Product concept (put this in the README and the onboarding)
 
-FolderVault continuously mirrors a local folder to the cloud as an **append-only archive**.
+FolderVault lets the user set up **any number of independent backups**. Each backup continuously
+mirrors **one local folder (recursively)** to **one cloud folder** as an **append-only archive**.
 It is optimized for **files that rarely change** — photo libraries, document archives, scans,
 exports — not for live working directories with constant edits.
 
 **Strengths (state these to the user):**
+- Multiple backups: define several, each mapping a different folder to its own cloud destination,
+  managed and scheduled independently.
 - Set-and-forget: pick a folder once, new files get uploaded automatically.
 - Incremental: only new or changed files are uploaded; unchanged files are never re-sent.
 - Safe: it never deletes anything in the cloud. Deleting locally does not delete the backup.
 - Private: optional client-side encryption — the cloud provider sees only encrypted bytes.
 
 **Weaknesses / non-goals (state these honestly to the user in onboarding):**
-- Not a two-way sync. It is a one-way push (local → cloud). It does not restore yet (restore is
-  a future feature; design data models so restore is possible later).
+- Not a two-way sync. It is a one-way push (local → cloud). Recovery is via an explicit **one-time
+  Restore** (§10) that downloads a backup folder back to a local folder — not continuous two-way
+  sync.
 - Not ideal for frequently-changing files: changed files are uploaded as **new timestamped
   copies**, so a file edited daily produces many cloud versions (a retention policy mitigates this).
 - Detects changes by modification-time and size, not by content. A tool that rewrites a file
@@ -68,23 +75,23 @@ exports — not for live working directories with constant edits.
 - **Compose Preview screenshot rendering with the official CPST plugin**
   (`com.android.compose.screenshot`). This serves two purposes: UI regression tests AND — more
   importantly during development — a way for the coding agent to *see* what each screen looks
-  like (see §11, "Coding-agent feedback loop"). Setup:
-    - Add the `com.android.compose.screenshot` plugin (use the latest alpha version) and the
-      `screenshotTestImplementation(androidx.compose.ui:ui-tooling)` dependency.
-    - Enable `android.experimental.enableScreenshotTest=true` (in `gradle.properties` and the
-      module's `experimentalProperties`).
-    - Put screenshot-preview composables in the dedicated **`src/screenshotTest`** source set (CPST
-      requires its own source set — distinct from the Robolectric/`test` set above).
-    - For every screen and every notable state (empty home list, populated home list, each
-      onboarding card, add/edit form states, detail screen, error/warning states) add a `@Preview`
-      composable in that source set, exercising light & dark via `uiMode` where relevant.
-    - Generate reference PNGs with `./gradlew updateDebugScreenshotTest`; validate later changes with
-      `./gradlew validateDebugScreenshotTest`. Generated images land under the screenshotTest
-      reference directory; the HTML report is at
-      `app/build/reports/screenshotTest/preview/debug/index.html`.
-    - The CPST plugin is **experimental/alpha** — pin exact versions in the catalog and, if a Gradle
-      task fails due to a version-compatibility issue, web-search the current required AGP/Kotlin/JDK
-      matrix rather than guessing.
+  like (see §12, "Coding-agent feedback loop"). Setup:
+  - Add the `com.android.compose.screenshot` plugin (use the latest alpha version) and the
+    `screenshotTestImplementation(androidx.compose.ui:ui-tooling)` dependency.
+  - Enable `android.experimental.enableScreenshotTest=true` (in `gradle.properties` and the
+    module's `experimentalProperties`).
+  - Put screenshot-preview composables in the dedicated **`src/screenshotTest`** source set (CPST
+    requires its own source set — distinct from the Robolectric/`test` set above).
+  - For every screen and every notable state (empty home list, populated home list, each
+    onboarding card, add/edit form states, detail screen, error/warning states) add a `@Preview`
+    composable in that source set, exercising light & dark via `uiMode` where relevant.
+  - Generate reference PNGs with `./gradlew updateDebugScreenshotTest`; validate later changes with
+    `./gradlew validateDebugScreenshotTest`. Generated images land under the screenshotTest
+    reference directory; the HTML report is at
+    `app/build/reports/screenshotTest/preview/debug/index.html`.
+  - The CPST plugin is **experimental/alpha** — pin exact versions in the catalog and, if a Gradle
+    task fails due to a version-compatibility issue, web-search the current required AGP/Kotlin/JDK
+    matrix rather than guessing.
 - **Architecture tests with Konsist** (`com.lemonappdev:konsist`), **not** ArchUnit. Enforce layer
   boundaries (e.g. `domain` must not depend on `infrastructure` or `view`; cloud-provider
   specifics stay behind `ICloudStorageProvider`), naming conventions, and that fallible operations
@@ -179,8 +186,14 @@ infrastructure/
   crypto/               EncryptionRepository, AndroidKeyStoreRepository (copied + extended)
   storage/              SAF / DocumentFile traversal of the local source tree
   cloud/                ICloudStorageProvider (abstraction) + googledrive/ implementation
-  backup/               scheduler, worker(s), the analyzer→queue→uploader pipeline
+  backup/               scheduler, worker(s), the analyzer→queue→uploader processing chain
 ```
+
+**Package conventions:** extension functions live in a sub-package of the layer they belong to
+(e.g. `domain/extensions/`, `view/extensions/`), **not** in a single top-level `extensions/`
+package. Likewise, keep helpers/utilities scoped to the layer that owns them rather than a global
+catch-all. ("pipeline"/"processing chain" refers to the runtime data flow of a backup run inside
+`infrastructure/backup/`; it is not a separate package and has nothing to do with CI/CD.)
 
 ### 3.1 The cloud abstraction (critical)
 
@@ -217,11 +230,16 @@ interface ICloudStorageProvider {
         content: UploadContent,        // wraps an InputStream provider + known length if available
     ): BinaryResult<CloudFile, Exception>
 
-    /** Read/write the small plaintext manifest sidecar (§5.10). Read returns null if absent.
-     *  The manifest is plaintext JSON even for encrypted backups (names/structure are already
-     *  visible in the mirrored tree, so it leaks nothing extra — see §5.10). */
-    suspend fun readManifest(rootFolderId: String): BinaryResult<ByteArray?, Exception>
-    suspend fun writeManifest(rootFolderId: String, bytes: ByteArray): BinaryResult<Unit, Exception>
+    /** Read/write a named small plaintext metadata object in the backup's cloud root — used for
+     *  both the per-run manifest (§5.10) and the per-backup `.foldervault-meta.json` (§6.1).
+     *  Read returns null if absent. Both are plaintext JSON. The meta file holds backup *identity*
+     *  only (marker, name, created-at, encrypted flag) — never the salt/params/key (§6.1). */
+    suspend fun readRootMetadata(rootFolderId: String, name: String): BinaryResult<ByteArray?, Exception>
+    suspend fun writeRootMetadata(rootFolderId: String, name: String, bytes: ByteArray): BinaryResult<Unit, Exception>
+
+    /** Stream a cloud object's bytes to [sink] (used by restore, §10). Streaming keeps memory flat
+     *  for large files; decryption (for .crypt objects) is applied by the caller on the stream. */
+    suspend fun downloadFile(fileId: String, sink: OutputStream): BinaryResult<Unit, Exception>
 
     suspend fun deleteFile(fileId: String): BinaryResult<Unit, Exception>     // retention + manifest replace
 }
@@ -242,6 +260,35 @@ streaming `uploadFile(parentId, remoteName, …)`. Keep the modern `Authorizatio
 
 ## 4. Data model (Room)
 
+### 4.0 Relational integrity (enforce invariants in the schema, not just in app code)
+The index is the app's source of truth, so integrity must be **enforced by the database**, not left
+to application logic. Apply these across all entities below:
+- **Real foreign keys.** Every `…ConfigId` reference is a Room `@ForeignKey(entity = BackupConfig,
+  parentColumns=["id"], childColumns=[…], onDelete=…)`, not merely a column. Index every FK column
+  (Room warns otherwise). Define `onDelete` explicitly per relationship (see each entity).
+- **Cascade matches the product rules.** Deleting a `BackupConfig` must cascade-delete its
+  `UploadedFileIndex` rows and its `NotificationThrottleState` rows (`CASCADE`); for
+  `BackupMessage`, per-backup rows cascade-delete while app-global rows (null FK) are unaffected.
+  This makes the §7.4 "delete cleans local tables" guarantee a DB invariant, not app-code hope.
+  (Deleting local rows never touches cloud data.)
+- **Keys & uniqueness.** Declare primary keys, and back every "identity" with a real
+  `unique` index (not a comment): e.g. the one-current-version-per-file rule (§4.2) is a
+  **mandatory** partial/unique index, not a "consider".
+- **Nullability is meaningful.** Columns are non-null unless a null carries defined semantics
+  (e.g. `BackupMessage.backupConfigId == null` ⇒ app-global; `lastRunAt == null` ⇒ never run).
+  State which columns are nullable and why; everything else is `NOT NULL`.
+- **Atomicity.** Multi-row invariants (the `isCurrentVersion` flip + insert, §4.2; message
+  coalescing, §8.1; retention pruning, §5.6) run inside a single Room `@Transaction`.
+- **Enums & lists via `TypeConverter`s.** Persist enums as stable strings (not ordinals — ordinals
+  break on reordering). For atomicity (1NF), prefer not storing multi-valued lists in one column;
+  where a small list is unavoidable (`BackupMessage.formatArgs`), keep it a converter-serialized
+  value column that is **never queried/filtered on** (display-only) — do not encode queryable
+  relationships inside a serialized string.
+- **Referential queries via `@Relation`/`@Transaction`** rather than manual id-stitching where a
+  parent+children read is needed.
+- Provide a `DatabaseMigrations` scaffold, a bump-able schema version, and **export the Room
+  schema** (`room.schemaLocation`) so migrations are diffable; add Room migration tests.
+
 ### 4.1 `BackupConfig` (one row per backup the user sets up)
 - `id` (UUID string, PK)
 - `displayName: String`
@@ -256,6 +303,19 @@ streaming `uploadFile(parentId, remoteName, …)`. Keep the modern `Authorizatio
 - `encryptionEnabled: Boolean`
 - `encryptedPasswordBlob: String?` — the per-backup password, wrapped via the KeyStore key
   (see §6). Never store the password in plaintext.
+- Encryption params (when encrypted) — the local **fast-path cache** of the per-backup params
+  (§6.1), so normal backup runs derive the key without any cloud fetch. Model them as a dedicated
+  **`@Embedded(prefix = "enc_") val encryptionParams: EncryptionParams?`** on `BackupConfig` — a
+  data class whose fields are all **non-null** (`kdfAlgorithm: String`, `kdfIterations: Int`,
+  `salt: ByteArray` or Base64 `String`, `cipherTransformation: String` e.g. `AES/GCM/NoPadding`,
+  `gcmTagBits: Int`). Room stores these as **discrete columns inline in the same table** (no JSON
+  blob, no separate table, no join), but materializes the object as **either fully present or
+  entirely null** — giving the **all-or-nothing invariant** (you can't have some params set and
+  others null). The embedded object is non-null **iff** `encryptionEnabled` is true; add a `CHECK`
+  (or a transactional write path) keeping `encryptionEnabled` and the presence of
+  `encryptionParams` consistent. **Never** store the password or derived key here. These columns are
+  **not authoritative** — the per-file `FVC1` header is the source of truth; on conflict the header
+  wins. (Not duplicated into the cloud meta file.)
 - `retentionPolicy: RetentionPolicy` — see §5.6; default `KEEP_ALL` (disabled).
 - `networkPolicy: NetworkPolicy` — enum: `WIFI_ONLY` (default) or `ANY`.
 - `createdAt`, `lastRunAt: Long?`, `lastRunStatus` (enum), counters for last run
@@ -265,8 +325,18 @@ streaming `uploadFile(parentId, remoteName, …)`. Keep the modern `Authorizatio
 This is the **durable source of truth** for "what have we already uploaded and in what state".
 We never trust the cloud listing for change-detection (see §6 on why encryption makes remote
 hashing useless).
+
+> **Why keep full version history (one row per uploaded version, not just the current one):**
+> retention (§5.6) needs the `cloudFileId` of each *old* version to delete it from the cloud; that
+> record is exactly the historical rows. Drop them and retention can't find old objects without
+> re-listing and pattern-matching the cloud (the very thing the index exists to avoid). Change-
+> detection and (latest-only) restore use just the current row, but retention needs the rest — so
+> the index keeps the full history, **bounded by the retention policy**: `KEEP_LAST_N` /
+> `KEEP_NEWER_THAN` prune old rows (and their cloud objects) together; `KEEP_ALL` (default) keeps
+> all rows. For the target use case (rarely-changing files) this is ~one row per file regardless.
+> Do **not** "optimize" the index down to current-version-only — it silently breaks retention.
 - `id` (autogenerated PK)
-- `backupConfigId: String` (FK, indexed)
+- `backupConfigId: String` — **FK → `BackupConfig.id`, `onDelete = CASCADE`, indexed** (NOT NULL).
 - `relativePath: String` — path of the file relative to the source-tree root, POSIX-style
   (`sub/dir/report.pdf`). **This is the file identity** across runs.
 - `localLastModified: Long` — mtime recorded at last successful upload
@@ -281,9 +351,11 @@ hashing useless).
   previous current row's flag to `false` and insert/mark the new row `true` **in a single Room
   transaction**, so a crash can never leave zero or two "current" rows. Applies to both
   `OVERWRITE` and `DUPLICATE_WITH_TIMESTAMP`.
-- Unique index on `(backupConfigId, relativePath, uploadedAt)`; consider a partial/unique guard so
-  at most one row per `(backupConfigId, relativePath)` has `isCurrentVersion = true`. Query helper
-  to fetch the current version row for a `(backupConfigId, relativePath)`.
+- **Indices (mandatory, not optional):** unique index on `(backupConfigId, relativePath,
+  uploadedAt)`; **a partial unique index enforcing at most one `isCurrentVersion = true` row per
+  `(backupConfigId, relativePath)`** (e.g. `CREATE UNIQUE INDEX … ON UploadedFileIndex(
+  backupConfigId, relativePath) WHERE isCurrentVersion = 1`). Query helper to fetch the current
+  version row for a `(backupConfigId, relativePath)`.
 
 Provide DAOs with the queries the pipeline needs (lookup current version by relativePath, list
 all versions for a relativePath ordered by uploadedAt, list distinct relativePaths for a config).
@@ -295,7 +367,10 @@ PrivateContacts kept a short list of error/warning strings in DataStore to show 
 Here, messages are a **central observability feature** for an app that mostly runs unattended, so
 they live in Room (queryable, per-backup, with read/dismiss state and history). Full behavior in §8; the entity:
 - `id` (autogenerated PK)
-- `backupConfigId: String?` (FK, indexed; null = app-global message)
+- `backupConfigId: String?` — **FK → `BackupConfig.id`, indexed**; nullable, where **null = an
+  app-global message** (not tied to a backup). Use `onDelete = CASCADE` so deleting a backup removes
+  its messages, while app-global (null) rows are inherently unaffected. (Null FK values are not
+  constrained by SQLite FKs, which is exactly the desired behavior here.)
 - `runId: String?` — groups all messages produced by one worker run (for coalescing)
 - `timestamp: Long`
 - `severity: MessageSeverity` — `INFO` | `WARNING` | `ERROR` | `CRITICAL`
@@ -320,7 +395,11 @@ run; mark read/dismissed (individually and "mark all for backup"); count by seve
 query for retention (see §8.4).
 
 ### 4.4 `NotificationThrottleState` (small table to dedupe repeat alerts across runs)
-- `key: String` (PK) — e.g. `"$backupConfigId:$messageType"`.
+Normalized rather than a concatenated string key:
+- **Composite PK `(backupConfigId, messageType)`** — `backupConfigId: String` is an **FK →
+  `BackupConfig.id`, `onDelete = CASCADE`, indexed**; `messageType` persisted as a stable enum
+  string. (Do not encode the key as a single `"$backupConfigId:$messageType"` string — use the two
+  real columns so the FK and cascade work.)
 - `lastNotifiedAt: Long`, `lastRunId: String?`.
   Used by §8.3 so a persistent condition (e.g. `AUTH_LOST` every run) alerts once, not every run.
 
@@ -353,31 +432,32 @@ analyzer coroutine  ──►  Channel<UploadTask>(capacity = N)  ──►  sin
   (`DocumentFile.fromTreeUri(...)` then depth-first; each `listFiles()` is a ContentResolver
   round-trip, so traversal is the slow part — start emitting tasks as soon as the first files are
   discovered rather than after the whole walk). For each file it decides new / changed / unchanged
-  by comparing `(lastModified, size)` against the `UploadedFileIndex` current-version row for that
-  `relativePath`:
-    - **new** (no index row) → emit an upload task (mode = NEW)
-    - **changed** (row exists, mtime newer OR size differs) → emit task per `changedFilePolicy`:
-        - `DUPLICATE_WITH_TIMESTAMP` → upload as a new timestamped name (mode = CHANGED_DUPLICATE)
-        - `OVERWRITE` → upload, then delete the old cloud object *after* success (mode = CHANGED_OVERWRITE)
-        - `IGNORE` → skip
-    - **unchanged** → skip (never re-upload)
-    - **Unreliable `lastModified` (SAF caveat).** Some document providers (SD cards, USB-OTG, certain
-      cloud-backed providers) return `null`, `0`, or a bogus mtime from `DocumentFile.lastModified()`.
-      Treat **`null` and `0` as "mtime unavailable"** (do not compare them as a real timestamp — `0`
-      is 1970 and would mark every file changed/unchanged incorrectly). Fallback logic when mtime is
-      unavailable for a file:
-        1. Compare **size only** against the index row. Different size ⇒ changed; same size ⇒ provisionally unchanged.
-        2. When size is also inconclusive (same size but no usable mtime, no index row yet, or first
-           reconcile), use a **cloud-existence check** (`listChildren` of the mirrored parent, match by
-           the deterministic remote name incl. `.crypt`) as the tiebreaker: if the expected remote
-           object already exists, treat as unchanged; otherwise upload.
-        3. **Warn the user** (a `WARNING` `BackupMessage`, e.g. type `UNRELIABLE_TIMESTAMPS`) that this
-           source reports unreliable modification times, so change-detection on it is size-based and may
-           miss in-place edits that don't change file size. Warn once per run per backup, not per file.
-    - It sends into the bounded channel; a full channel suspends the analyzer (natural backpressure —
-      prevents the "10,000 files at once → crash" failure mode without manual batching).
-    - **Deletions are ignored**: if an indexed relativePath no longer exists locally, do nothing
-      (never delete remotely). Optionally flag it in the index for a future UI hint.
+  by comparing it against the `UploadedFileIndex` current-version row for that `relativePath`.
+  **A file is changed if its modification time differs OR its size differs from the indexed
+  values** (both signals are used; either difference triggers a re-upload). Details:
+  - `lastModified` is **usable** only if non-null and not `0` (treat `null`/`0` as "mtime
+    unavailable" — `0` is 1970 and must never be compared as a real timestamp).
+  - **Usable mtime:** `changed ⇔ (mtime ≠ indexed mtime) OR (size ≠ indexed size)`. Note this is
+    "differs", not "is newer" — a mtime that moved **backwards** (e.g. a file restored from another
+    backup, an unzip, or a device clock change) still counts as changed, which is the safe behavior
+    for a backup tool.
+  - **Unavailable mtime (null/0):** drop mtime from the comparison and use **size** alone:
+    `changed ⇔ size ≠ indexed size`. When size is also inconclusive (same size, no usable mtime, or
+    a first reconcile with no index row), use a **cloud-existence check** (`listChildren` of the
+    mirrored parent, match by the deterministic remote name incl. `.crypt`) as the tiebreaker:
+    expected remote object exists ⇒ unchanged; else upload. Also emit a once-per-run
+    `UNRELIABLE_TIMESTAMPS` `WARNING` `BackupMessage` for that backup, noting change-detection is
+    size-based on this source and may miss in-place edits that don't change file size.
+  - **new** (no index row) → emit an upload task (mode = NEW)
+  - **changed** → emit task per `changedFilePolicy`:
+    - `DUPLICATE_WITH_TIMESTAMP` → upload as a new timestamped name (mode = CHANGED_DUPLICATE)
+    - `OVERWRITE` → upload, then delete the old cloud object *after* success (mode = CHANGED_OVERWRITE)
+    - `IGNORE` → skip
+  - **unchanged** → skip (never re-upload)
+  - It sends into the bounded channel; a full channel suspends the analyzer (natural backpressure —
+    prevents the "10,000 files at once → crash" failure mode without manual batching).
+  - **Deletions are ignored**: if an indexed relativePath no longer exists locally, do nothing
+    (never delete remotely). Optionally flag it in the index for a future UI hint.
 - **Two-tier ordering so one giant file never head-of-line-blocks the rest.** Each task is tagged
   **normal** (size ≤ the per-file size limit, §5.5) or **oversized** (size > the limit). The
   uploader drains **all normal tasks first, serially, then all oversized tasks, serially**. Bulk
@@ -389,16 +469,16 @@ analyzer coroutine  ──►  Channel<UploadTask>(capacity = N)  ──►  sin
   implementation: analyzer routes into two channels (or the uploader processes the normal channel
   to completion, then the oversized one); within each tier, natural discovery order is fine.
 - **Uploader** (single consumer): for each task, in order:
-    1. Ensure the mirrored remote subfolder chain exists (get-or-create per path segment, cached
-       within the run — §5.3).
-    2. **If encryption is on, encrypt to a temp file in app-private staging** (§6, §5.2): stream
-       plaintext → `CipherInputStream` → `<staging>/<uuid>.crypt`. If off, the upload streams
-       straight from the source `DocumentFile`'s `InputStream`.
-    3. Upload via `ICloudStorageProvider.uploadFile(parentId, remoteName, mimeType, content)`,
-       streaming from the temp file (or source stream).
-    4. On success, write/update the `UploadedFileIndex` row in a transaction; on `CHANGED_OVERWRITE`,
-       delete the previous cloud object **after** the new upload succeeds (never before).
-    5. **Always delete the temp file in a `finally`**, whether the upload succeeded, failed, or threw.
+  1. Ensure the mirrored remote subfolder chain exists (get-or-create per path segment, cached
+     within the run — §5.3).
+  2. **If encryption is on, encrypt to a temp file in app-private staging** (§6, §5.2): stream
+     plaintext → `CipherInputStream` → `<staging>/<uuid>.crypt`. If off, the upload streams
+     straight from the source `DocumentFile`'s `InputStream`.
+  3. Upload via `ICloudStorageProvider.uploadFile(parentId, remoteName, mimeType, content)`,
+     streaming from the temp file (or source stream).
+  4. On success, write/update the `UploadedFileIndex` row in a transaction; on `CHANGED_OVERWRITE`,
+     delete the previous cloud object **after** the new upload succeeds (never before).
+  5. **Always delete the temp file in a `finally`**, whether the upload succeeded, failed, or threw.
 
 Close the channel(s) when the analyzer finishes; let the uploader drain; collect a run summary
 (uploaded / skipped / failed / bytes / oversized-warned) and persist it onto the `BackupConfig`.
@@ -558,8 +638,8 @@ The provider implementation and the uploader must handle the realities of a long
   note this as a future enhancement (persist session URI + committed offset per in-flight file) but
   do **not** implement it now.
 - **No parallel uploads.** Serial-only by design (see §5.1).
-- Per-backup size-limit override and a restore/download path are future work; keep data models
-  forward-compatible with them (the manifest of §5.10 is designed to enable restore later).
+- Per-backup size-limit override is future work; keep data models forward-compatible. (Restore
+  itself is **in v1** — see §10; the manifest of §5.10 is what makes exact restore possible.)
 
 ---
 
@@ -581,24 +661,69 @@ streaming). Add a **streaming binary `.crypt` container**:
 
 - Encrypt **raw bytes**, not UTF-8 strings.
 - File layout (all multi-byte integers big-endian):
-    - magic: 4 bytes `"FVC1"`
-    - version: 1 byte (= 1)
-    - kdf id: 1 byte (= 1 for PBKDF2WithHmacSHA256)
-    - iterations: 4-byte int (= 310000)
-    - salt length: 1 byte, then salt bytes (16)
-    - iv length: 1 byte, then iv bytes (12)
-    - then the AES-256-GCM ciphertext stream (GCM tag appended by the cipher) to EOF
-- Encrypt by deriving the key (same PBKDF2 as the copied code), init `Cipher` in GCM mode, and
-  stream the local file through a `CipherInputStream`/`CipherOutputStream` so memory stays flat
-  for large files.
-- Decrypt (for the future restore feature) reverses this: read header, derive key from the
-  supplied password, stream-decrypt. An invalid password surfaces as `AEADBadTagException` ⇒ map
-  to a typed `DecryptionError.INVALID_PASSWORD`, mirroring the existing `decrypt` error mapping.
+  - magic: 4 bytes `"FVC1"`
+  - version: 1 byte (= 1)
+  - kdf id: 1 byte (= 1 for PBKDF2WithHmacSHA256)
+  - iterations: 4-byte int (= 310000)
+  - salt length: 1 byte, then salt bytes (16)
+  - iv length: 1 byte, then iv bytes (12)
+  - then the AES-256-GCM ciphertext stream (GCM tag appended by the cipher) to EOF
+- **Key is derived once per backup, not per file (performance).** The PBKDF2 salt is **per-backup**
+  (one random 16-byte salt generated at backup creation), so the derived AES key is the same for
+  every file in a backup. Derive it **once** per run/restore and reuse it — at 310k iterations,
+  per-file derivation across thousands of files would be needlessly CPU-bound, especially on
+  restore. **The per-file IV is still random and unique per file** (mandatory: reusing an
+  (key, IV) pair under AES-GCM is catastrophic — unique IVs are what keep files secure even though
+  they share a key).
+- **Still write the (per-backup) salt + params into every file's header anyway.** It is only 16
+  bytes/file and has **no security implication** (a salt is not secret; it is meant to be stored
+  beside the ciphertext, and all files share one key regardless). The benefit is that **every file
+  is self-decryptable** without depending on any external file, and it makes a **future switch to
+  genuinely per-file salts a no-op** (the header field already exists — just write a different value
+  per file). So the header layout above is unchanged; today the salt field simply carries the same
+  per-backup value in each file.
+- Decrypt (**required for the restore feature, §10**) reverses this: read the salt + params from the
+  **local cache if present, else from a file `FVC1` header** (§6.1), derive key from the supplied
+  password + salt, stream-decrypt the `FVC1`
+  container. An invalid password surfaces as `AEADBadTagException` ⇒ map to a typed
+  `DecryptionError.INVALID_PASSWORD`, mirroring the existing `decrypt` error mapping. Provide a cheap
+  **`verifyPassword`** helper (attempt to decrypt one small object / the first header+block) so
+  restore can validate the password before downloading gigabytes, and so the §7.4 "Check my
+  password" action can reuse it.
 - Remote naming when encrypted: append `.crypt` to the (otherwise unchanged) filename; the
   mirrored folder names are **not** encrypted. Use a generic binary mime type for the upload
   (e.g. `application/octet-stream`).
 
-Same-plaintext-encrypts-differently (random IV per run) is expected and fine: it means we must
+### 6.1 Where encryption params and backup identity live (single source of truth per datum)
+**Principle: each piece of data lives in exactly ONE authoritative place**, so two sources can
+never disagree. We deliberately do **not** duplicate the crypto params into the meta file.
+
+- **Crypto params (salt, KDF algorithm, iterations, cipher params) — authoritative in the per-file
+  `FVC1` header.** Every encrypted file is self-describing and self-decryptable; there is no other
+  authoritative copy. This is what makes restore-after-reinstall work from any single file.
+- **Local Room cache (fast path, NOT a competing source of truth).** `BackupConfig` keeps a local
+  copy of the per-backup salt/params purely as a **working cache** so normal backup runs derive the
+  key without fetching anything from the cloud. **The per-file header is authoritative; on any
+  conflict, the header wins** (the local copy is just this device's cache).
+- **Cloud `.foldervault-meta.json` — backup *identity*, NOT crypto params.** A small **plaintext**
+  JSON written once into the cloud root **at backup creation** (rarely rewritten; kept **separate
+  from the per-run manifest of §5.10**). It contains **only data that is not in the file headers**,
+  so there is nothing to disagree about:
+  - a format/schema version and an **app marker** (this is the **"recognizable FolderVault backup"**
+    signal for the empty-or-known-folder check in §7.3/§5.9),
+  - the backup's **display name**,
+  - **created-at** timestamp,
+  - an `encrypted: Boolean` flag (a backup-level fact, useful for the folder-type check *before* any
+    file is downloaded — e.g. an initialized-but-empty backup has no files to inspect yet; strictly
+    it's also inferable from a file's `FVC1` magic, but its natural home is the backup-level meta).
+  - It **MUST NOT** contain the salt, KDF params, password, or key — those are header-only.
+
+Param-resolution order when (de)deriving the key: **local Room cache** if present (this device made
+the backup) → otherwise **read from a file header** (e.g. on restore after reinstall). The meta
+file is never consulted for crypto params (it doesn't carry them); it is used only to recognize a
+backup folder and show its identity.
+
+Same-plaintext-encrypts-differently (random per-file IV) is expected and fine: it means we must
 **never** use a remote content hash for change-detection. The local `UploadedFileIndex`
 `(mtime, size)` is the only change signal. Make this explicit in a code comment.
 
@@ -613,6 +738,9 @@ crash cleanup). Never load whole files into RAM; there is no in-RAM fast path.
 ## 7. UI / UX
 
 Material 3, modern and appealing, dynamic color, light/dark/system theme. Nav3 typed navigation.
+Top-level destinations: onboarding, home (backup list), add/edit backup, backup detail, settings,
+and a **Restore screen** (§10) reachable from the home screen overflow/menu (and offered from a
+backup's detail screen, pre-filled with that backup's cloud folder).
 
 ### 7.1 First-launch onboarding — **swipeable card carousel** (HorizontalPager)
 Shown once (persist a `onboardingComplete` flag in DataStore; allow re-opening from settings).
@@ -620,7 +748,8 @@ Clean, classic, with page indicators and a Skip / Next / Get-started flow. Cards
 1. What it does — incremental folder backup to your cloud.
 2. **Best for files that rarely change** (photos, scans, document archives).
 3. How incremental upload works — only new/changed files are sent; unchanged files never re-sent.
-4. **Honest limitations** — one-way push (no restore yet), changed files create timestamped
+4. **Honest limitations** — one-way push (recovery is via a one-time Restore, §10, not two-way
+   sync), changed files create timestamped
    copies, change-detection is by date+size not content, never deletes from the cloud.
 5. Privacy — optional client-side encryption; the cloud sees only encrypted bytes; if you forget
    the password the backup cannot be recovered (no reset).
@@ -642,14 +771,22 @@ Clean, classic, with page indicators and a Skip / Next / Get-started flow. Cards
 - Pick **source folder** (SAF `ACTION_OPEN_DOCUMENT_TREE`, take persistable read permission).
 - Set up **cloud destination**: trigger authorization (handle the `ConsentRequired` `PendingIntent`
   via an `ActivityResultLauncher`), then let the user choose between:
-    - **Create a new backup folder** (the `UUID`-suffixed unique folder, the default), or
-    - **Use an existing folder** — list the folders the app can see in the account (via
-      `listChildren`/a lightweight folder browser) and let the user select one. This is what enables
-      re-attaching to a prior backup after reinstall/new device; on selection, run the reconciliation
-      of §5.9 (prefer the cloud manifest §5.10, else filename-matching) so the existing contents are
-      adopted into the index instead of re-uploaded.
+  - **Create a new backup folder** (the `UUID`-suffixed unique folder, the default), or
+  - **Use an existing folder** — list the folders the app can see in the account (via
+    `listChildren`/a lightweight folder browser) and let the user select one. **Only allow
+    selecting a folder that is either (a) empty, or (b) already a recognizable FolderVault backup**
+    (contains a valid `.foldervault-meta.json`, §6.1). **Reject a non-empty folder that is not a
+    FolderVault backup** — this prevents mixing this backup's files with unrelated content and,
+    critically, prevents pointing a *differently-encrypted* new backup at a folder that already
+    holds `.crypt` files under another password (which would make the folder undecryptable as a
+    whole). Selecting a recognizable existing backup is the **re-attach after reinstall/new device**
+    path: read its meta + manifest, run the reconciliation of §5.9 so existing contents are adopted
+    into the index instead of re-uploaded, and (if encrypted) prompt+verify the password against the
+    existing backup's params rather than letting the user pick a new one.
 - Set **schedule** (or "use global default"), **changed-file policy**, **network policy**,
-  **encryption** (with password entry + confirm; explain the no-recovery warning), and optional
+  **encryption** (with password entry + confirm; explain the no-recovery warning) — for a *new*
+  folder, generate the per-backup salt (cached locally per §6.1; it will be written into each file's
+  header) and write the identity-only `.foldervault-meta.json` (§6.1) at creation — and optional
   **retention policy**.
 
 ### 7.4 Detail screen
@@ -727,15 +864,20 @@ DataStore string-list.
 
 ### 8.3 Notification behavior (coalesced + throttled)
 - **Two notification channels**, so the user tunes them independently:
-    - **"Backup status"** — LOW importance, silent: the ongoing WorkManager foreground/progress
-      notification (the "N / M files, continues next run" of §7.6).
-    - **"Backup problems"** — DEFAULT/HIGH importance: alerts for `notifies` messages.
+  - **"Backup status"** — LOW importance, silent: the ongoing WorkManager foreground/progress
+    notification (the "N / M files, continues next run" of §7.6).
+  - **"Backup problems"** — DEFAULT/HIGH importance: alerts for `notifies` messages.
 - **Granularity: one summary notification per run per backup.** At the end of a run, if that run
   produced any `notifies` messages for a backup, post a single coalesced notification
   ("Backup 'Photos' had problems: authorization expired; 12 files failed"). Never one notification
   per message. Tapping it deep-links (via Nav3) into that backup's detail screen.
-- **Throttle repeats across runs** using `NotificationThrottleState` (§4.4): keyed by
-  `backupConfigId:type`, suppress re-notifying for the same condition within a window (e.g. 24h /
+- **Stable notification IDs.** Derive the problem-notification id deterministically from the
+  backup config id (e.g. a stable hash of `backupConfigId`), so a new alert for a backup
+  **replaces** its previous one instead of stacking duplicates. Use a separate id space (or the
+  ongoing-progress notification's own fixed id) for the status-channel progress notification.
+- **Throttle repeats across runs** using `NotificationThrottleState` (§4.4): keyed by the composite
+  `(backupConfigId, messageType)`, suppress re-notifying for the same condition within a window
+  (e.g. 24h /
   until the condition clears). So a persistent `AUTH_LOST` alerts once, not every run. When the
   condition resolves (a later successful run), clear the throttle key so a future recurrence can
   alert again. Optionally post a positive `INFO` ("Backup 'Photos' is working again") — keep that
@@ -815,7 +957,73 @@ PrivateContacts' Crashlytics toggle.)
 
 ---
 
-## 10. Reused code from PrivateContacts (copy in, rename package)
+## 10. Restore (download an encrypted/plaintext backup back to a local folder)
+
+A backup you can't restore isn't a backup — and for **encrypted** backups this is the *only* way
+to recover data, since the `.crypt` files use this app's custom `FVC1` container (§6) and no other
+tool can read them. Restore is therefore a **v1 feature**, not future work. It is a **one-time,
+user-initiated download** of a cloud backup folder into a local destination folder — **not** a
+sync, and entirely separate from the backup pipeline's local→cloud direction.
+
+### 10.1 Independent of local config (works after reinstall / on a new device)
+Restore must operate from **just a cloud folder + (if encrypted) a password** — it must **not**
+require an existing `BackupConfig` or local `UploadedFileIndex`. The canonical scenario: the user
+lost their phone, installs the app fresh, picks their Drive backup folder, enters the password, and
+gets their files back. (Restoring a backup that *does* have a local config is just the same flow
+pre-filled with that config's cloud folder.)
+
+### 10.2 Flow (a separate Restore screen)
+1. **Authorize** the cloud account (same `ICloudAuthorizer` flow as setup).
+2. **Pick the source cloud folder** (the existing-folder browser from §7.3 — `listChildren`).
+3. **Determine the file set.** Prefer the **cloud manifest** (§5.10) for the exact tree + original
+   names; if absent, **walk the mirrored cloud tree** recursively. For files with timestamped
+   duplicates (from `DUPLICATE_WITH_TIMESTAMP`), restore the **latest version of each file only**
+   (the suffix-less current name, or the newest timestamp suffix if no suffix-less object exists).
+4. **Encryption / password.** If any object is `.crypt`, prompt for the password and **verify it
+   cheaply before downloading** (use the §6 `verifyPassword` helper on one small object/header) so
+   a wrong password fails fast, not after gigabytes. Map a bad password to
+   `DecryptionError.INVALID_PASSWORD` and show a clear error.
+5. **Pick the local destination** via SAF `ACTION_OPEN_DOCUMENT_TREE` (this needs **write**
+   permission — distinct from the read-only source-tree permission used for backups). **Before
+   opening the picker, tell the user to choose an empty folder.**
+6. **Collision handling.** If the chosen destination is **not empty** and the restore would collide
+   with existing files, **ask once** for a policy applied to all: **overwrite / skip / rename-with-
+   suffix**. (No per-file prompts.)
+7. **Run the restore** (see §10.3), reconstructing the folder tree under the destination, decrypting
+   `.crypt` objects on the fly (strip the `.crypt` suffix → stream through the `FVC1` decrypt path →
+   write the plaintext file), copying plaintext objects directly.
+
+### 10.3 Execution model (WorkManager + observed progress)
+Restore is a **WorkManager job** (for robustness, the network constraints, and resumability),
+**with the Restore screen showing a progress dialog** that observes live progress via
+`setProgress` + `getWorkInfoByIdFlow` while open. The dialog shows determinate progress
+("Restoring 240 / 5,300 files", current file name — redacted in any logs but shown in-UI is fine,
+bytes/percent) and **asks the user to keep the app in the foreground** for the smoothest, fastest
+restore. That ask is a **recommendation, not a requirement**: if the user backgrounds the app, the
+WorkManager job **keeps running under a foreground notification**, and the dialog re-attaches to the
+live progress when the screen is reopened. Practical consequences, mirroring backup:
+- **Serial, one file at a time**, streaming download→(decrypt)→write with flat memory; same ~10-min
+  window limit, so a large restore that can't finish in one window uses the **same continuation
+  approach as §5.8** (stop at a completed-file boundary, re-enqueue promptly) — restoring a large
+  folder over several steps/windows rather than failing. The dialog reflects this ("continuing…").
+- **Resumable**: a partially-completed restore can skip local files already fully written (compare
+  presence/size against the expected set) so a re-run continues rather than restarting.
+- **Same cloud resilience as §5.11** (token refresh on 401, backoff on 429/5xx, warn-once on
+  quota/rate-limit) and the **two-sink redacting logger** (§9) — restore must not log file content,
+  and only redacted names go to Crashlytics.
+- Write restore progress/outcome as `BackupMessage`s (or an equivalent restore-scoped message) so
+  failures are visible, coalesced per run.
+
+### 10.4 Out of scope for v1
+- **Point-in-time restore** ("as of date X") — v1 restores latest-version-only. The manifest/version
+  history makes this a clean future addition.
+- **Selective / partial restore** (letting the user pick a sub-list of files/subfolders rather than
+  the whole backup) — **explicitly deferred to v2**. v1 restores the entire folder. (Design the
+  restore file-set discovery so a future filter/selection step can slot in without rework.)
+
+---
+
+## 11. Reused code from PrivateContacts (copy in, rename package)
 
 These files are battle-tested in PrivateContacts and should be copied into the new project with
 the package renamed (`ch.abwesend.privatecontacts.*` → your package) and small adaptations noted
@@ -2129,11 +2337,36 @@ class WorkerErrorHandler {
 
 ---
 
-## 11. Coding-agent feedback loop (you are likely being run by Claude Code)
+## 12. Coding-agent feedback loop (you are likely being run by Claude Code)
 
 This prompt is expected to be executed by an autonomous coding agent.
 
-### 11.1 Visual sight-loop (don't build UI blind)
+### 12.0 Work in small steps and check in (do NOT build the whole app in one run)
+This is a **collaborative, incrementally-reviewed** build, not a single autonomous sprint. The
+"order of work" in §14 is a sequence of **checkpoints**, not a to-do list to blast through:
+- Implement **one deliverable / vertical slice at a time** (data → domain → worker → UI), keeping
+  the project compiling and tests green at each stop.
+- **After each slice, STOP and hand back for review**: summarize what changed (files/areas), note
+  any decisions or assumptions made, show the relevant screenshots (§12.1) for UI work, and
+  **wait for the user's go-ahead before starting the next slice.** Do not chain multiple
+  deliverables in one turn unless the user explicitly says to.
+- **Ask before guessing.** When something is ambiguous or under-specified, ask a focused question
+  rather than inventing a requirement — the user prefers a quick clarification over rework.
+- Keep changes small and reviewable so the user can steer; prefer several small, coherent commits
+  over one large one.
+
+### 12.0.1 Test-driven where it pays off
+Apply **TDD for code with real logic, branching, or invariants** — write the failing test first,
+then the implementation. This is the default for: change-detection incl. the unreliable-mtime
+fallback (§5.1), version selection & `isCurrentVersion` maintenance (§4.2), encryption round-trip /
+wrong-password / params-from-header-vs-cache (§6), retention (§5.6), reconciliation (§5.9), message
+coalescing (§8.1) and notification throttling (§8.3), filename redaction (§9), and restore version
+selection (§10). For these, the unit tests already named in §14 should be written test-first.
+Do **not** force TDD where it adds no value — Compose UI (use the screenshot sight-loop instead),
+thin cloud-API wrappers, and DI/wiring are verified by other means. In short: **test-first for the
+logic core, screenshot/integration-verified for the edges.**
+
+### 12.1 Visual sight-loop (don't build UI blind)
 To avoid building UI "blind", use the screenshot tooling as a sight loop, not just as regression
 tests:
 
@@ -2155,13 +2388,14 @@ tests:
 - If CPST Gradle tasks fail for version/compatibility reasons (it is alpha), web-search the
   current AGP/Kotlin/JDK requirement matrix and adjust the catalog rather than disabling the loop.
 
-### 11.2 Persistent project conventions — create and maintain a `CLAUDE.md`
+### 12.2 Persistent project conventions — create and maintain a `CLAUDE.md`
 Create a **`CLAUDE.md`** at the repo root (under source control) that captures the durable
 working agreements so they survive across sessions and future agents. Seed it with: the
 build/test/lint commands (`./gradlew build`, the JUnit5 + Robolectric test tasks, `detekt`, the
 Konsist tests, `updateDebugScreenshotTest`), the layering rules (§3), the conventions from §2
-(BinaryResult, IDispatchers, serial-upload philosophy, etc.), the sight-loop habit (§11.1), and
-the prompt-history habit (§11.3). Keep it concise and update it whenever a convention changes.
+(BinaryResult, IDispatchers, serial-upload philosophy, etc.), the **incremental-checkpoint
+workflow (§12.0)**, the **test-first-for-logic habit (§12.0.1)**, the sight-loop habit (§12.1), and
+the prompt-history habit (§12.3). Keep it concise and update it whenever a convention changes.
 
 Include in `CLAUDE.md` an explicit **"Definition of Done" checklist** the agent runs through
 before treating any unit of work as complete (these are gates, not suggestions — the
@@ -2169,20 +2403,22 @@ prompt-history update sits among them precisely so it isn't forgotten):
 
 ```
 Before considering a task done:
+[ ] Tests written first for logic:  failing test before impl, where TDD applies (§12.0.1)
 [ ] Code compiles:            ./gradlew assembleDebug   (no errors)
 [ ] Unit tests pass:          ./gradlew test            (JUnit5 + Robolectric/Compose)
 [ ] Architecture tests pass:  Konsist guards green
 [ ] Linter is happy:          ./gradlew detekt          (no new issues)
-[ ] UI verified visually:     screenshots rendered & inspected for any screen touched (§11.1)
-[ ] Prompt history updated:   docs/prompt-history.md has an entry for this work (§11.3)
+[ ] UI verified visually:     screenshots rendered & inspected for any screen touched (§12.1)
+[ ] Prompt history updated:   docs/prompt-history.md has an entry for this work (§12.3)
 [ ] CLAUDE.md updated:        only if a durable convention changed
+[ ] Checked in with the user: slice summarized, waiting for review before the next (§12.0)
 ```
 
 Adjust the exact Gradle task names to the project's actual setup. The intent is a single,
 always-run gate so compilation, tests, lint, visual check, and the vibe-coding log are kept in
 lockstep with the code.
 
-### 11.3 Maintain a prompt history (this is a vibe-coded project)
+### 12.3 Maintain a prompt history (this is a vibe-coded project)
 The author intends to develop this app largely through conversational/"vibe" coding, and wants a
 durable record of that — **without having to remember to ask for it each time.** Therefore, as a
 standing instruction recorded in `CLAUDE.md`:
@@ -2192,7 +2428,7 @@ standing instruction recorded in `CLAUDE.md`:
 - **Append to it as part of completing work** — treat it like updating a changelog: when a unit of
   work is done (a feature, fix, or refactor prompted by the user), add a dated entry summarizing
   what was requested and what changed. This is enforced by the Definition-of-Done checklist in
-  §11.2, so it happens automatically rather than on request.
+  §12.2, so it happens automatically rather than on request.
 - For a burst of several short back-and-forth prompts, **do not transcribe each one** — combine and
   summarize them into a single coherent entry. For a substantial standalone instruction, capture it
   more faithfully. Favor the *intent and outcome* over verbatim text.
@@ -2205,12 +2441,12 @@ standing instruction recorded in `CLAUDE.md`:
 
 ---
 
-## 12. Starter config files (Detekt & Konsist)
+## 13. Starter config files (Detekt & Konsist)
 
 Use these as starting points; adapt package names to the chosen base package and tune rules to
 taste. They are deliberately strict-but-reasonable.
 
-### 12.1 `config/detekt/detekt.yml`
+### 13.1 `config/detekt/detekt.yml`
 
 Run via the `io.gitlab.arturbosch.detekt` plugin with `buildUponDefaultConfig = true` (so this
 file only overrides what it needs). Add `detekt-formatting` (ktlint wrapper) and, if available for
@@ -2319,7 +2555,7 @@ comments:
     active: false           # enable + set licenseTemplateFile if you want the header enforced
 ```
 
-### 12.2 Konsist architecture tests (`src/test/.../architecture/`)
+### 13.2 Konsist architecture tests (`src/test/.../architecture/`)
 
 Konsist guards run as ordinary JUnit5 tests. These enforce the layering from §3 (`view` →
 `domain` ← `infrastructure`, with `domain` depending on neither) and the project's conventions
@@ -2443,31 +2679,37 @@ class NamingAndPlacementTest {
 
 ---
 
-## 13. Deliverables & order of work
+## 14. Deliverables & order of work
 
 1. Wire up dependencies & tooling in the **existing** project starting from the version catalog in
    §2.1 — **first checking each entry for a newer stable release and bumping to it** — covering
    Compose/Material3, Nav3, Room, DataStore, WorkManager, Koin, Google Drive + AuthorizationClient,
    kotlinx-serialization, plus the **Detekt** plugin (with the starter `config/detekt/detekt.yml`
-   from §12.1), **Konsist** and
+   from §13.1), **Konsist** and
    **Robolectric** test dependencies, the **CPST** (`com.android.compose.screenshot`) plugin +
    `screenshotTest` source set, and the JUnit5 + JUnit4 test setup described in §2. Get a clean
    Gradle sync/build (resolve the Kotlin/Compose/AGP/KSP alignment) before proceeding. Establish
    the package structure and a Koin module. Replace the template `MainActivity` with the Nav3 host
-   and placeholder screens. Also create the `CLAUDE.md` (§11.2) and an empty `docs/prompt-history.md`
-   (§11.3) so the working conventions and the vibe-coding log exist from the start.
-2. Copy in the reused building blocks (§10) and make them compile under the new package.
+   and placeholder screens. Also create the `CLAUDE.md` (§12.2) and an empty `docs/prompt-history.md`
+   (§12.3) so the working conventions and the vibe-coding log exist from the start.
+2. Copy in the reused building blocks (§11) and make them compile under the new package.
 3. **Privacy-aware logging foundation (§9)**: the two-sink logger (full-detail local sink +
    auto-redacting Crashlytics sink), the `FileNameRedactor` utility + unit tests, and the
    Crashlytics opt-out wiring. Build this early — everything else logs through it.
 4. Room schema (`BackupConfig`, `UploadedFileIndex`, `BackupMessage`, `NotificationThrottleState`)
-    + DAOs + DataStore settings.
+  + DAOs + DataStore settings — enforcing the §4.0 relational invariants: declared `@ForeignKey`
+    constraints with the specified `onDelete` cascade behavior, indexed FKs, the mandatory
+    one-current-version partial-unique index, enum/list `TypeConverter`s, transactional multi-row
+    updates, exported Room schema, and Room migration tests. (Enable SQLite FK enforcement.)
 5. `ICloudStorageProvider` / `ICloudAuthorizer` + Google Drive implementation (extended), including
    the §5.11 resilience behavior: deterministic handling of duplicate-named folders, silent
    token re-auth on 401, exponential-backoff retry on 429/5xx, and once-per-run warn-and-skip
    (or stop) on quota-full / persistent rate limiting.
-6. Encryption extension for binary streaming `.crypt` (§6) + unit tests (round-trip, wrong
-   password).
+6. Encryption extension for binary streaming `.crypt` (§6): the `FVC1` container, **per-backup key
+   derivation** (one salt/key per backup, per-file IVs), params authoritative in the per-file header
+   with a local Room fast-path cache (header wins on conflict), the identity-only cloud
+   `.foldervault-meta.json` (§6.1), and `verifyPassword`. Unit tests: round-trip, wrong password,
+   decrypt from local cache vs. from a file header (no disagreement possible by design).
 7. The analyzer→queue→uploader pipeline (§5): **serial** single-file uploads, two-tier
    (normal-then-oversized) ordering, temp-file encryption staging with startup wipe + per-file
    `finally` cleanup, the `(mtime, size)` change-detection **with the null/0 mtime → size →
@@ -2485,10 +2727,17 @@ class NamingAndPlacementTest {
 10. UI: onboarding carousel (incl. the notification-permission card), home list + FAB, add/edit
     flow (incl. create-new-or-pick-existing Drive folder, §7.3), detail screen with the message
     list and the "Check my password" action (§7.4), settings (§7) — building each screen with the
-    §11 screenshot sight-loop (add `@Preview`, render, inspect PNG, iterate).
-11. Tests (JUnit5 unit + Robolectric/Compose UI + CPST preview screenshots), Konsist architecture
-    tests (starting from §12.2, incl. the Crashlytics-confinement guard from §9.1), a clean Detekt
+    §12 screenshot sight-loop (add `@Preview`, render, inspect PNG, iterate).
+11. Restore (§10): the Restore screen + WorkManager restore job — config-independent (cloud folder +
+    password), manifest-or-tree-walk file discovery, latest-version-only, pre-download password
+    verification, write-permission destination picker with empty-folder guidance + collision policy,
+    serial streaming download→decrypt→write with §5.8 continuation and §5.11 resilience. Unit tests
+    for version selection, decrypt round-trip, and collision handling.
+12. Tests (JUnit5 unit + Robolectric/Compose UI + CPST preview screenshots), Konsist architecture
+    tests (starting from §13.2, incl. the Crashlytics-confinement guard from §9.1), a clean Detekt
     run, README (use §1), and a short ARCHITECTURE.md.
 
 When something here is ambiguous or under-specified, ask before guessing. Keep every slice
-compiling and prefer small, reviewable steps.
+compiling and prefer small, reviewable steps. **Treat the numbered steps above as checkpoints:
+implement one slice, stop, summarize, and wait for review before the next (see §12.0)** — do not
+build the whole app in a single run.

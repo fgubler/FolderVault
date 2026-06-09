@@ -1,4 +1,4 @@
-package ch.abwesend.folderVault.ui.theme
+package ch.abwesend.foldervault.ui.theme
 
 import android.app.Activity
 import android.os.Build

@@ -65,13 +65,17 @@ exports — not for live working directories with constant edits.
 - Use the copied **`BinaryResult<TValue, TError>`** type for any operation that can fail
   (mirror PrivateContacts' convention). Prefer `runCatchingAsResult { }`.
 - Use an injected **`IDispatchers`** abstraction (copied) rather than hard-coding `Dispatchers.IO`.
-- **Testing**: JUnit5 + MockK for unit tests. Write tests for the diff/change-detection logic,
-  the encryption round-trip, the path-mirroring logic, and the retention logic at minimum.
+- **Testing**: **Kotest** spec DSL on the JUnit5 platform (`kotest-runner-junit5`) + **MockK** for
+  unit tests. Assertions via `kotest-assertions-core`; property-based tests via `kotest-property`.
+  Konsist architecture tests stay as plain JUnit5 `@Test`. Write tests for the diff/change-detection
+  logic, the encryption round-trip, the path-mirroring logic, and the retention logic at minimum.
+  MockK note: set `isolationMode = IsolationMode.InstancePerTest` in Kotest specs to mirror JUnit5's
+  per-test fresh-mock behavior.
 - **UI / instrumentation-style tests run on the JVM via Robolectric** (`@RunWith(RobolectricTestRunner::class)`,
   `robolectric` + `androidx.compose.ui:ui-test-junit4` + `createComposeRule()`), so Compose
   screens (onboarding carousel, home list, add/edit flow) can be tested without a device/emulator.
-  Note: Robolectric runs on JUnit4 — keep these in a JUnit4 source set alongside the JUnit5 unit
-  tests (Jupiter for plain unit tests, Vintage/JUnit4 for the Robolectric/Compose tests).
+  Note: Robolectric runs on JUnit4 — keep these in a JUnit4 source set routed onto the JUnit5
+  platform via the Vintage engine, alongside the Kotest unit tests.
 - **Compose Preview screenshot rendering with the official CPST plugin**
   (`com.android.compose.screenshot`). This serves two purposes: UI regression tests AND — more
   importantly during development — a way for the coding agent to *see* what each screen looks
@@ -102,7 +106,7 @@ exports — not for live working directories with constant edits.
   fail CI on new issues).
 - Modern Android idioms only: sealed interfaces for UI state and results, data classes for
   models, extension functions, no deprecated APIs, no mutable state held in Composables.
-- Suggested base package: `ch.abwesend.foldervault` (adjust if you prefer; be consistent).
+- Suggested base package: `ch.abwesend.foldervault` (all-lowercase; the on-disk rename from `folderVault` happens as the first step of §14.1).
 - **Single build flavor** targeting the Play Store (no F-Droid/no-Google flavor) — the Drive
   backend needs Google Play Services. Crashlytics is always present, gated by the user setting (§9).
 
@@ -214,8 +218,11 @@ interface ICloudStorageProvider {
     /** Get-or-create a child folder under [parentId] by name (used to mirror the local tree). */
     suspend fun getOrCreateChildFolder(parentId: String, name: String): BinaryResult<CloudFolder, Exception>
 
-    /** List immediate children (files + folders) of a folder. Used both to mirror/reconcile the
-     *  tree and to power the "pick an existing folder" browser at setup (§7.3). */
+    /** List immediate children (files + folders) of a folder. Used to mirror/reconcile the tree
+     *  and (v1.1+) to power the "pick an existing folder" browser at setup (§7.3).
+     *  Implementation must page on `nextPageToken` (Drive returns ≤100 items by default).
+     *  In v1, `listChildren` is used only for retention-driven cleanup; the broader
+     *  "browse existing folder" use case is deferred to v1.1. */
     suspend fun listChildren(folderId: String): BinaryResult<List<CloudEntry>, Exception>
 
     /**
@@ -233,7 +240,8 @@ interface ICloudStorageProvider {
     /** Read/write a named small plaintext metadata object in the backup's cloud root — used for
      *  both the per-run manifest (§5.10) and the per-backup `.foldervault-meta.json` (§6.1).
      *  Read returns null if absent. Both are plaintext JSON. The meta file holds backup *identity*
-     *  only (marker, name, created-at, encrypted flag) — never the salt/params/key (§6.1). */
+     *  only (marker, name, created-at, encrypted flag) — never the salt/params/key (§6.1).
+     *  Names starting with `.` (e.g. `.foldervault-meta.json`) are accepted as ordinary objects. */
     suspend fun readRootMetadata(rootFolderId: String, name: String): BinaryResult<ByteArray?, Exception>
     suspend fun writeRootMetadata(rootFolderId: String, name: String, bytes: ByteArray): BinaryResult<Unit, Exception>
 
@@ -294,8 +302,10 @@ to application logic. Apply these across all entities below:
 - `cloudProvider: String` — enum-as-string, e.g. `GOOGLE_DRIVE`
 - `cloudRootFolderId: String`, `cloudRootFolderName: String`
 - `cloudAccountIdentifier: String` — e.g. account email
-- `schedule: BackupSchedule` — enum: `MANUAL_ONLY`, `DAILY`, `WEEKLY`, `MONTHLY`
-  (null/absent ⇒ fall back to the global default schedule from settings)
+- `schedule: BackupSchedule` — enum: `USE_GLOBAL_DEFAULT` (sentinel, means "defer to the global
+  default schedule from DataStore settings"), `MANUAL_ONLY`, `DAILY`, `WEEKLY`, `MONTHLY`.
+  Use `USE_GLOBAL_DEFAULT` instead of a nullable field — safer for migrations and self-documenting
+  at call sites.
 - `changedFilePolicy: ChangedFilePolicy` — enum: `DUPLICATE_WITH_TIMESTAMP` (default),
   `OVERWRITE`, `IGNORE`. **Global default = `DUPLICATE_WITH_TIMESTAMP`.**
 - `encryptionEnabled: Boolean`
@@ -311,7 +321,10 @@ to application logic. Apply these across all entities below:
   entirely null** — giving the **all-or-nothing invariant** (you can't have some params set and
   others null). The embedded object is non-null **iff** `encryptionEnabled` is true; add a `CHECK`
   (or a transactional write path) keeping `encryptionEnabled` and the presence of
-  `encryptionParams` consistent. **Never** store the password or derived key here. These columns are
+  `encryptionParams` consistent. When adding the `enc_*` columns in a migration, default them all to `NULL` on existing rows
+  (i.e. `ALTER TABLE … ADD COLUMN enc_kdfAlgorithm TEXT DEFAULT NULL`) so that rows with
+  `encryptionEnabled = 0` satisfy the CHECK constraint from the start.
+  **Never** store the password or derived key here. These columns are
   **not authoritative** — the per-file `FVC1` header is the source of truth; on conflict the header
   wins. (Not duplicated into the cloud meta file.)
 - `retentionPolicy: RetentionPolicy` — see §5.6; default `KEEP_ALL` (disabled).
@@ -400,6 +413,8 @@ Normalized rather than a concatenated string key:
   real columns so the FK and cascade work.)
 - `lastNotifiedAt: Long`, `lastRunId: String?`.
   Used by §8.3 so a persistent condition (e.g. `AUTH_LOST` every run) alerts once, not every run.
+  When a later successful run resolves the condition, delete the throttle row so a future
+  recurrence can alert again; `lastRunId` identifies which run performed the clear.
 
 ---
 
@@ -536,6 +551,8 @@ Adapt the copied `BackupScheduler`/WorkManager pattern:
 - A **periodic** unique work per active backup config (or a single periodic worker that iterates
   active configs — your call; if per-config, key the unique work name by config id). Honor each
   config's `schedule`, falling back to the global default from DataStore.
+  **Register `enqueueUniquePeriodicWork` only when the resolved schedule is not `MANUAL_ONLY`.**
+  For `MANUAL_ONLY` configs the only execution path is the one-time manual "Back up now" request.
 - Constraints from `networkPolicy`: `WIFI_ONLY` ⇒ `NetworkType.UNMETERED`, `ANY` ⇒
   `NetworkType.CONNECTED`; plus `setRequiresBatteryNotLow(true)`, `setRequiresStorageNotLow(true)`.
 - A **one-time** "Back up now" trigger per config.
@@ -543,6 +560,9 @@ Adapt the copied `BackupScheduler`/WorkManager pattern:
   manual "Back up now" can never run concurrently for the same backup (concurrent runs would race
   on the staging dir and the index). Use the same unique name for both, with an appropriate
   `ExistingWorkPolicy`/`ExistingPeriodicWorkPolicy`; different configs may run independently.
+- **Before cascade-deleting a `BackupConfig`** (§7.4), call
+  `WorkManager.cancelUniqueWork(uniqueName)` first so a running worker cannot race with the
+  deletion. The §5.2 staging-dir startup cleanup will sweep any leftover temp files on the next run.
 - Reuse the copied `WorkerErrorHandler` for retry/cancellation handling and a foreground
   notification (progress: "Uploading 240 / 5,300 files").
 
@@ -561,13 +581,22 @@ re-enqueue itself promptly when it hits the limit with work remaining:
 - **Distinguish "incomplete-but-healthy" from "failing".** Genuine failures (auth lost, folder
   unreadable, repeated upload errors) use normal retry/backoff and may grow the interval; a healthy
   "ran out of time, made progress" should come back promptly and **not** let exponential backoff
-  starve it. (E.g. reset/῾cap the effective backoff for the progress case, or use a fresh expedited
+  starve it. (E.g. reset/cap the effective backoff for the progress case, or use a fresh expedited
   request rather than `retry()` so backoff doesn't accumulate.)
+  Note: the "prompt comeback" is best-effort and still subject to the configured
+  network/battery constraints — on a battery-low or off-Wi-Fi device the next run may legitimately
+  be delayed regardless.
 - A run that finds nothing left to do returns `Result.success()` and reverts to the normal periodic
   schedule. This is safe because each file is durably committed (§5.1) and the analyzer's diff skips
   everything already indexed, so continuations are cheap and monotonic.
 
-### 5.9 Index reconciliation against the cloud (reinstall / new device / cleared data)
+### 5.9 Index reconciliation against the cloud (reinstall / new device / cleared data) — **v1.1**
+
+> **v1 scope:** v1 always creates a fresh `FolderVault_<UUID>` root folder and never re-attaches
+> to an existing one. Reconciliation is therefore **out-of-scope for v1** and deferred to v1.1
+> (when the Google Picker integration will provide the UI entry-point). The sections below are
+> kept as forward-looking documentation so v1.1 can build on v1's metadata without restructuring.
+
 The `UploadedFileIndex` is local Room data. If it is **empty but the cloud root already contains a
 prior backup** (reinstall, new phone, "clear data"), the analyzer must **not** treat every file as
 new and re-upload the whole archive (that would duplicate everything). Before the first normal diff
@@ -584,11 +613,13 @@ for such a config, run a **one-time reconciliation**:
   always creating a fresh one.
 
 ### 5.10 Cloud manifest (sidecar for exact reconciliation + future restore)
-Maintain a small **manifest object inside the backup's cloud root** (e.g. `.foldervault-manifest`)
+Maintain a small **manifest object inside the backup's cloud root** named `.foldervault-manifest.json`
 that mirrors the index: per current file, `relativePath`, `mtime`, `size`, `cloudFileId`,
 `remoteName`, plus a schema version.
 - **Write it last, after all uploads in a run succeed**, so it never references objects that didn't
   finish. Rewriting a small JSON each run is negligible next to the data.
+  **v1 writes the manifest but does not read it back** (the reconciliation read-path is v1.1).
+  The write is cheap insurance for forward compatibility.
 - **Privacy: the manifest is plaintext JSON in all cases — it does NOT need to be encrypted.** It
   contains the original file names, folder structure, plus per-file `mtime`/`size` — but the
   mirror-tree design already exposes the names and structure in Drive in plaintext (e.g.
@@ -636,6 +667,11 @@ The provider implementation and the uploader must handle the realities of a long
   note this as a future enhancement (persist session URI + committed offset per in-flight file) but
   do **not** implement it now.
 - **No parallel uploads.** Serial-only by design (see §5.1).
+- **No re-attach to an existing FolderVault folder.** v1 always creates a fresh
+  `FolderVault_<UUID>` root. Reinstalling or clearing app data means the local `UploadedFileIndex`
+  is gone and the next backup re-uploads from scratch. The previous Drive folder and its data
+  remain intact (we never delete from the cloud). Re-attach via Google Picker + reconciliation
+  (§5.9) is planned for v1.1.
 - Per-backup size-limit override is future work; keep data models forward-compatible. (Restore
   itself is **in v1** — see §10; the manifest of §5.10 is what makes exact restore possible.)
 
@@ -684,11 +720,12 @@ streaming). Add a **streaming binary `.crypt` container**:
   **local cache if present, else from a file `FVC1` header** (§6.1), derive key from the supplied
   password + salt, stream-decrypt the `FVC1`
   container. An invalid password surfaces as `AEADBadTagException` ⇒ map to a typed
-  `DecryptionError.INVALID_PASSWORD`, mirroring the existing `decrypt` error mapping. Provide a cheap
-  **`verifyPassword`** helper (attempt to decrypt one small object / the first header+block) so
-  restore can validate the password up front (before batch-decrypting thousands of files), and so
-  the §7.4 "Check my
-  password" action can reuse it.
+  `DecryptionError.INVALID_PASSWORD`, mirroring the existing `decrypt` error mapping.
+- **`verifyPassword(headerBytes: ByteArray, firstCiphertextBlock: ByteArray, password: String): BinaryResult<Unit, DecryptionError>`** —
+  a cheap helper that reads the `FVC1` header fields (salt + KDF + IV), derives the key, and
+  attempts to decrypt just the first GCM block/tag to verify the password before processing the
+  whole file. Used by §10 restore (fail-fast before batch-decrypting thousands of files) and by
+  §7.4 "Check my password". A wrong password maps to `DecryptionError.INVALID_PASSWORD`.
 - Remote naming when encrypted: append `.crypt` to the (otherwise unchanged) filename; the
   mirrored folder names are **not** encrypted. Use a generic binary mime type for the upload
   (e.g. `application/octet-stream`).
@@ -716,11 +753,15 @@ never disagree. We deliberately do **not** duplicate the crypto params into the 
     file is downloaded — e.g. an initialized-but-empty backup has no files to inspect yet; strictly
     it's also inferable from a file's `FVC1` magic, but its natural home is the backup-level meta).
   - It **MUST NOT** contain the salt, KDF params, password, or key — those are header-only.
+  - **v1.1+ note:** on a re-attach after reinstall, once the first `FVC1` header has been parsed
+    and decrypted, write its resolved salt + KDF + cipher params into
+    `BackupConfig.encryptionParams` (the local fast-path cache) so subsequent runs derive the key
+    locally without re-reading any cloud file.
 
 Param-resolution order when (de)deriving the key: **local Room cache** if present (this device made
-the backup) → otherwise **read from a file header** (e.g. on restore after reinstall). The meta
-file is never consulted for crypto params (it doesn't carry them); it is used only to recognize a
-backup folder and show its identity.
+the backup) → otherwise **read from a `FVC1` file header** (e.g. on restore after reinstall or in
+the Restore screen, §10). The meta file is never consulted for crypto params (it doesn't carry
+them); it is used only to recognize a backup folder and show its identity.
 
 Same-plaintext-encrypts-differently (random per-file IV) is expected and fine: it means we must
 **never** use a remote content hash for change-detection. The local `UploadedFileIndex`
@@ -750,6 +791,9 @@ Clean, classic, with page indicators and a Skip / Next / Get-started flow. Cards
 4. **Honest limitations** — one-way push (recovery = download from Google Drive, then decrypt the
    downloaded folder in-app if it was encrypted; §10), changed files create timestamped
    copies, change-detection is by date+size not content, never deletes from the cloud.
+   **Reinstalling FolderVault or clearing app data** means the next backup re-uploads everything
+   from scratch; your data on Drive is safe but the app loses track of what was already uploaded.
+   (Re-attach to an existing backup will be added in a future version.)
 5. Privacy — optional client-side encryption; the cloud sees only encrypted bytes; if you forget
    the password the backup cannot be recovered (no reset).
 6. **Stay informed** — because the app runs in the background, ask for notification permission here
@@ -769,19 +813,10 @@ Clean, classic, with page indicators and a Skip / Next / Get-started flow. Cards
 ### 7.3 Add / edit backup flow
 - Pick **source folder** (SAF `ACTION_OPEN_DOCUMENT_TREE`, take persistable read permission).
 - Set up **cloud destination**: trigger authorization (handle the `ConsentRequired` `PendingIntent`
-  via an `ActivityResultLauncher`), then let the user choose between:
-  - **Create a new backup folder** (the `UUID`-suffixed unique folder, the default), or
-  - **Use an existing folder** — list the folders the app can see in the account (via
-    `listChildren`/a lightweight folder browser) and let the user select one. **Only allow
-    selecting a folder that is either (a) empty, or (b) already a recognizable FolderVault backup**
-    (contains a valid `.foldervault-meta.json`, §6.1). **Reject a non-empty folder that is not a
-    FolderVault backup** — this prevents mixing this backup's files with unrelated content and,
-    critically, prevents pointing a *differently-encrypted* new backup at a folder that already
-    holds `.crypt` files under another password (which would make the folder undecryptable as a
-    whole). Selecting a recognizable existing backup is the **re-attach after reinstall/new device**
-    path: read its meta + manifest, run the reconciliation of §5.9 so existing contents are adopted
-    into the index instead of re-uploaded, and (if encrypted) prompt+verify the password against the
-    existing backup's params rather than letting the user pick a new one.
+  via an `ActivityResultLauncher`), then **create a new backup folder** — a uniquely named
+  `FolderVault_<UUID>` folder in the user's Drive (using `createRootFolder`). The app always
+  creates a fresh folder in v1; selecting or re-attaching to an existing folder is deferred to
+  v1.1 (requires Google Picker integration + reconciliation, §5.9).
 - Set **schedule** (or "use global default"), **changed-file policy**, **network policy**,
   **encryption** (with password entry + confirm; explain the no-recovery warning) — for a *new*
   folder, generate the per-backup salt (cached locally per §6.1; it will be written into each file's
@@ -803,16 +838,21 @@ warning from §5.5. Actions:
   ✓/✗ result. This guards against the "forgot my password, discovered only at restore" disaster.
 - **Delete**: removes the config and **cascade-cleans local tables** (its `UploadedFileIndex`,
   `BackupMessage`, and `NotificationThrottleState` rows). It **never deletes anything in Google
-  Drive** — the backed-up files and folder remain; the confirm dialog states this and tells the
-  user they can delete the cloud folder themselves in the Google Drive app if they wish.
+  Drive** — the backed-up files and folder remain. The confirm dialog states: "Your data on Google
+  Drive is safe. The app will forget which files have been backed up — if you ever re-create this
+  backup it will upload everything again. You can delete the Drive folder yourself in the Google
+  Drive app if you wish." Also calls `WorkManager.cancelUniqueWork(uniqueName)` before deleting
+  to avoid racing with an in-flight worker (§5.7).
 
 ### 7.5 Settings (DataStore)
 Global default schedule, global default changed-file policy, **global default per-file size limit**
 (default ≈ 256 MB; drives the oversized-tier ordering + warning of §5.5), theme, re-show
-onboarding, default network policy, and a toggle for **anonymous error reports** (Crashlytics) —
-**on by default / opt-out**; disabling it turns Crashlytics collection off entirely. Redaction
-(§9) always applies regardless. A control to re-request notification permission (§8.4) also lives
-here.
+onboarding, default network policy, and a toggle for **anonymous error reports** (Crashlytics +
+Analytics) — **on by default / opt-out**; disabling it calls both
+`FirebaseCrashlytics.setCrashlyticsCollectionEnabled(false)` and
+`FirebaseAnalytics.setAnalyticsCollectionEnabled(false)` to fully disable telemetry (Analytics is
+a Crashlytics transitive dependency and has its own collection flag). Redaction (§9) always applies
+regardless. A control to re-request notification permission (§8.4) also lives here.
 
 ### 7.6 Cross-run progress is a first-class state (not a failure)
 Because uploads are serial and a WorkManager window is bounded (~10 min), the **initial backup of a
@@ -846,8 +886,10 @@ DataStore string-list.
   text, so behavior is driven by type.
 - Write messages from the worker as the run proceeds. **Coalesce within a run**: don't insert
   thousands of `UPLOAD_FAILED` rows — keep one row per `(runId, backupConfigId, type)` and
-  increment `count` (e.g. "12 files failed to upload"). Per-file detail can live in the log/logcat;
-  the user-facing row is the summary.
+  increment `count` (e.g. "12 files failed to upload"). **Coalescing rule:** the first event of a
+  `(runId, backupConfigId, type)` triple sets `messageText` and `formatArgs`; subsequent events of
+  the same triple only bump `count` and update `timestamp`. Per-file detail can live in the
+  log/logcat; the user-facing row is the summary.
 - The UI observes messages via a DAO `Flow`. The detail screen (§7.4) shows the per-backup list
   with severity styling; allow mark-read and dismiss (single + "clear all for this backup"). A
   small unread-by-severity badge can appear on the home card.
@@ -871,8 +913,10 @@ DataStore string-list.
   ("Backup 'Photos' had problems: authorization expired; 12 files failed"). Never one notification
   per message. Tapping it deep-links (via Nav3) into that backup's detail screen.
 - **Stable notification IDs.** Derive the problem-notification id deterministically from the
-  backup config id (e.g. a stable hash of `backupConfigId`), so a new alert for a backup
-  **replaces** its previous one instead of stacking duplicates. Use a separate id space (or the
+  backup config id (e.g. a 32-bit truncation of `backupConfigId.hashCode()`), so a new alert for
+  a backup **replaces** its previous one instead of stacking duplicates. Collision risk is
+  negligible for the expected number of backups (< 10); if zero-collision is preferred, store a
+  small int assignment table in Room or DataStore instead. Use a separate id space (or the
   ongoing-progress notification's own fixed id) for the status-channel progress notification.
 - **Throttle repeats across runs** using `NotificationThrottleState` (§4.4): keyed by the composite
   `(backupConfigId, messageType)`, suppress re-notifying for the same condition within a window
@@ -1036,13 +1080,14 @@ inline. They are reproduced verbatim below so you can paste them.
     >   call sites. All copied files that log should route through it.
 > - `injectAnywhere()` is a Koin helper — replace with your Koin DI accessor.
 > - Keep the crypto constants and algorithms byte-for-byte identical.
+> - **Remove `encrypt(plaintext: String, password: String)` and `decrypt(ciphertext: String, password: String)`** when copying. FolderVault does not encrypt strings as file content (binary streaming via the `FVC1` container handles that). Keep only `encryptPassword`/`decryptPassword` (KeyStore-backed password wrapping) plus the new streaming binary API and `verifyPassword`.
 > - For the cloud layer, treat the two Google files as the concrete implementation behind your
     >   new `ICloudStorageProvider` / `ICloudAuthorizer` interfaces, and add `getOrCreateChildFolder`
     >   + the explicit-remote-name streaming `uploadFile` as described in §3.1.
 
 ## APPENDIX: Reused source files (verbatim from PrivateContacts)
 
-### 8.1 BinaryResult + Success/Error + ResultExtensions
+### 11.1 BinaryResult + Success/Error + ResultExtensions
 
 #### `BinaryResult.kt`
 ```kotlin
@@ -1170,7 +1215,7 @@ inline fun <TValue, TError> BinaryResult<TValue, TError>.ifError(
 }
 ```
 
-### 8.2 IDispatchers + Dispatchers + mapAsync/mapAsyncChunked
+### 11.2 IDispatchers + Dispatchers + mapAsync/mapAsyncChunked
 
 #### `Dispatchers.kt`
 ```kotlin
@@ -1230,7 +1275,7 @@ suspend fun <T, S> Collection<T>.mapAsyncChunked(
 }
 ```
 
-### 8.3 EncryptionRepository + AndroidKeyStoreRepository
+### 11.3 EncryptionRepository + AndroidKeyStoreRepository
 
 #### `EncryptionRepository.kt`
 ```kotlin
@@ -1482,7 +1527,7 @@ class AndroidKeyStoreRepository : IKeyStoreRepository {
 }
 ```
 
-### 8.4 Google Drive layer
+### 11.4 Google Drive layer
 
 #### `GoogleDriveRepository.kt`
 ```kotlin
@@ -1849,7 +1894,7 @@ sealed interface GoogleDriveAuthResult<out T> {
 }
 ```
 
-### 8.5 Worker / scheduler patterns to follow
+### 11.5 Worker / scheduler patterns to follow
 
 #### `BackupScheduler.kt`
 ```kotlin
@@ -2392,11 +2437,14 @@ tests:
 ### 12.2 Persistent project conventions — create and maintain a `CLAUDE.md`
 Create a **`CLAUDE.md`** at the repo root (under source control) that captures the durable
 working agreements so they survive across sessions and future agents. Seed it with: the
-build/test/lint commands (`./gradlew build`, the JUnit5 + Robolectric test tasks, `detekt`, the
+build/test/lint commands (`./gradlew build`, the Kotest + Robolectric test tasks, `detekt`, the
 Konsist tests, `updateDebugScreenshotTest`), the layering rules (§3), the conventions from §2
-(BinaryResult, IDispatchers, serial-upload philosophy, etc.), the **incremental-checkpoint
-workflow (§12.0)**, the **test-first-for-logic habit (§12.0.1)**, the sight-loop habit (§12.1), and
-the prompt-history habit (§12.3). Keep it concise and update it whenever a convention changes.
+(BinaryResult, IDispatchers, serial-upload philosophy, Kotest spec DSL with MockK
+`IsolationMode.InstancePerTest`, etc.), the **v1 / v1.1 scope split** (v1 always creates a fresh
+root — no re-attach, no Google Picker; §5.9 and the "use existing folder" UX are v1.1), the
+**incremental-checkpoint workflow (§12.0)**, the **test-first-for-logic habit (§12.0.1)**, the
+sight-loop habit (§12.1), and the prompt-history habit (§12.3). Keep it concise and update it
+whenever a convention changes.
 
 Include in `CLAUDE.md` an explicit **"Definition of Done" checklist** the agent runs through
 before treating any unit of work as complete (these are gates, not suggestions — the
@@ -2525,8 +2573,6 @@ potential-bugs:
 
 style:
   active: true
-  MaxLineLength:
-    maxLineLength: 120
   ForbiddenComment:
     values: ['FIXME:', 'STOPSHIP:']
   MagicNumber:
@@ -2682,17 +2728,26 @@ class NamingAndPlacementTest {
 
 ## 14. Deliverables & order of work
 
-1. Wire up dependencies & tooling in the **existing** project starting from the version catalog in
-   §2.1 — **first checking each entry for a newer stable release and bumping to it** — covering
-   Compose/Material3, Nav3, Room, DataStore, WorkManager, Koin, Google Drive + AuthorizationClient,
-   kotlinx-serialization, plus the **Detekt** plugin (with the starter `config/detekt/detekt.yml`
-   from §13.1), **Konsist** and
-   **Robolectric** test dependencies, the **CPST** (`com.android.compose.screenshot`) plugin +
-   `screenshotTest` source set, and the JUnit5 + JUnit4 test setup described in §2. Get a clean
-   Gradle sync/build (resolve the Kotlin/Compose/AGP/KSP alignment) before proceeding. Establish
-   the package structure and a Koin module. Replace the template `MainActivity` with the Nav3 host
-   and placeholder screens. Also create the `CLAUDE.md` (§12.2) and an empty `docs/prompt-history.md`
-   (§12.3) so the working conventions and the vibe-coding log exist from the start.
+1. Wire up dependencies & tooling in the **existing** project:
+   - **Step 0 (do first):** rename the on-disk skeleton package from `ch.abwesend.folderVault` to
+     `ch.abwesend.foldervault` — move source directories, update `namespace` and `applicationId`
+     in `build.gradle.kts`, and update all `package` / `import` declarations. Also bump
+     `sourceCompatibility`, `targetCompatibility`, and `kotlinOptions.jvmTarget` to **17** (AGP 9
+     requires JDK 17).
+   - **CPST caution:** the `com.android.compose.screenshot` plugin is pinned to a specific AGP
+     major. **Before committing to AGP 9.x, verify a CPST alpha exists that supports AGP 9.**
+     If not, downgrade AGP to 8.13.x (the spec's floor value) and adjust the Kotlin/KSP matrix.
+   - Starting from the version catalog in §2.1 — **first checking each entry for a newer stable
+     release and bumping to it** — add: Kotest (runner-junit5 + assertions-core + property),
+     Compose/Material3 (BOM bump), Nav3, Room + KSP, DataStore, WorkManager, Koin, Google Drive
+     + AuthorizationClient, kotlinx-serialization, Detekt (with the starter `config/detekt/detekt.yml`
+     from §13.1), Konsist, Robolectric, Vintage engine, MockK, Turbine, coroutines-test, CPST +
+     `screenshotTest` source set, Firebase (Crashlytics + Analytics). Get a clean Gradle
+     sync/build (resolve the Kotlin/Compose/AGP/KSP alignment) before proceeding.
+   - Establish the package structure and a Koin module. Replace the template `MainActivity` with
+     the Nav3 host and placeholder screens. Also create the `CLAUDE.md` (§12.2) and an empty
+     `docs/prompt-history.md` (§12.3) so the working conventions and the vibe-coding log exist
+     from the start.
 2. Copy in the reused building blocks (§11) and make them compile under the new package.
 3. **Privacy-aware logging foundation (§9)**: the two-sink logger (full-detail local sink +
    auto-redacting Crashlytics sink), the `FileNameRedactor` utility + unit tests, and the
@@ -2706,6 +2761,10 @@ class NamingAndPlacementTest {
    the §5.11 resilience behavior: deterministic handling of duplicate-named folders, silent
    token re-auth on 401, exponential-backoff retry on 429/5xx, and once-per-run warn-and-skip
    (or stop) on quota-full / persistent rate limiting.
+   **v1 implements:** `createRootFolder`, `getOrCreateChildFolder`, `uploadFile`, `deleteFile`,
+   `readRootMetadata`, `writeRootMetadata`, `hasFolderAccess`, `getAccountIdentifier`.
+   `listChildren` is implemented (needed for retention) but the "browse existing folder" UI path
+   is deferred to v1.1 (§5.9, §7.3).
 6. Encryption extension for binary streaming `.crypt` (§6): the `FVC1` container, **per-backup key
    derivation** (one salt/key per backup, per-file IVs), params authoritative in the per-file header
    with a local Room fast-path cache (header wins on conflict), the identity-only cloud

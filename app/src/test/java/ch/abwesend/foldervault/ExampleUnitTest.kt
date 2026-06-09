@@ -1,4 +1,4 @@
-package ch.abwesend.folderVault
+package ch.abwesend.foldervault
 
 import org.junit.Test
 

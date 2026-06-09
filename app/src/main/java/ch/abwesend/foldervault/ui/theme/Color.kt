@@ -1,4 +1,4 @@
-package ch.abwesend.folderVault.ui.theme
+package ch.abwesend.foldervault.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

@@ -1,0 +1,26 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false,
+    "filesystem": {
+      "allowWrite": [
+        "~/.gradle/",
+        "~/.android/"
+      ],
+      "allowRead": [
+        "~/.gradle/",
+        "~/.android/"
+      ]
+    },
+    "permissions": {
+      "allow": [
+        "Bash(./gradlew assembleDebug)",
+        "Bash(./gradlew testDebugUnitTest)"
+      ]
+    },
+    "network": {
+      "allowLocalBinding": true
+    }
+  }
+}

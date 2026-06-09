@@ -83,8 +83,8 @@ kotlin {
 // Detekt configuration
 detekt {
     buildUponDefaultConfig = true
-    config.setFrom(files("$rootDir/config/detekt/detekt.yml"))
-    baseline = file("$rootDir/config/detekt/baseline.xml")
+    config.setFrom(files("$rootDir/gradle/detekt.yml"))
+    baseline = file("$rootDir/gradle/detekt-baseline.xml")
 }
 
 dependencies {

@@ -23,9 +23,12 @@ infrastructure/
   storage/      SAF / DocumentFile traversal
   cloud/        ICloudStorageProvider (abstraction) + googledrive/ impl
   backup/       scheduler, worker, analyzer→queue→uploader pipeline
+  logging/      PrivateLogger (two-sink: LocalLogSink + CrashlyticsSink), ONLY place for Firebase
 ```
 Dependency rule: `domain` depends on nothing; `view` and `infrastructure` may depend on `domain`
 but not on each other. Cloud-provider specifics stay inside `infrastructure/cloud/googledrive/`.
+Crashlytics confinement: ONLY `infrastructure/logging/CrashlyticsSink.kt` may import
+`FirebaseCrashlytics` — enforced by `LoggingArchitectureTest`.
 
 ## Key conventions
 - **`BinaryResult<TValue, TError>`** for any fallible operation. Use `runCatchingAsResult { }`.

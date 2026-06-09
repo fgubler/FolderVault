@@ -1,0 +1,97 @@
+build:
+  maxIssues: 0            # fail on any issue once the baseline is clean
+  excludeCorrectable: false
+
+config:
+  validation: true
+  warningsAsErrors: false
+
+processors:
+  active: true
+
+console-reports:
+  active: true
+
+complexity:
+  active: true
+  LongMethod:
+    threshold: 60
+  LongParameterList:
+    functionThreshold: 7
+    constructorThreshold: 8     # Room entities / config data classes can be wide
+  TooManyFunctions:
+    active: true
+    thresholdInClasses: 20
+    ignorePrivate: true
+  CyclomaticComplexMethod:
+    threshold: 18
+  NestedBlockDepth:
+    threshold: 5
+
+coroutines:
+  active: true
+  GlobalCoroutineUsage:
+    active: true            # we use an injected scope, never GlobalScope
+  SuspendFunWithFlowReturnType:
+    active: true
+  RedundantSuspendModifier:
+    active: true
+
+exceptions:
+  active: true
+  TooGenericExceptionCaught:
+    active: false           # the BinaryResult/runCatchingAsResult pattern catches Exception on purpose
+  SwallowedException:
+    active: true
+  ThrowingExceptionInMain:
+    active: true
+
+naming:
+  active: true
+  FunctionNaming:
+    # allow @Composable PascalCase functions
+    ignoreAnnotated: ['Composable']
+  TopLevelPropertyNaming:
+    constantPattern: '[A-Z][A-Za-z0-9]*'
+
+performance:
+  active: true
+  SpreadOperator:
+    active: false           # WorkManager/string-format varargs make this noisy
+
+potential-bugs:
+  active: true
+  LateinitUsage:
+    active: true
+  UnsafeCallOnNullableType:
+    active: true
+
+style:
+  active: true
+  ForbiddenComment:
+    values: ['FIXME:', 'STOPSHIP:']
+  MagicNumber:
+    active: true
+    ignoreNumbers: ['-1', '0', '1', '2', '100', '1000', '1024']
+    ignoreEnums: true
+    ignoreAnnotation: true
+    ignorePropertyDeclaration: true
+  ReturnCount:
+    max: 4                  # the worker precondition/early-return style needs a few
+  UnusedPrivateMember:
+    active: true
+    ignoreAnnotated: ['Preview']    # screenshotTest previews look unused to detekt
+
+formatting:
+  active: true
+  android: true
+  autoCorrect: true
+  Indentation:
+    indentSize: 4
+  MaximumLineLength:
+    maxLineLength: 120
+
+comments:
+  active: true
+  AbsentOrWrongFileLicense:
+    active: false           # enable + set licenseTemplateFile if you want the header enforced

@@ -41,9 +41,9 @@ exports — not for live working directories with constant edits.
 - Private: optional client-side encryption — the cloud provider sees only encrypted bytes.
 
 **Weaknesses / non-goals (state these honestly to the user in onboarding):**
-- Not a two-way sync. It is a one-way push (local → cloud). Recovery is via an explicit **one-time
-  Restore** (§10) that downloads a backup folder back to a local folder — not continuous two-way
-  sync.
+- Not a two-way sync. It is a one-way push (local → cloud). To recover, you **download the backup
+  folder from Google Drive (using the Drive app)** and, if it was encrypted, **decrypt the
+  downloaded folder in this app** (§10) — not continuous two-way sync.
 - Not ideal for frequently-changing files: changed files are uploaded as **new timestamped
   copies**, so a file edited daily produces many cloud versions (a retention policy mitigates this).
 - Detects changes by modification-time and size, not by content. A tool that rewrites a file
@@ -237,13 +237,11 @@ interface ICloudStorageProvider {
     suspend fun readRootMetadata(rootFolderId: String, name: String): BinaryResult<ByteArray?, Exception>
     suspend fun writeRootMetadata(rootFolderId: String, name: String, bytes: ByteArray): BinaryResult<Unit, Exception>
 
-    /** Stream a cloud object's bytes to [sink] (used by restore, §10). Streaming keeps memory flat
-     *  for large files; decryption (for .crypt objects) is applied by the caller on the stream. */
-    suspend fun downloadFile(fileId: String, sink: OutputStream): BinaryResult<Unit, Exception>
-
     suspend fun deleteFile(fileId: String): BinaryResult<Unit, Exception>     // retention + manifest replace
 }
 ```
+(No `downloadFile` is needed in v1: restore downloads are delegated to the Google Drive app; this
+app only decrypts the already-downloaded folder — see §10.)
 
 Provide a separate `ICloudAuthorizer` abstraction (generalize
 `IGoogleDriveAuthorizationRepository`) returning an authorized `ICloudStorageProvider` or a
@@ -688,7 +686,8 @@ streaming). Add a **streaming binary `.crypt` container**:
   container. An invalid password surfaces as `AEADBadTagException` ⇒ map to a typed
   `DecryptionError.INVALID_PASSWORD`, mirroring the existing `decrypt` error mapping. Provide a cheap
   **`verifyPassword`** helper (attempt to decrypt one small object / the first header+block) so
-  restore can validate the password before downloading gigabytes, and so the §7.4 "Check my
+  restore can validate the password up front (before batch-decrypting thousands of files), and so
+  the §7.4 "Check my
   password" action can reuse it.
 - Remote naming when encrypted: append `.crypt` to the (otherwise unchanged) filename; the
   mirrored folder names are **not** encrypted. Use a generic binary mime type for the upload
@@ -739,8 +738,8 @@ crash cleanup). Never load whole files into RAM; there is no in-RAM fast path.
 
 Material 3, modern and appealing, dynamic color, light/dark/system theme. Nav3 typed navigation.
 Top-level destinations: onboarding, home (backup list), add/edit backup, backup detail, settings,
-and a **Restore screen** (§10) reachable from the home screen overflow/menu (and offered from a
-backup's detail screen, pre-filled with that backup's cloud folder).
+and a **Restore screen** (§10 — decrypt a locally-downloaded backup) reachable from the home
+screen overflow/menu.
 
 ### 7.1 First-launch onboarding — **swipeable card carousel** (HorizontalPager)
 Shown once (persist a `onboardingComplete` flag in DataStore; allow re-opening from settings).
@@ -748,8 +747,8 @@ Clean, classic, with page indicators and a Skip / Next / Get-started flow. Cards
 1. What it does — incremental folder backup to your cloud.
 2. **Best for files that rarely change** (photos, scans, document archives).
 3. How incremental upload works — only new/changed files are sent; unchanged files never re-sent.
-4. **Honest limitations** — one-way push (recovery is via a one-time Restore, §10, not two-way
-   sync), changed files create timestamped
+4. **Honest limitations** — one-way push (recovery = download from Google Drive, then decrypt the
+   downloaded folder in-app if it was encrypted; §10), changed files create timestamped
    copies, change-detection is by date+size not content, never deletes from the cloud.
 5. Privacy — optional client-side encryption; the cloud sees only encrypted bytes; if you forget
    the password the backup cannot be recovered (no reset).
@@ -957,69 +956,71 @@ PrivateContacts' Crashlytics toggle.)
 
 ---
 
-## 10. Restore (download an encrypted/plaintext backup back to a local folder)
+## 10. Restore (decrypt a locally-downloaded backup)
 
-A backup you can't restore isn't a backup — and for **encrypted** backups this is the *only* way
-to recover data, since the `.crypt` files use this app's custom `FVC1` container (§6) and no other
-tool can read them. Restore is therefore a **v1 feature**, not future work. It is a **one-time,
-user-initiated download** of a cloud backup folder into a local destination folder — **not** a
-sync, and entirely separate from the backup pipeline's local→cloud direction.
+A backup you can't read back isn't a backup — and for **encrypted** backups, decrypting the
+`FVC1` `.crypt` files (§6) is something **only this app can do**, since no other tool understands
+the container. That decryption is the irreplaceable part, so it is a **v1 feature**.
 
-### 10.1 Independent of local config (works after reinstall / on a new device)
-Restore must operate from **just a cloud folder + (if encrypted) a password** — it must **not**
-require an existing `BackupConfig` or local `UploadedFileIndex`. The canonical scenario: the user
-lost their phone, installs the app fresh, picks their Drive backup folder, enters the password, and
-gets their files back. (Restoring a backup that *does* have a local config is just the same flow
-pre-filled with that config's cloud folder.)
+**The download itself is delegated to the Google Drive app.** Rather than re-implementing robust
+cloud downloading (windows, continuation, token refresh, rate-limit handling) just for restore, the
+user downloads their backup folder to local storage **using Google Drive's own app**, and this app
+provides the piece only it can: **batch-decrypting a locally-downloaded backup folder into a fresh
+output folder.** This removes an entire class of network-durability code from v1.
 
-### 10.2 Flow (a separate Restore screen)
-1. **Authorize** the cloud account (same `ICloudAuthorizer` flow as setup).
-2. **Pick the source cloud folder** (the existing-folder browser from §7.3 — `listChildren`).
-3. **Determine the file set.** Prefer the **cloud manifest** (§5.10) for the exact tree + original
-   names; if absent, **walk the mirrored cloud tree** recursively. For files with timestamped
-   duplicates (from `DUPLICATE_WITH_TIMESTAMP`), restore the **latest version of each file only**
-   (the suffix-less current name, or the newest timestamp suffix if no suffix-less object exists).
-4. **Encryption / password.** If any object is `.crypt`, prompt for the password and **verify it
-   cheaply before downloading** (use the §6 `verifyPassword` helper on one small object/header) so
-   a wrong password fails fast, not after gigabytes. Map a bad password to
-   `DecryptionError.INVALID_PASSWORD` and show a clear error.
-5. **Pick the local destination** via SAF `ACTION_OPEN_DOCUMENT_TREE` (this needs **write**
-   permission — distinct from the read-only source-tree permission used for backups). **Before
-   opening the picker, tell the user to choose an empty folder.**
-6. **Collision handling.** If the chosen destination is **not empty** and the restore would collide
-   with existing files, **ask once** for a policy applied to all: **overwrite / skip / rename-with-
-   suffix**. (No per-file prompts.)
-7. **Run the restore** (see §10.3), reconstructing the folder tree under the destination, decrypting
-   `.crypt` objects on the fly (strip the `.crypt` suffix → stream through the `FVC1` decrypt path →
-   write the plaintext file), copying plaintext objects directly.
+### 10.1 User flow
+1. The Restore screen explains the two steps and **tells the user to first download their backup
+   folder from Google Drive using the Drive app** (or any means) to local storage.
+  - **Unencrypted backups:** there is nothing for this app to do — the downloaded files are already
+    the originals. The screen says so plainly (no no-op "decrypt" offered) and points out only that
+    the `.crypt`-free files are ready to use.
+  - **Encrypted backups:** continue below.
+2. **Pick the downloaded folder** via SAF `ACTION_OPEN_DOCUMENT_TREE` (read permission). The app
+   walks it recursively, identifying `.crypt` files.
+3. **Pick a fresh output folder** (separate SAF tree, **write** permission). **Always decrypt into a
+   user-chosen output folder; never modify or write into the downloaded source folder.** Tell the
+   user to pick an **empty** folder; if it is not empty and a collision would occur, **ask once** for
+   a policy applied to all (**overwrite / skip / rename-with-suffix**) — no per-file prompts.
+4. **Enter the password** and **verify it before processing** the whole set: use the §6
+   `verifyPassword` helper on one file's header+first block, so a wrong password fails fast (mapped
+   to `DecryptionError.INVALID_PASSWORD`) rather than after grinding through thousands of files.
+5. **Decrypt** every `.crypt` file, reconstructing the folder tree under the output folder: strip the
+   `.crypt` suffix, stream the `FVC1` container through the decrypt path (§6) to the output file. Any
+   non-`.crypt` files encountered (e.g. the plaintext manifest/meta, or an accidentally-mixed plain
+   file) are copied through unchanged or skipped — don't fail the run on them.
 
-### 10.3 Execution model (WorkManager + observed progress)
-Restore is a **WorkManager job** (for robustness, the network constraints, and resumability),
-**with the Restore screen showing a progress dialog** that observes live progress via
-`setProgress` + `getWorkInfoByIdFlow` while open. The dialog shows determinate progress
-("Restoring 240 / 5,300 files", current file name — redacted in any logs but shown in-UI is fine,
-bytes/percent) and **asks the user to keep the app in the foreground** for the smoothest, fastest
-restore. That ask is a **recommendation, not a requirement**: if the user backgrounds the app, the
-WorkManager job **keeps running under a foreground notification**, and the dialog re-attaches to the
-live progress when the screen is reopened. Practical consequences, mirroring backup:
-- **Serial, one file at a time**, streaming download→(decrypt)→write with flat memory; same ~10-min
-  window limit, so a large restore that can't finish in one window uses the **same continuation
-  approach as §5.8** (stop at a completed-file boundary, re-enqueue promptly) — restoring a large
-  folder over several steps/windows rather than failing. The dialog reflects this ("continuing…").
-- **Resumable**: a partially-completed restore can skip local files already fully written (compare
-  presence/size against the expected set) so a re-run continues rather than restarting.
-- **Same cloud resilience as §5.11** (token refresh on 401, backoff on 429/5xx, warn-once on
-  quota/rate-limit) and the **two-sink redacting logger** (§9) — restore must not log file content,
-  and only redacted names go to Crashlytics.
-- Write restore progress/outcome as `BackupMessage`s (or an equivalent restore-scoped message) so
-  failures are visible, coalesced per run.
+### 10.2 Self-contained decryption (no cloud, no local config needed)
+Decryption needs **only the downloaded files + the password** — no network, no `BackupConfig`, no
+`UploadedFileIndex`, no cloud manifest/meta. This works because **every `FVC1` file header carries
+its own salt + KDF params** (§6.1), so each downloaded file is self-describing. This is the payoff
+of keeping crypto params in the headers: restore-after-reinstall on a brand-new device Just Works
+from the downloaded folder alone. (The latest-version-only concern is also moot here — the user
+downloads whatever versions they want from Drive; the app decrypts what's present. If both
+`report.pdf.crypt` and a timestamped `report__….pdf.crypt` were downloaded, both are decrypted to
+their respective names.)
+
+### 10.3 Execution model (local foreground batch with a progress dialog)
+The batch decrypt is a **local, offline foreground operation** — no network, so no WorkManager,
+windows, or continuation logic needed. Run it from the Restore screen with a **progress dialog**
+showing determinate progress ("Decrypting 240 / 5,300 files", current file name) while the screen is
+open. It can be many files, so:
+- **Stream each file** (`CipherInputStream` → output), flat memory regardless of file size; process
+  serially (or a small bounded concurrency — local CPU/IO only, no upload-style partial-state risk).
+- **Cancellable**, and tolerant of being re-run: already-decrypted output files can be skipped
+  (presence check) so a re-run resumes.
+- A wrong password (`AEADBadTagException`) on a file after the upfront check is surfaced clearly and
+  stops the batch (it means the password/file is wrong, not a transient issue).
+- Use the **two-sink redacting logger** (§9): never log file content; only redacted names to
+  Crashlytics. Surface outcome (counts, any failures) to the user.
 
 ### 10.4 Out of scope for v1
-- **Point-in-time restore** ("as of date X") — v1 restores latest-version-only. The manifest/version
-  history makes this a clean future addition.
-- **Selective / partial restore** (letting the user pick a sub-list of files/subfolders rather than
-  the whole backup) — **explicitly deferred to v2**. v1 restores the entire folder. (Design the
-  restore file-set discovery so a future filter/selection step can slot in without rework.)
+- **Point-in-time restore** ("as of date X") — the user simply chooses which versions to download
+  from Drive; the app decrypts whatever is present.
+- **Selective / partial restore** within the app — handled implicitly (the user downloads only the
+  files they want via Drive), so no in-app file-picker is needed in v1. (A future in-app selective
+  download could be added if the download is ever brought in-app.)
+- **In-app cloud download** — deliberately delegated to the Google Drive app for v1 (see above); the
+  `ICloudStorageProvider` therefore needs no `downloadFile` for v1.
 
 ---
 
@@ -2728,11 +2729,12 @@ class NamingAndPlacementTest {
     flow (incl. create-new-or-pick-existing Drive folder, §7.3), detail screen with the message
     list and the "Check my password" action (§7.4), settings (§7) — building each screen with the
     §12 screenshot sight-loop (add `@Preview`, render, inspect PNG, iterate).
-11. Restore (§10): the Restore screen + WorkManager restore job — config-independent (cloud folder +
-    password), manifest-or-tree-walk file discovery, latest-version-only, pre-download password
-    verification, write-permission destination picker with empty-folder guidance + collision policy,
-    serial streaming download→decrypt→write with §5.8 continuation and §5.11 resilience. Unit tests
-    for version selection, decrypt round-trip, and collision handling.
+11. Restore (§10): the Restore screen + **local batch-decrypt** of a Drive-app-downloaded folder
+    (no in-app cloud download). SAF read on the downloaded folder, fresh write-permission output
+    folder (never modify the source), upfront password verification, streaming `FVC1` decrypt of
+    every `.crypt` file reconstructing the tree, empty-folder guidance + ask-once collision policy,
+    a local foreground progress dialog, cancel/resume. Unit tests for decrypt round-trip, tree
+    reconstruction, and collision handling.
 12. Tests (JUnit5 unit + Robolectric/Compose UI + CPST preview screenshots), Konsist architecture
     tests (starting from §13.2, incl. the Crashlytics-confinement guard from §9.1), a clean Detekt
     run, README (use §1), and a short ARCHITECTURE.md.

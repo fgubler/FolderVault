@@ -1,0 +1,35 @@
+package ch.abwesend.foldervault.infrastructure.room.entity
+
+import androidx.room.Entity
+import androidx.room.ForeignKey
+import androidx.room.Index
+import androidx.room.PrimaryKey
+
+// Partial unique index on (backupConfigId, relativePath) WHERE isCurrentVersion = 1
+// is created via RoomDatabase.Callback.onCreate — Room does not support partial indexes natively.
+@Entity(
+    tableName = "UploadedFileIndex",
+    foreignKeys = [
+        ForeignKey(
+            entity = BackupConfigEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["backupConfigId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [
+        Index("backupConfigId"),
+        Index(value = ["backupConfigId", "relativePath", "uploadedAt"], unique = true),
+    ],
+)
+data class UploadedFileIndexEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val backupConfigId: String,
+    val relativePath: String,
+    val localLastModified: Long,
+    val localSize: Long,
+    val cloudFileId: String,
+    val remoteName: String,
+    val uploadedAt: Long,
+    val isCurrentVersion: Boolean,
+)

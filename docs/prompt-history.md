@@ -7,6 +7,21 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-06-09 — §14.4: Room schema, DAOs, DataStore settings, DI wiring
+
+### What was done
+- **Domain models**: `BackupSchedule`, `ChangedFilePolicy`, `RetentionPolicy` (sealed), `NetworkPolicy`, `BackupRunStatus`, `MessageSeverity`, `MessageType` (with `notifies: Boolean`), `AppTheme`, `AppSettings`, `IAppSettingsRepository`.
+- **Room entities**: `EncryptionParams` (`@Embedded(prefix="enc_")`), `BackupConfigEntity` (24 fields incl. §7.6 cross-run counters), `UploadedFileIndexEntity` (unique index on `(backupConfigId, relativePath, uploadedAt)`), `BackupMessageEntity` (nullable FK for app-global messages, `formatArgs: List<String>`), `NotificationThrottleStateEntity` (composite PK).
+- **`RoomTypeConverters`**: enum name round-trips, `RetentionPolicy` custom encoding (`KEEP_ALL`, `KEEP_LAST_N:n`, `KEEP_NEWER_THAN:d`), `List<String>` via `kotlinx-serialization`.
+- **DAOs**: `BackupConfigDao` (CRUD + `updateRunStats` + `updateCrossRunProgress`), `UploadedFileIndexDao` (`@Transaction upsertCurrentVersion` clears old current flag + pruning), `BackupMessageDao` (Flow queries, read/dismiss ops), `NotificationThrottleStateDao`.
+- **`FolderVaultDatabase`**: `@Database` v1, `@TypeConverters`, `RoomDatabase.Callback` that sets `PRAGMA foreign_keys = ON` in `onOpen` and creates partial unique index `WHERE isCurrentVersion = 1` in `onCreate`.
+- **`DatabaseMigrations`**: scaffold with empty `ALL` array.
+- **`AppSettingsRepository`**: DataStore Preferences implementation; `Preferences.toAppSettings()` / `MutablePreferences.applyAppSettings()` helpers; enum values stored by name with safe fallback to defaults on unknown strings.
+- **`AppModule`**: wired Room DB + 4 DAOs + `AppSettingsRepository` as Koin singletons.
+- **`build.gradle.kts`**: added `sourceSets { test { assets.srcDir("$projectDir/schemas") } }` for Room migration test helper.
+- **`RoomDatabaseTest`** (Robolectric): DB opens, BackupConfig CRUD, cascade delete to UploadedFileIndex and BackupMessage, `upsertCurrentVersion` correctness.
+- **`ArchitectureLayerTest`** (Konsist): domain has no Android/infra imports; view has no infra imports; only `CrashlyticsSink` imports Crashlytics; Google Drive details stay in `googledrive` package.
+
 ## 2026-06-09 — §14.3: Privacy-aware two-sink logging foundation
 
 ### What was done

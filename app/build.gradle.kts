@@ -63,6 +63,12 @@ android {
         }
     }
 
+    sourceSets {
+        getByName("test") {
+            assets.srcDir("$projectDir/schemas")
+        }
+    }
+
     packaging {
         resources {
             excludes += setOf(

@@ -17,11 +17,12 @@ complexity:
   LongMethod:
     threshold: 60
   LongParameterList:
-    functionThreshold: 7
-    constructorThreshold: 8     # Room entities / config data classes can be wide
+    functionThreshold: 9        # DAO update methods reflect wide DB rows
+    constructorThreshold: 30    # Room entities / config data classes can be wide
   TooManyFunctions:
     active: true
     thresholdInClasses: 20
+    thresholdInInterfaces: 15   # DAOs are interfaces and naturally have many query methods
     ignorePrivate: true
   CyclomaticComplexMethod:
     threshold: 18
@@ -52,7 +53,7 @@ naming:
     # allow @Composable PascalCase functions
     ignoreAnnotated: ['Composable']
   TopLevelPropertyNaming:
-    constantPattern: '[A-Z][A-Za-z0-9]*'
+    constantPattern: '[A-Z][_A-Za-z0-9]*'
 
 performance:
   active: true

@@ -4,10 +4,12 @@ import ch.abwesend.foldervault.domain.cloud.ICloudAuthorizer
 import ch.abwesend.foldervault.domain.coroutine.AppDispatchers
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.crypto.IEncryptionRepository
-import ch.abwesend.foldervault.domain.crypto.IKeyStoreRepository
 import ch.abwesend.foldervault.domain.crypto.IFvc1Cipher
+import ch.abwesend.foldervault.domain.crypto.IKeyStoreRepository
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
+import ch.abwesend.foldervault.infrastructure.backup.BackupNotificationManager
 import ch.abwesend.foldervault.infrastructure.backup.BackupRunner
+import ch.abwesend.foldervault.infrastructure.backup.BackupScheduler
 import ch.abwesend.foldervault.infrastructure.cloud.googledrive.GoogleDriveAuthorizationRepository
 import ch.abwesend.foldervault.infrastructure.crypto.AndroidKeyStoreRepository
 import ch.abwesend.foldervault.infrastructure.crypto.EncryptionRepository
@@ -33,6 +35,10 @@ val appModule = module {
 
     // Settings
     single<IAppSettingsRepository> { AppSettingsRepository(androidContext()) }
+
+    // Backup notifications and scheduling
+    single { BackupNotificationManager(androidContext(), get(), get()) }
+    single { BackupScheduler(androidContext()) }
 
     // Backup pipeline
     single {

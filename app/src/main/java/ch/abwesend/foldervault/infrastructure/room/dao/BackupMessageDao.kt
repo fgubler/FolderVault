@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import ch.abwesend.foldervault.domain.model.MessageSeverity
+import ch.abwesend.foldervault.domain.model.MessageType
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupMessageEntity
 import kotlinx.coroutines.flow.Flow
 
@@ -63,4 +64,7 @@ interface BackupMessageDao {
 
     @Query("DELETE FROM BackupMessage WHERE timestamp < :cutoffEpochMs AND dismissed = 1")
     suspend fun deleteOldDismissed(cutoffEpochMs: Long)
+
+    @Query("SELECT COUNT(*) FROM BackupMessage WHERE backupConfigId = :configId AND type = :type AND dismissed = 0")
+    suspend fun getCountForType(configId: String, type: MessageType): Int
 }

@@ -8,4 +8,5 @@ class RunSummary {
     var oversizedCount: Int = 0
     var authLost: Boolean = false
     var quotaExceeded: Boolean = false
+    var hitTimeBudget: Boolean = false
 }

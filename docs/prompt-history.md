@@ -7,6 +7,28 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-06-10 — §14.8: WorkManager worker, scheduler, and backup notification layer (§5.8, §8)
+
+### What was done
+- `infrastructure/backup/RunSummary.kt` updated: added `hitTimeBudget: Boolean = false` flag, set by `BackupUploader` when the per-file deadline check fires.
+- `infrastructure/backup/BackupUploader.kt` updated: added `deadline: Instant? = null` parameter to `processChannel`; after each file, checks `Instant.now().isAfter(deadline)` and sets `summary.hitTimeBudget = true`. Channel is still always fully drained even after the deadline fires.
+- `infrastructure/backup/BackupRunner.kt` updated: threads `deadline` through `runBackup → runPipeline → processChannel`. Status resolution adds `BackupRunStatus.INITIAL_SYNC_IN_PROGRESS` when `hitTimeBudget`. Retention and manifest write skipped when `hitTimeBudget`. `completedNormally` flag passed to `commitRunStats` for stats isolation.
+- `infrastructure/backup/WorkerErrorHandler.kt`: encapsulates WorkManager `Result` logic — `CancellationException` → `retry()` (up to `MAX_RETRY_COUNT = 20`, then `failure()`); `Exception` → `failure()` + optional `onFatalError` callback; success resets the counter.
+- `infrastructure/backup/BackupNotificationManager.kt`: two notification channels — `foldervault_backup_status` (IMPORTANCE_LOW, progress) and `foldervault_backup_problems` (IMPORTANCE_DEFAULT, issues). `postProgress` updates foreground notification. `postProblemNotificationIfNeeded` checks `getCountForType` + 24h throttle per `(configId, messageType)` before posting; notification ID is `configId.hashCode()`. Channels created lazily on first use.
+- `infrastructure/backup/BackupWorker.kt`: `CoroutineWorker` subclass. 8-minute run budget (480 000 ms) with a 30-second buffer → deadline = `startTime + 450 000 ms`. Calls `setForeground` early with a progress notification. On `hitTimeBudget`: schedules an expedited one-time continuation via `BackupScheduler` and returns `Result.success()` (not `retry()`, to avoid backoff accumulation). On `AuthLost`: returns `Result.failure()`.
+- `infrastructure/backup/BackupScheduler.kt`: per-config unique work name `foldervault_backup_$configId`. `schedulePeriodicIfNeeded` maps `DAILY→24h`, `WEEKLY→168h`, `MONTHLY→720h`, cancels on `MANUAL_ONLY`. `scheduleOneTime(configId)` uses `ExistingWorkPolicy.REPLACE`. `scheduleExpedited(configId)` uses `ExistingWorkPolicy.KEEP` + `OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST`. Network constraints: `WIFI_ONLY→UNMETERED`, `ANY→CONNECTED`; always `setRequiresBatteryNotLow(true)`, `setRequiresStorageNotLow(true)`.
+- `infrastructure/room/dao/BackupMessageDao.kt` updated: added `suspend fun getCountForType(configId: String, type: MessageType): Int` for notification throttle checks.
+- `di/AppModule.kt` updated: added `single { BackupNotificationManager(androidContext(), get(), get()) }` and `single { BackupScheduler(androidContext()) }`.
+- `app/src/main/res/values/strings.xml` updated: 9 notification strings — channel names/descriptions for both channels, progress title/text (with and without upload count), and problem notification title/text.
+
+### Tests
+- `WorkerErrorHandlerTest`: 4 StringSpec cases — success resets counter, `CancellationException` triggers retry, generic `Exception` → failure, and retry counter at max → failure with no further retry.
+
+### Key design decisions
+- **`Result.success()` on time budget**: returning `retry()` would schedule with WorkManager backoff, delaying the continuation. An explicit `scheduleExpedited` call gives tighter control and avoids backoff accumulation on long initial syncs.
+- **Always-drain preserved with deadline**: setting `hitTimeBudget = true` without breaking the loop maintains the same always-drain invariant from §14.7 — the producer is never left hanging.
+- **Throttle window per (configId, messageType)**: prevents notification spam across multi-segment initial syncs where the same error type would fire on every run.
+
 ## 2026-06-10 — §14.7: Analyzer→queue→uploader pipeline (§5)
 
 ### What was done

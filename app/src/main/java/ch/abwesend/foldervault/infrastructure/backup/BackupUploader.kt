@@ -1,8 +1,8 @@
 package ch.abwesend.foldervault.infrastructure.backup
 
 import android.content.Context
-import ch.abwesend.foldervault.domain.cloud.CloudAuthResult
 import ch.abwesend.foldervault.domain.cloud.CloudAuthException
+import ch.abwesend.foldervault.domain.cloud.CloudAuthResult
 import ch.abwesend.foldervault.domain.cloud.CloudFile
 import ch.abwesend.foldervault.domain.cloud.CloudQuotaExceededException
 import ch.abwesend.foldervault.domain.cloud.ICloudAuthorizer
@@ -26,6 +26,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.time.Instant
 import javax.crypto.SecretKey
 
 class BackupUploader(
@@ -39,6 +40,7 @@ class BackupUploader(
     private val log get() = logger
     var cloudProvider: ICloudStorageProvider? = null
 
+    @Suppress("LongParameterList")
     suspend fun processChannel(
         config: BackupConfigEntity,
         channel: ReceiveChannel<UploadTask>,
@@ -48,11 +50,12 @@ class BackupUploader(
         derivedKey: SecretKey?,
         backupSalt: ByteArray?,
         summary: RunSummary,
+        deadline: Instant? = null,
     ) = withContext(dispatchers.io) {
         // Always drain the channel even when stopped — a break without draining would leave the
         // producer blocked on send(), hanging the coroutineScope indefinitely.
         for (task in channel) {
-            if (summary.authLost || summary.quotaExceeded) continue // drain without processing
+            if (summary.authLost || summary.quotaExceeded || summary.hitTimeBudget) continue // drain without processing
             uploadOne(
                 config = config,
                 task = task,
@@ -62,6 +65,9 @@ class BackupUploader(
                 backupSalt = backupSalt,
                 summary = summary,
             )
+            if (deadline != null && Instant.now().isAfter(deadline)) {
+                summary.hitTimeBudget = true
+            }
         }
     }
 
@@ -209,7 +215,14 @@ class BackupUploader(
 
         val error = (result as ErrorResult).error
         return when {
-            error is CloudAuthException -> handleAuthError(config, parentFolderId, remoteName, mimeType, content, summary)
+            error is CloudAuthException -> handleAuthError(
+                config,
+                parentFolderId,
+                remoteName,
+                mimeType,
+                content,
+                summary,
+            )
             error is CloudQuotaExceededException -> {
                 if (!summary.quotaExceeded) {
                     summary.quotaExceeded = true

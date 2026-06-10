@@ -45,7 +45,8 @@ class BackupRunner(
 ) {
     private val log get() = logger
 
-    suspend fun runBackup(configId: String): RunResult {
+    @Suppress("CyclomaticComplexMethod")
+    suspend fun runBackup(configId: String, deadline: Instant? = null): RunResult {
         val config = backupConfigDao.getByIdOnce(configId)
             ?: return RunResult.FatalError(
                 IllegalStateException("Backup config $configId not found"),
@@ -99,19 +100,28 @@ class BackupRunner(
         )
 
         try {
-            runPipeline(config, analyzer, uploader, cloudProvider, fileSizeLimitBytes, runId, stagingDir, folderCache, derivedKey, backupSalt, summary)
-            if (!summary.authLost && !summary.quotaExceeded) {
+            runPipeline(
+                config, analyzer, uploader, cloudProvider, fileSizeLimitBytes,
+                runId, stagingDir, folderCache, derivedKey, backupSalt, summary, deadline,
+            )
+            if (!summary.authLost && !summary.quotaExceeded && !summary.hitTimeBudget) {
                 RetentionManager(uploadedFileIndexDao, cloudProvider).applyRetention(config)
             }
             if (!summary.authLost) writeManifest(configId, cloudProvider)
         } catch (e: Exception) {
             log.error("BackupRunner encountered a fatal error for config $configId", e)
-            commitRunStats(configId = config.id, status = BackupRunStatus.FAILED, summary = summary, completedNormally = false)
+            commitRunStats(
+                configId = config.id,
+                status = BackupRunStatus.FAILED,
+                summary = summary,
+                completedNormally = false,
+            )
             return RunResult.FatalError(e, summary)
         }
 
         val status = when {
             summary.authLost -> BackupRunStatus.FAILED
+            summary.hitTimeBudget -> BackupRunStatus.INITIAL_SYNC_IN_PROGRESS
             summary.quotaExceeded && summary.filesUploaded == 0 -> BackupRunStatus.FAILED
             summary.quotaExceeded || summary.filesFailed > 0 -> BackupRunStatus.COMPLETED_WITH_WARNINGS
             else -> BackupRunStatus.UP_TO_DATE
@@ -120,7 +130,7 @@ class BackupRunner(
             configId = config.id,
             status = status,
             summary = summary,
-            completedNormally = !summary.authLost && !summary.quotaExceeded,
+            completedNormally = !summary.authLost && !summary.quotaExceeded && !summary.hitTimeBudget,
         )
 
         return if (summary.authLost) RunResult.AuthLost(summary) else RunResult.Success(summary)
@@ -166,6 +176,7 @@ class BackupRunner(
         derivedKey: javax.crypto.SecretKey?,
         backupSalt: ByteArray?,
         summary: RunSummary,
+        deadline: Instant? = null,
     ) {
         val normalChannel = Channel<UploadTask>(capacity = 64)
         val oversizedChannel = Channel<UploadTask>(capacity = 8)
@@ -183,8 +194,14 @@ class BackupRunner(
             // Both channels are always fully drained (even when stopped) to prevent the
             // producer from blocking on a full channel and hanging the coroutineScope.
             launch {
-                uploader.processChannel(config, normalChannel, runId, stagingDir, folderCache, derivedKey, backupSalt, summary)
-                uploader.processChannel(config, oversizedChannel, runId, stagingDir, folderCache, derivedKey, backupSalt, summary)
+                uploader.processChannel(
+                    config, normalChannel, runId, stagingDir, folderCache,
+                    derivedKey, backupSalt, summary, deadline,
+                )
+                uploader.processChannel(
+                    config, oversizedChannel, runId, stagingDir, folderCache,
+                    derivedKey, backupSalt, summary, deadline,
+                )
             }
         }
     }

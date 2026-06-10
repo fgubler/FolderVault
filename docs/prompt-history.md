@@ -7,6 +7,17 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-06-10 — §14.6: FVC1 binary streaming encryption container
+
+### What was done
+- `domain/crypto/Fvc1Header.kt`: standalone parser for the 40-byte FVC1 header (magic + version + kdf-id + iterations + salt + IV). Uses `DataInputStream.readFully` + `readInt` (big-endian) + `readUnsignedByte`. Throws `IllegalArgumentException` on magic mismatch. No Android/Koin dependency — directly usable in JVM unit tests.
+- `domain/crypto/IFvc1Cipher.kt`: interface with `generateBackupSalt()`, `deriveKey(password, salt)`, `encryptFile(key, salt, input, output)`, `decryptFile(key, input, output)`, and `decryptFileWithPassword(password, input, output)`. Documents the "never use remote content hash for change-detection" invariant in the `encryptFile` kdoc.
+- `domain/cloud/BackupMeta.kt`: `@Serializable` data class for `.foldervault-meta.json`. Contains only backup identity (`version`, `marker="FolderVaultBackup"`, `displayName`, `createdAt`, `encrypted`). MUST NOT contain crypto params (those live exclusively in per-file FVC1 headers).
+- `infrastructure/crypto/Fvc1Cipher.kt`: standalone implementation (no Koin injection). Key derivation: PBKDF2WithHmacSHA256, 310k iterations, per-backup 16-byte salt. Encryption: random per-file IV, AES-256-GCM, manual buffer loop avoids premature stream close (no CipherOutputStream wrapping). Header write via `DataOutputStream.flush()` (no close). `decryptBody` shared by `decryptFile` and `decryptFileWithPassword`.
+- `infrastructure/crypto/EncryptionRepository.kt` updated: `verifyPassword` stub replaced with real implementation — parses header from `ByteArrayInputStream(headerBytes)`, re-derives key, attempts `cipher.doFinal(firstCiphertextBlock)` for GCM authentication; maps `AEADBadTagException` → `INVALID_PASSWORD`, `IllegalArgumentException` → `INVALID_FILE`.
+- `di/AppModule.kt` updated: `single<IFvc1Cipher> { Fvc1Cipher() }` added.
+- `Fvc1CipherTest`: 10 Kotest `StringSpec` cases — round-trip (with key + with password), empty plaintext, wrong key, wrong password, corrupt tag, invalid magic, random-IV uniqueness, key-derivation consistency, header field verification.
+
 ## 2026-06-10 — §14.5: Cloud storage provider resilience (§5.11)
 
 ### What was done

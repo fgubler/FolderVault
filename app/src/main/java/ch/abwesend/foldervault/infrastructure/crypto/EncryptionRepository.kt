@@ -2,17 +2,16 @@ package ch.abwesend.foldervault.infrastructure.crypto
 
 import android.security.keystore.KeyProperties
 import ch.abwesend.foldervault.domain.crypto.DecryptionError
+import ch.abwesend.foldervault.domain.crypto.Fvc1Header
 import ch.abwesend.foldervault.domain.crypto.IEncryptionRepository
 import ch.abwesend.foldervault.domain.crypto.IKeyStoreRepository
 import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.result.BinaryResult
-import ch.abwesend.foldervault.domain.result.ErrorResult
 import ch.abwesend.foldervault.domain.result.ifError
 import ch.abwesend.foldervault.domain.result.mapError
 import ch.abwesend.foldervault.domain.result.runCatchingAsResult
 import ch.abwesend.foldervault.domain.util.injectAnywhere
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
+import java.io.ByteArrayInputStream
 import java.security.SecureRandom
 import java.util.Base64
 import javax.crypto.AEADBadTagException
@@ -22,6 +21,8 @@ import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 
 class EncryptionRepository : IEncryptionRepository {
     private val keyStoreRepository: IKeyStoreRepository by injectAnywhere()
@@ -67,13 +68,35 @@ class EncryptionRepository : IEncryptionRepository {
 
     override fun deleteKeyStoreKey(): Boolean = keyStoreRepository.deleteKey()
 
-    // ---- FVC1 password verification (implemented in §14.6 alongside the FVC1 streaming container) ----
+    // ---- FVC1 password verification ----
 
+    /**
+     * Derives the key from [password] + the salt embedded in [headerBytes], then attempts
+     * a full GCM decrypt of [firstCiphertextBlock] (which must include the 16-byte GCM tag).
+     * An incorrect password causes AEADBadTagException → DecryptionError.INVALID_PASSWORD.
+     *
+     * Callers should pass the complete ciphertext of a small test file (e.g. the backup's
+     * .foldervault-meta.json.crypt) so the GCM tag is included and authentication can complete.
+     */
     override fun verifyPassword(
         headerBytes: ByteArray,
         firstCiphertextBlock: ByteArray,
         password: String,
-    ): BinaryResult<Unit, DecryptionError> = ErrorResult(DecryptionError.UNKNOWN)
+    ): BinaryResult<Unit, DecryptionError> = runCatchingAsResult {
+        val header = Fvc1Header.readFrom(ByteArrayInputStream(headerBytes))
+        val key = deriveKey(password, header.salt, header.iterations, aesKeySizeBits)
+        Cipher.getInstance(gcmTransformation).apply {
+            init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(gcmTagLengthBits, header.iv))
+        }.doFinal(firstCiphertextBlock)
+        Unit
+    }.mapError { e ->
+        when {
+            e is AEADBadTagException -> DecryptionError.INVALID_PASSWORD
+            e.cause is AEADBadTagException -> DecryptionError.INVALID_PASSWORD
+            e is IllegalArgumentException -> DecryptionError.INVALID_FILE
+            else -> DecryptionError.UNKNOWN
+        }
+    }
 
     // ---- Internal key derivation (used by §14.6 FVC1 extension) ----
 

@@ -72,4 +72,28 @@ interface UploadedFileIndexDao {
 
     @Query("DELETE FROM UploadedFileIndex WHERE backupConfigId = :backupConfigId")
     suspend fun deleteAllForConfig(backupConfigId: String)
+
+    @Query(
+        """SELECT * FROM UploadedFileIndex
+           WHERE backupConfigId = :configId AND isCurrentVersion = 1
+           ORDER BY relativePath ASC"""
+    )
+    suspend fun getCurrentVersionList(configId: String): List<UploadedFileIndexEntity>
+
+    @Query(
+        """SELECT DISTINCT relativePath FROM UploadedFileIndex
+           WHERE backupConfigId = :configId"""
+    )
+    suspend fun getDistinctPaths(configId: String): List<String>
+
+    @Query(
+        """SELECT * FROM UploadedFileIndex
+           WHERE backupConfigId = :configId
+             AND isCurrentVersion = 0
+             AND uploadedAt < :cutoffEpochMs"""
+    )
+    suspend fun getOldVersionsOlderThan(configId: String, cutoffEpochMs: Long): List<UploadedFileIndexEntity>
+
+    @Query("DELETE FROM UploadedFileIndex WHERE id = :id")
+    suspend fun deleteById(id: Long)
 }

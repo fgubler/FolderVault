@@ -7,6 +7,7 @@ import ch.abwesend.foldervault.domain.crypto.IEncryptionRepository
 import ch.abwesend.foldervault.domain.crypto.IKeyStoreRepository
 import ch.abwesend.foldervault.domain.crypto.IFvc1Cipher
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
+import ch.abwesend.foldervault.infrastructure.backup.BackupRunner
 import ch.abwesend.foldervault.infrastructure.cloud.googledrive.GoogleDriveAuthorizationRepository
 import ch.abwesend.foldervault.infrastructure.crypto.AndroidKeyStoreRepository
 import ch.abwesend.foldervault.infrastructure.crypto.EncryptionRepository
@@ -32,4 +33,19 @@ val appModule = module {
 
     // Settings
     single<IAppSettingsRepository> { AppSettingsRepository(androidContext()) }
+
+    // Backup pipeline
+    single {
+        BackupRunner(
+            context = androidContext(),
+            authorizer = get(),
+            cipher = get(),
+            encryptionRepository = get(),
+            backupConfigDao = get(),
+            uploadedFileIndexDao = get(),
+            backupMessageDao = get(),
+            settingsRepository = get(),
+            dispatchers = get(),
+        )
+    }
 }

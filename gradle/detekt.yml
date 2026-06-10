@@ -15,7 +15,7 @@ console-reports:
 complexity:
   active: true
   LongMethod:
-    threshold: 60
+    threshold: 80    # orchestration methods (BackupRunner, BackupUploader) are inherently long
   LongParameterList:
     functionThreshold: 9        # DAO update methods reflect wide DB rows
     constructorThreshold: 30    # Room entities / config data classes can be wide

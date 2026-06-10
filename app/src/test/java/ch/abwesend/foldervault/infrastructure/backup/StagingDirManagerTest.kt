@@ -3,9 +3,7 @@ package ch.abwesend.folderVault.infrastructure.backup
 import ch.abwesend.foldervault.infrastructure.backup.StagingDirManager
 import io.kotest.core.spec.IsolationMode
 import io.kotest.core.spec.style.StringSpec
-import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.shouldNotBe
 import java.io.File
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter

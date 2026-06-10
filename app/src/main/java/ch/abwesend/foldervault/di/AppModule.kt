@@ -1,5 +1,8 @@
 package ch.abwesend.foldervault.di
 
+import ch.abwesend.foldervault.domain.backup.IBackupConfigRepository
+import ch.abwesend.foldervault.domain.backup.IBackupMessageRepository
+import ch.abwesend.foldervault.domain.backup.IBackupScheduler
 import ch.abwesend.foldervault.domain.cloud.ICloudAuthorizer
 import ch.abwesend.foldervault.domain.coroutine.AppDispatchers
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
@@ -7,6 +10,8 @@ import ch.abwesend.foldervault.domain.crypto.IEncryptionRepository
 import ch.abwesend.foldervault.domain.crypto.IFvc1Cipher
 import ch.abwesend.foldervault.domain.crypto.IKeyStoreRepository
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
+import ch.abwesend.foldervault.infrastructure.backup.BackupConfigRepository
+import ch.abwesend.foldervault.infrastructure.backup.BackupMessageRepository
 import ch.abwesend.foldervault.infrastructure.backup.BackupNotificationManager
 import ch.abwesend.foldervault.infrastructure.backup.BackupRunner
 import ch.abwesend.foldervault.infrastructure.backup.BackupScheduler
@@ -16,7 +21,13 @@ import ch.abwesend.foldervault.infrastructure.crypto.EncryptionRepository
 import ch.abwesend.foldervault.infrastructure.crypto.Fvc1Cipher
 import ch.abwesend.foldervault.infrastructure.room.FolderVaultDatabase
 import ch.abwesend.foldervault.infrastructure.settings.AppSettingsRepository
+import ch.abwesend.foldervault.view.viewmodel.AddEditBackupViewModel
+import ch.abwesend.foldervault.view.viewmodel.BackupDetailViewModel
+import ch.abwesend.foldervault.view.viewmodel.HomeViewModel
+import ch.abwesend.foldervault.view.viewmodel.OnboardingViewModel
+import ch.abwesend.foldervault.view.viewmodel.SettingsViewModel
 import org.koin.android.ext.koin.androidContext
+import org.koin.androidx.viewmodel.dsl.viewModel
 import org.koin.dsl.module
 
 val appModule = module {
@@ -33,12 +44,16 @@ val appModule = module {
     single { get<FolderVaultDatabase>().backupMessageDao() }
     single { get<FolderVaultDatabase>().notificationThrottleStateDao() }
 
+    // Repositories
+    single<IBackupConfigRepository> { BackupConfigRepository(get()) }
+    single<IBackupMessageRepository> { BackupMessageRepository(get()) }
+
     // Settings
     single<IAppSettingsRepository> { AppSettingsRepository(androidContext()) }
 
     // Backup notifications and scheduling
     single { BackupNotificationManager(androidContext(), get(), get()) }
-    single { BackupScheduler(androidContext()) }
+    single<IBackupScheduler> { BackupScheduler(androidContext()) }
 
     // Backup pipeline
     single {
@@ -52,6 +67,32 @@ val appModule = module {
             backupMessageDao = get(),
             settingsRepository = get(),
             dispatchers = get(),
+        )
+    }
+
+    // ViewModels
+    viewModel { HomeViewModel(get(), get()) }
+    viewModel { OnboardingViewModel(get()) }
+    viewModel { SettingsViewModel(get()) }
+    viewModel { params ->
+        AddEditBackupViewModel(
+            configRepo = get(),
+            scheduler = get(),
+            authorizer = get(),
+            encryptionRepo = get(),
+            cipher = get(),
+            settingsRepo = get(),
+            existingConfigId = params.getOrNull(),
+        )
+    }
+    viewModel { params ->
+        BackupDetailViewModel(
+            configId = params.get(),
+            configRepo = get(),
+            messageRepo = get(),
+            scheduler = get(),
+            encryptionRepo = get(),
+            settingsRepo = get(),
         )
     }
 }

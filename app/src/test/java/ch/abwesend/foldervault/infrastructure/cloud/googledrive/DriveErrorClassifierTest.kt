@@ -70,7 +70,7 @@ class DriveErrorClassifierTest : StringSpec({
 
     "classify passes through already-typed CloudException unchanged" {
         val original = CloudAuthException()
-        DriveErrorClassifier.classify(original) shouldBeInstanceOf CloudAuthException::class
+        DriveErrorClassifier.classify(original).shouldBeInstanceOf<CloudAuthException>()
     }
 
     "classify wraps IOException as CloudTransientException" {

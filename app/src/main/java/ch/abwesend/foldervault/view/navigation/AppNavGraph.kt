@@ -4,6 +4,8 @@ import androidx.compose.runtime.Composable
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
+import ch.abwesend.foldervault.view.screens.AddEditBackupScreen
+import ch.abwesend.foldervault.view.screens.BackupDetailScreen
 import ch.abwesend.foldervault.view.screens.HomeScreen
 import ch.abwesend.foldervault.view.screens.OnboardingScreen
 import ch.abwesend.foldervault.view.screens.SettingsScreen
@@ -18,13 +20,40 @@ fun AppNavGraph(startDestination: AppDestination = AppDestination.Home) {
         entryProvider = { key ->
             when (key) {
                 is AppDestination.Onboarding -> NavEntry(key) {
-                    OnboardingScreen(onComplete = { backStack.add(AppDestination.Home) })
+                    OnboardingScreen(
+                        onComplete = {
+                            backStack.removeLastOrNull()
+                            backStack.add(AppDestination.Home)
+                        },
+                    )
                 }
                 is AppDestination.Home -> NavEntry(key) {
-                    HomeScreen(onOpenSettings = { backStack.add(AppDestination.Settings) })
+                    HomeScreen(
+                        onOpenSettings = { backStack.add(AppDestination.Settings) },
+                        onAddBackup = { backStack.add(AppDestination.AddEditBackup()) },
+                        onOpenDetail = { configId -> backStack.add(AppDestination.BackupDetail(configId)) },
+                    )
                 }
                 is AppDestination.Settings -> NavEntry(key) {
-                    SettingsScreen(onBack = { backStack.removeLastOrNull() })
+                    SettingsScreen(
+                        onBack = { backStack.removeLastOrNull() },
+                        onShowOnboarding = { backStack.add(AppDestination.Onboarding) },
+                    )
+                }
+                is AppDestination.BackupDetail -> NavEntry(key) {
+                    BackupDetailScreen(
+                        configId = key.configId,
+                        onBack = { backStack.removeLastOrNull() },
+                        onEdit = { backStack.add(AppDestination.AddEditBackup(key.configId)) },
+                        onDelete = { backStack.removeLastOrNull() },
+                    )
+                }
+                is AppDestination.AddEditBackup -> NavEntry(key) {
+                    AddEditBackupScreen(
+                        configId = key.configId,
+                        onBack = { backStack.removeLastOrNull() },
+                        onSave = { backStack.removeLastOrNull() },
+                    )
                 }
                 else -> error("Unknown destination: $key")
             }

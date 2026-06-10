@@ -1,3 +1,5 @@
+@file:Suppress("NoUnusedImports") // runTest is needed: DriveRetryPolicy.withRetry uses delay()
+
 package ch.abwesend.folderVault.infrastructure.cloud.googledrive
 
 import ch.abwesend.foldervault.domain.cloud.CloudAuthException
@@ -19,7 +21,10 @@ class DriveRetryPolicyTest : StringSpec({
     "succeeds immediately on first attempt" {
         runTest {
             var calls = 0
-            val result = DriveRetryPolicy.withRetry { calls++; "ok" }
+            val result = DriveRetryPolicy.withRetry {
+                calls++
+                "ok"
+            }
             result shouldBe "ok"
             calls shouldBeExactly 1
         }
@@ -84,7 +89,7 @@ class DriveRetryPolicyTest : StringSpec({
             shouldThrow<IllegalStateException> {
                 DriveRetryPolicy.withRetry {
                     calls++
-                    throw IllegalStateException("bug")
+                    error("bug")
                 }
             }
             calls shouldBeExactly 1

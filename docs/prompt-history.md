@@ -7,6 +7,54 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-06-10 — §14.10: UI screens (§9)
+
+### What was done
+- **Domain interfaces** added: `IBackupConfigRepository`, `IBackupMessageRepository`, `IBackupScheduler` — ViewModels depend on these only, never on infrastructure.
+- **`BackupConfig` domain model** (`domain/backup/BackupConfig.kt`): mirrors `BackupConfigEntity` with `isPaused: Boolean` and `encryptionSaltBase64: String?` instead of embedded `EncryptionParams`.
+- **`BackupMessage` domain model** (`domain/backup/BackupMessage.kt`): mirrors entity sans Room annotations.
+- **Room migration 1→2**: `isPaused INTEGER NOT NULL DEFAULT 0` column added to `BackupConfig` table via `Migration1To2`.
+- **`BackupConfigRepository` / `BackupMessageRepository`** (infrastructure): implement the new domain interfaces; include `toDomain()` / `toEntity()` mappers.
+- **`IBackupScheduler`** extracted: `BackupScheduler` now `implements IBackupScheduler`; new `schedulePeriodicIfNeeded(configId, schedule, networkPolicy, globalDefault)` overload added.
+- **ViewModels** (all in `view/viewmodel/`): `HomeViewModel`, `OnboardingViewModel`, `SettingsViewModel`, `AddEditBackupViewModel` (with `AddEditFormState` / `CloudSetupState` / `AddEditEvent`), `BackupDetailViewModel` (with `DetailEvent`).
+- **Screens** (all in `view/screens/`): `OnboardingScreen` (6-page `HorizontalPager` with `PageIndicator`, POST_NOTIFICATIONS permission on last page), `HomeScreen` (Scaffold + FAB + `BackupConfigCard` with error badge), `SettingsScreen` (dropdowns + switch + notification permission button), `AddEditBackupScreen` (Basics / Cloud / Schedule / Encryption / Retention sections; Drive consent via `StartIntentSenderForResult`), `BackupDetailScreen` (config info, action buttons, check-my-password dialog, message list with mark-read / dismiss).
+- **`EnumDropdown`** generic component in `view/components/`.
+- **Navigation** (`AppNavGraph.kt` + `AppDestination.kt`): typed Nav3 destinations for all 5 screens; `MainActivity.resolveStartDestination()` parses `foldervault://backup/detail/<configId>` deep-link from notifications.
+- **DI** (`AppModule.kt`): added `single<>` bindings for both repositories and scheduler; 5 `viewModel { }` declarations.
+
+### Detekt fixes applied
+- `BackupDetailScreen`: `onDelete` naming (present tense); `rememberUpdatedState` for lambda in `LaunchedEffect`; `StatusSection` and `ActionButtonRow` wrapped in `Column` (MultipleEmitters); `MS_PER_MINUTE` constant; multi-line lambdas (no semicolons); `modifier` parameter + correct order; `@Suppress("LambdaParameterEventTrailing")` on conflicting trailing-lambda param.
+- `AddEditBackupScreen`: `RETENTION_DEFAULT_KEEP_LAST_N = 10` and `RETENTION_DEFAULT_KEEP_DAYS = 90` constants replacing inline magic numbers.
+
+### Key design decisions
+- ViewModels import only domain interfaces — architecture rule enforced by Konsist.
+- `BackupConfigRepository` reconstructs `EncryptionParams` from `encryptionSaltBase64` using hardcoded FVC1 constants (matching `Fvc1Cipher`) so the domain model stays flat.
+- `LambdaParameterEventTrailing` and `ComposableParamOrder` conflict on private composables resolved with `@Suppress` on the trailing-lambda parameter rather than reordering (which would trigger the other rule).
+
+## 2026-06-10 — §14.9: Messaging & notifications (§8)
+
+### What was done
+- `infrastructure/room/dao/BackupMessageDao.kt` updated: added `findByRunAndType`, `incrementCount`, `@Transaction coalesceInsert` (insert-or-increment by `(runId, backupConfigId, type)` triple; falls back to plain insert when either is null), `pruneOldInfoWarning` (age-prune INFO/WARNING rows), `pruneOldestOverLimit` (prune oldest rows over cap, protecting undismissed ERROR/CRITICAL).
+- `infrastructure/room/dao/NotificationThrottleStateDao.kt` updated: added `deleteForConfigAndType` for targeted throttle-key clearing.
+- `infrastructure/backup/MessageRetentionManager.kt` (new): `prune(configId)` runs age-pruning (drop INFO/WARNING older than 30 days) then cap-pruning (keep last 200 per backup). Undismissed ERROR/CRITICAL are always excluded from cap pruning.
+- `infrastructure/backup/BackupUploader.kt` updated: threaded `runId: String` through `uploadOne → tryUpload → handleAuthError → emitMessage`. All `emitMessage` calls now use `coalesceInsert`. Added `UPLOAD_FAILED` emission for both prepare-failure and upload-error paths.
+- `infrastructure/backup/FileSystemAnalyzer.kt` updated: added `runId: String` parameter to `analyze`; passes it into `emitUnreliableMtimeWarning`, which now calls `coalesceInsert`.
+- `infrastructure/backup/BackupRunner.kt` updated: passes `runId` to `analyzer.analyze`; calls `MessageRetentionManager(backupMessageDao).prune(config.id)` in the clean-success block alongside cloud retention.
+- `infrastructure/backup/BackupNotificationManager.kt` updated: extracted `shouldNotify(state, nowMs)` as `internal` companion-object pure function (used for tests). Problem notification now includes a `PendingIntent` deep-link (`foldervault://backup/detail/<configId>`) so tapping the notification opens the backup detail screen. Added `clearResolvedThrottles(configId)`: iterates all throttle state for the config and removes entries where `getCountForType` returns 0 (condition resolved).
+- `infrastructure/backup/BackupWorker.kt` updated: after a fully clean run success (no `hitTimeBudget`), calls `notificationManager.clearResolvedThrottles(id)` so resolved conditions will alert again if they recur.
+- `AndroidManifest.xml` updated: added intent filter on `MainActivity` for `foldervault://backup/detail/*` deep-links from notifications.
+
+### Tests
+- `MessageCoalescingTest` (Robolectric, JUnit4): 5 cases — first insert sets count=1; three sends for same run+type → count=3 in one row; different types within same run → two rows; different runs → two rows with count=1 each; null runId → plain insert (no coalescing).
+- `NotificationThrottleTest` (Kotest StringSpec, pure): 4 cases testing `BackupNotificationManager.shouldNotify` — null state → true; within window → false; exactly at window boundary → true; beyond window → true.
+
+### Key design decisions
+- **`coalesceInsert` as DAO default method**: keeps the transaction boundary and the find-or-increment logic inside the DAO, avoiding a separate service object while remaining testable via Room in-memory DB.
+- **Pruning excludes undismissed ERROR/CRITICAL**: cap-pruning deletes only rows not matching `(severity IN ('ERROR','CRITICAL') AND dismissed = 0)`, so unresolved problems always stay visible until the user acts on them.
+- **`shouldNotify` extracted as pure `internal`**: lets the throttle decision be verified with a trivial Kotest test without mocking Android context or Room.
+- **Deep-link URI vs. explicit Intent**: notification uses `foldervault://backup/detail/<configId>` implicit intent so `BackupNotificationManager` has no compile-time dependency on any Activity class. The manifest intent filter routes it to `MainActivity`; §14.10 will wire the actual Nav3 navigation from the incoming intent.
+- **`clearResolvedThrottles` on clean success only**: called only when `!hitTimeBudget`, because a partial run may have left some error conditions temporarily absent from messages even though they haven't truly resolved.
+
 ## 2026-06-10 — §14.8: WorkManager worker, scheduler, and backup notification layer (§5.8, §8)
 
 ### What was done

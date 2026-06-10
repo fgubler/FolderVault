@@ -33,6 +33,15 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Deep-link from problem notifications → backup detail screen -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data
+                    android:scheme="foldervault"
+                    android:host="backup"
+                    android:pathPrefix="/detail" />
+            </intent-filter>
         </activity>
 
         <!-- Koin WorkManager factory; WorkManager uses this to inject workers -->

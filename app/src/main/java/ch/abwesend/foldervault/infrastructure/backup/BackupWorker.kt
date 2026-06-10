@@ -63,6 +63,7 @@ class BackupWorker(
                         BackupScheduler(applicationContext).scheduleExpedited(id)
                         Result.success() // not retry() — we don't want backoff accumulation
                     } else {
+                        notificationManager.clearResolvedThrottles(id)
                         Result.success()
                     }
                 }

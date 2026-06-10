@@ -24,9 +24,9 @@ object RemoteNameBuilder {
         return if (lastDot > 0) {
             val stem = localName.substring(0, lastDot)
             val ext = localName.substring(lastDot)
-            "${stem}__${ts}${ext}"
+            "${stem}__$ts$ext"
         } else {
-            "${localName}__${ts}"
+            "${localName}__$ts"
         }
     }
 }

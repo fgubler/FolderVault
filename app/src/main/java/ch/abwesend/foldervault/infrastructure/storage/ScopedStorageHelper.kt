@@ -25,14 +25,11 @@ object ScopedStorageHelper {
         onFile: (String, DocumentFile) -> Unit,
     ) {
         for (child in dir.listFiles()) {
-            if (child.isDirectory) {
-                val name = child.name ?: continue
-                val childPrefix = if (prefix.isEmpty()) name else "$prefix/$name"
-                walkDir(child, childPrefix, onFile)
-            } else if (child.isFile) {
-                val name = child.name ?: continue
-                val relativePath = if (prefix.isEmpty()) name else "$prefix/$name"
-                onFile(relativePath, child)
+            val name = child.name ?: continue
+            val childPath = if (prefix.isEmpty()) name else "$prefix/$name"
+            when {
+                child.isDirectory -> walkDir(child, childPath, onFile)
+                child.isFile -> onFile(childPath, child)
             }
         }
     }

@@ -70,13 +70,6 @@ class BackupRunner(
         }
         val cloudProvider: ICloudStorageProvider = authResult.data
 
-        // Derive the per-run encryption key once (PBKDF2 is too slow to run per-file)
-        val encryptionKey = deriveEncryptionKey(config, summary) ?: return RunResult.FatalError(
-            Exception("Failed to decrypt backup password"),
-            summary,
-        )
-        val (derivedKey, backupSalt) = encryptionKey
-
         val appSettings = settingsRepository.settings.first()
         val fileSizeLimitBytes = appSettings.defaultFileSizeLimitBytes
 
@@ -100,12 +93,18 @@ class BackupRunner(
         )
 
         try {
+            // Derive the per-run encryption key once (PBKDF2 is too slow to run per-file)
+            val encryptionKey = deriveEncryptionKey(config, summary)
+                ?: error("Failed to decrypt backup password")
+            val (derivedKey, backupSalt) = encryptionKey
+
             runPipeline(
-                config, analyzer, uploader, cloudProvider, fileSizeLimitBytes,
+                config, analyzer, uploader, fileSizeLimitBytes,
                 runId, stagingDir, folderCache, derivedKey, backupSalt, summary, deadline,
             )
             if (!summary.authLost && !summary.quotaExceeded && !summary.hitTimeBudget) {
                 RetentionManager(uploadedFileIndexDao, cloudProvider).applyRetention(config)
+                MessageRetentionManager(backupMessageDao).prune(config.id)
             }
             if (!summary.authLost) writeManifest(configId, cloudProvider)
         } catch (e: Exception) {
@@ -168,7 +167,6 @@ class BackupRunner(
         config: BackupConfigEntity,
         analyzer: FileSystemAnalyzer,
         uploader: BackupUploader,
-        cloudProvider: ICloudStorageProvider,
         fileSizeLimitBytes: Long,
         runId: String,
         stagingDir: File,
@@ -184,7 +182,7 @@ class BackupRunner(
             // Producer: walk the file system and enqueue tasks
             launch {
                 try {
-                    analyzer.analyze(config, normalChannel, oversizedChannel, fileSizeLimitBytes)
+                    analyzer.analyze(config, normalChannel, oversizedChannel, fileSizeLimitBytes, runId)
                 } finally {
                     normalChannel.close()
                     oversizedChannel.close()

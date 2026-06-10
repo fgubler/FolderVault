@@ -62,4 +62,7 @@ interface BackupConfigDao {
         totalFilesDiscovered: Int,
         filesUploadedTotal: Int,
     )
+
+    @Query("UPDATE BackupConfig SET isPaused = :paused WHERE id = :id")
+    suspend fun updatePaused(id: String, paused: Boolean)
 }

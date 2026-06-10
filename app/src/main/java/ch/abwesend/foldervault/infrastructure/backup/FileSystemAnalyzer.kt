@@ -13,6 +13,7 @@ import ch.abwesend.foldervault.infrastructure.room.dao.BackupMessageDao
 import ch.abwesend.foldervault.infrastructure.room.dao.UploadedFileIndexDao
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupConfigEntity
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupMessageEntity
+import ch.abwesend.foldervault.infrastructure.room.entity.UploadedFileIndexEntity
 import ch.abwesend.foldervault.infrastructure.storage.ScopedStorageHelper
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.withContext
@@ -42,9 +43,22 @@ class FileSystemAnalyzer(
         normalChannel: SendChannel<UploadTask>,
         oversizedChannel: SendChannel<UploadTask>,
         fileSizeLimitBytes: Long,
+        runId: String,
     ) {
-        // Phase 1: collect all file infos synchronously on IO (DocumentFile operations are blocking)
-        val fileInfoList = withContext(dispatchers.io) {
+        val fileInfoList = collectFileInfos(config)
+        // Collect into two lists first to avoid a producer/consumer deadlock: if we sent normal
+        // and oversized tasks interleaved and the oversized channel (cap=8) filled up, the producer
+        // would block before closing the normal channel, while the consumer was blocked waiting for
+        // normal to close — deadlock. Collecting first lets us close normal before sending oversized.
+        val (normalTasks, oversizedTasks) = buildUploadTaskLists(config, fileInfoList, fileSizeLimitBytes, runId)
+        for (task in normalTasks) normalChannel.send(task)
+        normalChannel.close()
+        for (task in oversizedTasks) oversizedChannel.send(task)
+        log.debug("Analyzer finished for config ${config.id}: ${fileInfoList.size} files scanned")
+    }
+
+    private suspend fun collectFileInfos(config: BackupConfigEntity): List<LocalFileInfo> =
+        withContext(dispatchers.io) {
             val results = mutableListOf<LocalFileInfo>()
             val treeUri = Uri.parse(config.sourceTreeUri)
             ScopedStorageHelper.walkTree(context, treeUri) { relativePath, file ->
@@ -60,11 +74,12 @@ class FileSystemAnalyzer(
             results
         }
 
-        // Phase 2: build upload tasks (change-detection + cloud-existence checks)
-        // Collect into two lists first to avoid a producer/consumer deadlock: if we sent normal
-        // and oversized tasks interleaved and the oversized channel (cap=8) filled up, the producer
-        // would block before closing the normal channel, while the consumer was blocked waiting for
-        // normal to close — deadlock. Collecting first lets us close normal before sending oversized.
+    private suspend fun buildUploadTaskLists(
+        config: BackupConfigEntity,
+        fileInfoList: List<LocalFileInfo>,
+        fileSizeLimitBytes: Long,
+        runId: String,
+    ): Pair<List<UploadTask>, List<UploadTask>> {
         val normalTasks = mutableListOf<UploadTask>()
         val oversizedTasks = mutableListOf<UploadTask>()
         var unreliableMtimeWarned = false
@@ -86,41 +101,27 @@ class FileSystemAnalyzer(
                     previousCloudFileId = null,
                 )
 
-                ChangeDetector.Decision.CHANGED -> {
-                    val mode = when (config.changedFilePolicy) {
-                        ChangedFilePolicy.DUPLICATE_WITH_TIMESTAMP -> UploadMode.CHANGED_DUPLICATE
-                        ChangedFilePolicy.OVERWRITE -> UploadMode.CHANGED_OVERWRITE
-                        ChangedFilePolicy.IGNORE -> null
+                ChangeDetector.Decision.CHANGED -> buildChangedTask(fileInfo, config, indexed, fileSizeLimitBytes)
+
+                ChangeDetector.Decision.CHECK_CLOUD -> {
+                    if (!unreliableMtimeWarned) {
+                        unreliableMtimeWarned = true
+                        emitUnreliableMtimeWarning(config, runId)
                     }
-                    mode?.let {
+                    val cloudExists = checkCloudExists(config, fileInfo.relativePath, indexed?.remoteName)
+                    if (cloudExists) {
+                        null
+                    } else {
                         buildTask(
                             relativePath = fileInfo.relativePath,
                             uri = fileInfo.uri,
                             localSize = fileInfo.size,
                             localMtime = fileInfo.mtime ?: 0L,
-                            mode = it,
+                            mode = UploadMode.NEW,
                             sizeLimitBytes = fileSizeLimitBytes,
-                            previousCloudFileId = if (it == UploadMode.CHANGED_OVERWRITE) indexed?.cloudFileId else null,
+                            previousCloudFileId = null,
                         )
                     }
-                }
-
-                ChangeDetector.Decision.CHECK_CLOUD -> {
-                    if (!unreliableMtimeWarned) {
-                        unreliableMtimeWarned = true
-                        emitUnreliableMtimeWarning(config)
-                    }
-                    val cloudExists = checkCloudExists(config, fileInfo.relativePath, indexed?.remoteName)
-                    if (cloudExists) null
-                    else buildTask(
-                        relativePath = fileInfo.relativePath,
-                        uri = fileInfo.uri,
-                        localSize = fileInfo.size,
-                        localMtime = fileInfo.mtime ?: 0L,
-                        mode = UploadMode.NEW,
-                        sizeLimitBytes = fileSizeLimitBytes,
-                        previousCloudFileId = null,
-                    )
                 }
             }
 
@@ -131,13 +132,7 @@ class FileSystemAnalyzer(
             }
         }
 
-        // Phase 3: send all normal tasks then close normal channel, then send oversized tasks.
-        // Closing normal before sending to oversized prevents the deadlock described above.
-        for (task in normalTasks) normalChannel.send(task)
-        normalChannel.close()
-        for (task in oversizedTasks) oversizedChannel.send(task)
-
-        log.debug("Analyzer finished for config ${config.id}: ${fileInfoList.size} files scanned")
+        return Pair(normalTasks, oversizedTasks)
     }
 
     private suspend fun checkCloudExists(
@@ -164,11 +159,11 @@ class FileSystemAnalyzer(
         return currentId
     }
 
-    private suspend fun emitUnreliableMtimeWarning(config: BackupConfigEntity) {
-        backupMessageDao.insert(
+    private suspend fun emitUnreliableMtimeWarning(config: BackupConfigEntity, runId: String) {
+        backupMessageDao.coalesceInsert(
             BackupMessageEntity(
                 backupConfigId = config.id,
-                runId = null,
+                runId = runId,
                 timestamp = System.currentTimeMillis(),
                 severity = MessageSeverity.WARNING,
                 type = MessageType.UNRELIABLE_TIMESTAMPS,
@@ -178,6 +173,31 @@ class FileSystemAnalyzer(
                 readAt = null,
             )
         )
+    }
+
+    private fun buildChangedTask(
+        fileInfo: LocalFileInfo,
+        config: BackupConfigEntity,
+        indexed: UploadedFileIndexEntity?,
+        fileSizeLimitBytes: Long,
+    ): UploadTask? {
+        val mode = when (config.changedFilePolicy) {
+            ChangedFilePolicy.DUPLICATE_WITH_TIMESTAMP -> UploadMode.CHANGED_DUPLICATE
+            ChangedFilePolicy.OVERWRITE -> UploadMode.CHANGED_OVERWRITE
+            ChangedFilePolicy.IGNORE -> null
+        }
+        return mode?.let {
+            val prevCloudFileId = if (it == UploadMode.CHANGED_OVERWRITE) indexed?.cloudFileId else null
+            buildTask(
+                relativePath = fileInfo.relativePath,
+                uri = fileInfo.uri,
+                localSize = fileInfo.size,
+                localMtime = fileInfo.mtime ?: 0L,
+                mode = it,
+                sizeLimitBytes = fileSizeLimitBytes,
+                previousCloudFileId = prevCloudFileId,
+            )
+        }
     }
 
     private fun buildTask(

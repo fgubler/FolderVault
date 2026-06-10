@@ -32,11 +32,17 @@ internal object ChangeDetector {
         val mtimeUsable = localMtime != null && localMtime != 0L
         return if (mtimeUsable) {
             val mtime = localMtime!!
-            if (mtime != indexed.localLastModified || localSize != indexed.localSize) Decision.CHANGED
-            else Decision.UNCHANGED
+            if (mtime != indexed.localLastModified || localSize != indexed.localSize) {
+                Decision.CHANGED
+            } else {
+                Decision.UNCHANGED
+            }
         } else {
-            if (localSize != indexed.localSize) Decision.CHANGED
-            else Decision.CHECK_CLOUD
+            if (localSize != indexed.localSize) {
+                Decision.CHANGED
+            } else {
+                Decision.CHECK_CLOUD
+            }
         }
     }
 }

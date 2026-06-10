@@ -59,6 +59,7 @@ class BackupUploader(
             uploadOne(
                 config = config,
                 task = task,
+                runId = runId,
                 stagingDir = stagingDir,
                 folderCache = folderCache,
                 derivedKey = derivedKey,
@@ -74,6 +75,7 @@ class BackupUploader(
     private suspend fun uploadOne(
         config: BackupConfigEntity,
         task: UploadTask,
+        runId: String,
         stagingDir: File,
         folderCache: FolderPathCache,
         derivedKey: SecretKey?,
@@ -99,6 +101,7 @@ class BackupUploader(
             val prepared = prepareLocalFile(context, task, config, derivedKey, backupSalt, tempFile)
             if (!prepared) {
                 summary.filesFailed++
+                emitMessage(config, runId, MessageSeverity.WARNING, MessageType.UPLOAD_FAILED)
                 return
             }
 
@@ -113,12 +116,14 @@ class BackupUploader(
                 remoteName = remoteName,
                 mimeType = "application/octet-stream",
                 content = uploadContent,
+                runId = runId,
                 summary = summary,
             ) ?: return // auth-lost or quota — summary flags set; caller will skip subsequent tasks
 
             if (uploadResult is ErrorResult) {
                 log.warning("Upload failed for ${task.relativePath}: ${uploadResult.error}")
                 summary.filesFailed++
+                emitMessage(config, runId, MessageSeverity.WARNING, MessageType.UPLOAD_FAILED)
                 return
             }
             val cloudFile = (uploadResult as SuccessResult).value
@@ -203,6 +208,7 @@ class BackupUploader(
         remoteName: String,
         mimeType: String,
         content: UploadContent,
+        runId: String,
         summary: RunSummary,
     ): BinaryResult<CloudFile, Exception>? {
         val provider = cloudProvider ?: run {
@@ -221,12 +227,13 @@ class BackupUploader(
                 remoteName,
                 mimeType,
                 content,
+                runId,
                 summary,
             )
             error is CloudQuotaExceededException -> {
                 if (!summary.quotaExceeded) {
                     summary.quotaExceeded = true
-                    emitMessage(config, MessageSeverity.ERROR, MessageType.QUOTA_EXCEEDED)
+                    emitMessage(config, runId, MessageSeverity.ERROR, MessageType.QUOTA_EXCEEDED)
                 }
                 null
             }
@@ -241,19 +248,20 @@ class BackupUploader(
         remoteName: String,
         mimeType: String,
         content: UploadContent,
+        runId: String,
         summary: RunSummary,
     ): BinaryResult<CloudFile, Exception>? {
         val reAuthResult = authorizer.authorize()
         if (reAuthResult !is CloudAuthResult.Authorized) {
             summary.authLost = true
-            emitMessage(config, MessageSeverity.ERROR, MessageType.AUTH_LOST)
+            emitMessage(config, runId, MessageSeverity.ERROR, MessageType.AUTH_LOST)
             return null
         }
         cloudProvider = reAuthResult.data
         val retryResult = reAuthResult.data.uploadFile(parentFolderId, remoteName, mimeType, content)
         if (retryResult is ErrorResult && retryResult.error is CloudAuthException) {
             summary.authLost = true
-            emitMessage(config, MessageSeverity.ERROR, MessageType.AUTH_LOST)
+            emitMessage(config, runId, MessageSeverity.ERROR, MessageType.AUTH_LOST)
             return null
         }
         return retryResult
@@ -261,13 +269,14 @@ class BackupUploader(
 
     private suspend fun emitMessage(
         config: BackupConfigEntity,
+        runId: String?,
         severity: MessageSeverity,
         type: MessageType,
     ) {
-        backupMessageDao.insert(
+        backupMessageDao.coalesceInsert(
             BackupMessageEntity(
                 backupConfigId = config.id,
-                runId = null,
+                runId = runId,
                 timestamp = System.currentTimeMillis(),
                 severity = severity,
                 type = type,

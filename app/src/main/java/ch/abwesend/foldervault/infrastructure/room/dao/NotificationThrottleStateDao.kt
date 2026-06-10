@@ -21,6 +21,12 @@ interface NotificationThrottleStateDao {
     @Upsert
     suspend fun upsert(entity: NotificationThrottleStateEntity)
 
+    @Query(
+        """DELETE FROM NotificationThrottleState
+           WHERE backupConfigId = :configId AND messageType = :type"""
+    )
+    suspend fun deleteForConfigAndType(configId: String, type: MessageType)
+
     @Query("DELETE FROM NotificationThrottleState WHERE backupConfigId = :backupConfigId")
     suspend fun deleteAllForConfig(backupConfigId: String)
 }

@@ -55,7 +55,7 @@ class Fvc1CipherTest : StringSpec({
         val out = ByteArrayOutputStream()
         val result = cipher.decryptFileWithPassword(password, ByteArrayInputStream(ciphertext), out)
 
-        result shouldBeInstanceOf SuccessResult::class
+        result.shouldBeInstanceOf<SuccessResult<*>>()
         out.toByteArray() shouldBe plaintext
     }
 

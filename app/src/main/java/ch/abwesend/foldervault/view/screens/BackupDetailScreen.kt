@@ -1,0 +1,473 @@
+package ch.abwesend.foldervault.view.screens
+
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import ch.abwesend.foldervault.domain.backup.BackupConfig
+import ch.abwesend.foldervault.domain.backup.BackupMessage
+import ch.abwesend.foldervault.domain.model.BackupRunStatus
+import ch.abwesend.foldervault.domain.model.BackupSchedule
+import ch.abwesend.foldervault.domain.model.ChangedFilePolicy
+import ch.abwesend.foldervault.domain.model.MessageSeverity
+import ch.abwesend.foldervault.domain.model.MessageType
+import ch.abwesend.foldervault.domain.model.NetworkPolicy
+import ch.abwesend.foldervault.domain.model.RetentionPolicy
+import ch.abwesend.foldervault.ui.theme.FolderVaultTheme
+import ch.abwesend.foldervault.view.viewmodel.BackupDetailViewModel
+import ch.abwesend.foldervault.view.viewmodel.DetailEvent
+import org.koin.androidx.compose.koinViewModel
+import org.koin.core.parameter.parametersOf
+
+private const val MS_PER_MINUTE = 60_000L
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun BackupDetailScreen(
+    configId: String,
+    onBack: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier,
+    viewModel: BackupDetailViewModel = koinViewModel(parameters = { parametersOf(configId) }),
+) {
+    val config by viewModel.config.collectAsState()
+    val messages by viewModel.messages.collectAsState()
+    val passwordCheckResult by viewModel.passwordCheckResult.collectAsState()
+    val currentOnDelete by rememberUpdatedState(onDelete)
+
+    LaunchedEffect(Unit) {
+        viewModel.events.collect { event ->
+            if (event is DetailEvent.Deleted) currentOnDelete()
+        }
+    }
+
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var showPasswordDialog by remember { mutableStateOf(false) }
+
+    if (showDeleteDialog) {
+        DeleteConfirmDialog(
+            onConfirm = {
+                showDeleteDialog = false
+                viewModel.deleteBackup()
+            },
+            onDismiss = { showDeleteDialog = false },
+        )
+    }
+
+    if (showPasswordDialog) {
+        CheckPasswordDialog(
+            result = passwordCheckResult,
+            onCheck = viewModel::checkPassword,
+            onDismiss = {
+                showPasswordDialog = false
+                viewModel.clearPasswordCheckResult()
+            },
+        )
+    }
+
+    Scaffold(
+        modifier = modifier,
+        topBar = {
+            TopAppBar(
+                title = { Text(config?.displayName ?: "Backup detail") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onEdit) { Icon(Icons.Default.Edit, "Edit") }
+                    IconButton(onClick = { showDeleteDialog = true }) {
+                        Icon(Icons.Default.Delete, "Delete")
+                    }
+                },
+            )
+        },
+    ) { innerPadding ->
+        val cfg = config
+        if (cfg == null) {
+            Text("Loading…", modifier = Modifier.padding(innerPadding).padding(16.dp))
+        } else {
+            DetailContent(
+                config = cfg,
+                messages = messages,
+                onBackUpNow = viewModel::backUpNow,
+                onTogglePause = viewModel::togglePause,
+                onCheckPassword = { showPasswordDialog = true },
+                onDismissMessage = { viewModel.dismiss(listOf(it)) },
+                onDismissAll = viewModel::dismissAll,
+                modifier = Modifier.padding(innerPadding),
+                onMarkRead = { viewModel.markRead(it) },
+            )
+        }
+    }
+}
+
+@Suppress("LongParameterList")
+@Composable
+private fun DetailContent(
+    config: BackupConfig,
+    messages: List<BackupMessage>,
+    onBackUpNow: () -> Unit,
+    onTogglePause: () -> Unit,
+    onCheckPassword: () -> Unit,
+    onDismissMessage: (Long) -> Unit,
+    onDismissAll: () -> Unit,
+    modifier: Modifier = Modifier,
+    @Suppress("LambdaParameterEventTrailing")
+    onMarkRead: (List<Long>) -> Unit,
+) {
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        item { ConfigInfoSection(config = config) }
+        item { ActionButtonRow(config, onBackUpNow, onTogglePause, onCheckPassword) }
+        item { HorizontalDivider() }
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "Messages",
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.weight(1f),
+                )
+                if (messages.isNotEmpty()) {
+                    TextButton(onClick = {
+                        onMarkRead(messages.map { it.id })
+                        onDismissAll()
+                    }) { Text("Clear all") }
+                }
+            }
+        }
+        if (messages.isEmpty()) {
+            item {
+                Text(
+                    "No messages",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            items(messages, key = { it.id }) { msg ->
+                MessageItem(
+                    message = msg,
+                    onDismiss = { onDismissMessage(msg.id) },
+                    onMarkRead = { onMarkRead(listOf(msg.id)) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConfigInfoSection(config: BackupConfig) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        InfoRow("Cloud folder", config.cloudRootFolderName)
+        InfoRow("Account", config.cloudAccountIdentifier)
+        InfoRow("Schedule", config.schedule.name.lowercase().replaceFirstChar { it.uppercase() })
+        InfoRow("Network", if (config.networkPolicy == NetworkPolicy.WIFI_ONLY) "Wi-Fi only" else "Any")
+        InfoRow("Encryption", if (config.encryptionEnabled) "Enabled (AES-256-GCM)" else "Disabled")
+        InfoRow("Retention", config.retentionPolicy.displayName())
+        Spacer(modifier = Modifier.height(8.dp))
+        StatusSection(config)
+    }
+}
+
+@Composable
+private fun StatusSection(config: BackupConfig) {
+    val statusColor = when (config.lastRunStatus) {
+        BackupRunStatus.FAILED -> MaterialTheme.colorScheme.error
+        BackupRunStatus.COMPLETED_WITH_WARNINGS -> MaterialTheme.colorScheme.tertiary
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text("Status", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+        Text(config.lastRunStatus.name, style = MaterialTheme.typography.bodyMedium, color = statusColor)
+        if (config.totalFilesDiscovered > 0) {
+            Text(
+                "Progress: ${config.filesUploadedTotal} / ${config.totalFilesDiscovered} files total",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        config.lastRunAt?.let { lastRun ->
+            val ago = (System.currentTimeMillis() - lastRun) / MS_PER_MINUTE
+            Text(
+                "Last run: ${ago}m ago  •  ${config.filesUploaded} uploaded, ${config.filesFailed} failed",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun InfoRow(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            "$label: ",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(value, style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+@Composable
+private fun ActionButtonRow(
+    config: BackupConfig,
+    onBackUpNow: () -> Unit,
+    onTogglePause: () -> Unit,
+    onCheckPassword: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Button(onClick = onBackUpNow, modifier = Modifier.weight(1f)) { Text("Back up now") }
+            OutlinedButton(onClick = onTogglePause, modifier = Modifier.weight(1f)) {
+                Icon(
+                    if (config.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                    contentDescription = null,
+                )
+                Text(if (config.isPaused) "Resume" else "Pause")
+            }
+        }
+        if (config.encryptionEnabled) {
+            OutlinedButton(onClick = onCheckPassword, modifier = Modifier.fillMaxWidth()) {
+                Text("Check my password")
+            }
+        }
+    }
+}
+
+@Composable
+private fun MessageItem(
+    message: BackupMessage,
+    onDismiss: () -> Unit,
+    onMarkRead: () -> Unit,
+) {
+    val borderColor = when (message.severity) {
+        MessageSeverity.CRITICAL, MessageSeverity.ERROR -> MaterialTheme.colorScheme.error
+        MessageSeverity.WARNING -> MaterialTheme.colorScheme.tertiary
+        MessageSeverity.INFO -> MaterialTheme.colorScheme.outlineVariant
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (message.readAt == null) {
+                MaterialTheme.colorScheme.surfaceVariant
+            } else {
+                MaterialTheme.colorScheme.surface
+            },
+        ),
+        border = BorderStroke(1.dp, borderColor),
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = message.severity.name,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = borderColor,
+                    modifier = Modifier.weight(1f),
+                )
+                if (message.count > 1) {
+                    Text(
+                        "×${message.count}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            val text = message.messageText ?: message.type.name.lowercase().replace('_', ' ')
+            Text(text, style = MaterialTheme.typography.bodySmall)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                if (message.readAt == null) {
+                    TextButton(onClick = onMarkRead) { Text("Mark read") }
+                }
+                TextButton(onClick = onDismiss) { Text("Dismiss") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DeleteConfirmDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Delete backup?") },
+        text = {
+            Text(
+                "Your data on Google Drive is safe. The app will forget which files have " +
+                    "been backed up — if you ever re-create this backup, it will upload " +
+                    "everything again. You can delete the Drive folder yourself in the Google " +
+                    "Drive app if you wish.",
+            )
+        },
+        confirmButton = { Button(onClick = onConfirm) { Text("Delete") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun CheckPasswordDialog(
+    result: Boolean?,
+    onCheck: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var candidate by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Check my password") },
+        text = {
+            Column {
+                Text(
+                    "Enter your backup password to verify you still remember it.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = candidate,
+                    onValueChange = { candidate = it },
+                    label = { Text("Password") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                result?.let { matches ->
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        if (matches) "✓ Password is correct" else "✗ Password is incorrect",
+                        color = if (matches) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+        },
+        confirmButton = { Button(onClick = { onCheck(candidate) }) { Text("Check") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
+private fun RetentionPolicy.displayName() = when (this) {
+    RetentionPolicy.KeepAll -> "Keep all"
+    is RetentionPolicy.KeepLastN -> "Keep last $count"
+    is RetentionPolicy.KeepNewerThan -> "Keep < $days days"
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun BackupDetailPreview() {
+    val sample = BackupConfig(
+        id = "1",
+        displayName = "Documents",
+        sourceTreeUri = "content://com.example/tree/docs",
+        cloudProvider = "google_drive",
+        cloudRootFolderId = "abc",
+        cloudRootFolderName = "FolderVault_123",
+        cloudAccountIdentifier = "user@gmail.com",
+        schedule = BackupSchedule.DAILY,
+        changedFilePolicy = ChangedFilePolicy.DUPLICATE_WITH_TIMESTAMP,
+        encryptionEnabled = true,
+        encryptedPasswordBlob = null,
+        encryptionSaltBase64 = null,
+        retentionPolicy = RetentionPolicy.KeepAll,
+        networkPolicy = NetworkPolicy.WIFI_ONLY,
+        createdAt = System.currentTimeMillis(),
+        lastRunAt = System.currentTimeMillis() - 7_200_000,
+        lastRunStatus = BackupRunStatus.UP_TO_DATE,
+        filesUploaded = 1204,
+        filesSkipped = 0,
+        filesFailed = 3,
+        bytesUploaded = 0L,
+        totalFilesDiscovered = 1207,
+        filesUploadedTotal = 1204,
+        lastRunCompletedNormally = true,
+        isPaused = false,
+    )
+    val sampleMessages = listOf(
+        BackupMessage(
+            id = 1,
+            backupConfigId = "1",
+            runId = "r1",
+            timestamp = System.currentTimeMillis(),
+            severity = MessageSeverity.ERROR,
+            type = MessageType.UPLOAD_FAILED,
+            messageText = "3 files failed to upload",
+            formatArgs = emptyList(),
+            relativePath = null,
+            count = 3,
+            readAt = null,
+            dismissed = false,
+        ),
+    )
+    FolderVaultTheme {
+        DetailContent(
+            config = sample,
+            messages = sampleMessages,
+            onBackUpNow = {},
+            onTogglePause = {},
+            onCheckPassword = {},
+            onDismissMessage = {},
+            onDismissAll = {},
+            onMarkRead = {},
+        )
+    }
+}

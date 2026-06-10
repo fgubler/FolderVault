@@ -7,6 +7,8 @@ import ch.abwesend.foldervault.domain.result.ErrorResult
 import ch.abwesend.foldervault.infrastructure.room.dao.UploadedFileIndexDao
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupConfigEntity
 
+private const val MILLIS_PER_DAY = 24L * 60L * 60L * 1_000L
+
 class RetentionManager(
     private val uploadedFileIndexDao: UploadedFileIndexDao,
     private val cloudProvider: ICloudStorageProvider,
@@ -37,7 +39,7 @@ class RetentionManager(
 
     private suspend fun applyKeepNewerThan(configId: String, days: Int) {
         log.debug("Applying KeepNewerThan($days days) retention for config $configId")
-        val cutoff = System.currentTimeMillis() - days.toLong() * 24L * 60L * 60L * 1000L
+        val cutoff = System.currentTimeMillis() - days.toLong() * MILLIS_PER_DAY
         val oldVersions = uploadedFileIndexDao.getOldVersionsOlderThan(configId, cutoff)
         for (entry in oldVersions) {
             deleteCloudAndIndex(entry.cloudFileId, entry.id)
@@ -47,7 +49,10 @@ class RetentionManager(
     private suspend fun deleteCloudAndIndex(cloudFileId: String, indexId: Long) {
         val deleteResult = cloudProvider.deleteFile(cloudFileId)
         if (deleteResult is ErrorResult) {
-            log.warning("Retention: failed to delete cloud file $cloudFileId — removing index entry anyway: ${deleteResult.error}")
+            log.warning(
+                "Retention: failed to delete cloud file $cloudFileId" +
+                    " — removing index entry anyway: ${deleteResult.error}"
+            )
         }
         uploadedFileIndexDao.deleteById(indexId)
     }

@@ -11,6 +11,8 @@ import ch.abwesend.foldervault.domain.result.ifError
 import ch.abwesend.foldervault.domain.result.mapError
 import ch.abwesend.foldervault.domain.result.runCatchingAsResult
 import ch.abwesend.foldervault.domain.util.injectAnywhere
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import java.io.ByteArrayInputStream
 import java.security.SecureRandom
 import java.util.Base64
@@ -21,8 +23,6 @@ import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 
 class EncryptionRepository : IEncryptionRepository {
     private val keyStoreRepository: IKeyStoreRepository by injectAnywhere()

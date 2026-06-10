@@ -7,6 +7,20 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-06-10 — §14.5: Cloud storage provider resilience (§5.11)
+
+### What was done
+- `domain/cloud/CloudException.kt`: sealed hierarchy — `CloudAuthException`, `CloudRateLimitException`, `CloudQuotaExceededException`, `CloudTransientException`, `CloudNotFoundException`. Lives in `domain` so the uploader can react to typed errors without Drive SDK knowledge.
+- `infrastructure/cloud/googledrive/DriveErrorClassifier.kt`: maps `GoogleJsonResponseException` HTTP status codes and error reason strings to the appropriate `CloudException` subclass. `classifyByCodeAndReason(statusCode, reason, cause)` is `internal` and directly testable.
+- `infrastructure/cloud/googledrive/DriveRetryPolicy.kt`: exponential backoff (`1s → 2s → 4s → 8s`, capped at 32s) + random jitter up to 1s; retries `CloudTransientException` and `CloudRateLimitException` up to `MAX_RETRIES = 3` times; all other exceptions (including `CancellationException`) propagate immediately.
+- `infrastructure/cloud/googledrive/GoogleDriveRepository.kt` updated:
+  - Added `driveCall { }` helper: classifies `GoogleJsonResponseException` / `IOException` before they reach `runCatchingAsResult`
+  - Added `retryingDriveCall { }`: `DriveRetryPolicy.withRetry { driveCall { } }`
+  - Fixed `getOrCreateChildFolder`: queries `createdTime` in Drive fields; sorts matches by `(createdTime, id)` ascending; picks the oldest as the deterministic winner — eliminates duplicate-folder divergence from interrupted prior runs
+  - All methods now use `retryingDriveCall` (or plain `driveCall` for non-retryable ops)
+- `DriveErrorClassifierTest`: 13 Kotest `StringSpec` cases covering status codes, reason strings, case insensitivity, passthrough, and IO exception wrapping
+- `DriveRetryPolicyTest`: 6 Kotest `StringSpec` cases with `runTest`; exercises immediate success, retry + recover, retry exhaustion, and no-retry-on-terminal-error paths
+
 ## 2026-06-09 — §14.4: Room schema, DAOs, DataStore settings, DI wiring
 
 ### What was done

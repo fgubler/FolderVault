@@ -11,7 +11,13 @@
     <string name="backup_notification_progress_text">Uploading files…</string>
     <string name="backup_notification_progress_text_with_count">Uploading %1$d / %2$d files</string>
     <string name="backup_notification_problems_title">Backup problem</string>
-    <string name="backup_notification_problems_text">Backup \'%1$s\' had issues — tap to review</string>
+    <string name="backup_notification_problems_text">Backup \'%1$s\' had issues: %2$s — tap to review</string>
+    <string name="notif_problem_auth_lost">auth lost</string>
+    <string name="notif_problem_folder_unreadable">folder unreadable</string>
+    <string name="notif_problem_upload_failed">upload failed</string>
+    <string name="notif_problem_encryption_failed">encryption failed</string>
+    <string name="notif_problem_quota_exceeded">quota exceeded</string>
+    <string name="notif_problem_generic_error">error</string>
 
     <!-- Common -->
     <string name="loading">Loading…</string>
@@ -191,6 +197,9 @@
     <string name="label_default_schedule">Default schedule</string>
     <string name="label_default_changed_file_policy">Default changed-file policy</string>
     <string name="label_default_network_policy">Default network policy</string>
+    <string name="label_default_file_size_limit">Max file size (MB)</string>
+    <string name="info_file_size_limit_title">Max file size</string>
+    <string name="info_file_size_limit_body">Files larger than this limit are skipped during backup. This prevents very large files from stalling a run. Set to 0 to disable the limit.</string>
     <string name="label_theme">Theme</string>
     <string name="label_anonymous_error_reports">Anonymous error reports</string>
     <string name="desc_anonymous_error_reports">Help improve the app by sending anonymous crash reports</string>

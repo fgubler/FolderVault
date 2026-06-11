@@ -2,6 +2,7 @@ package ch.abwesend.foldervault.view.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import ch.abwesend.foldervault.domain.logging.ITelemetryToggle
 import ch.abwesend.foldervault.domain.model.AppSettings
 import ch.abwesend.foldervault.domain.model.AppTheme
 import ch.abwesend.foldervault.domain.model.BackupSchedule
@@ -15,6 +16,7 @@ import kotlinx.coroutines.launch
 
 class SettingsViewModel(
     private val settingsRepo: IAppSettingsRepository,
+    private val telemetryToggle: ITelemetryToggle,
 ) : ViewModel() {
 
     val settings: StateFlow<AppSettings> = settingsRepo.settings
@@ -33,8 +35,10 @@ class SettingsViewModel(
 
     fun setTheme(theme: AppTheme) = update { it.copy(theme = theme) }
 
-    fun setAnonymousErrorReports(enabled: Boolean) =
+    fun setAnonymousErrorReports(enabled: Boolean) {
+        telemetryToggle.setEnabled(enabled)
         update { it.copy(anonymousErrorReports = enabled) }
+    }
 
     fun setShowOnboarding(show: Boolean) = update { it.copy(showOnboarding = show) }
 

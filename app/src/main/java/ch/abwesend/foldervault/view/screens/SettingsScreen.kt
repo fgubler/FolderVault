@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -22,6 +23,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -29,10 +31,14 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import ch.abwesend.foldervault.R
@@ -43,6 +49,7 @@ import ch.abwesend.foldervault.domain.model.ChangedFilePolicy
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.ui.theme.FolderVaultTheme
 import ch.abwesend.foldervault.view.components.EnumDropdown
+import ch.abwesend.foldervault.view.components.InfoIconButton
 import ch.abwesend.foldervault.view.viewmodel.SettingsViewModel
 import org.koin.androidx.compose.koinViewModel
 
@@ -56,7 +63,7 @@ fun SettingsScreen(
     val settings by viewModel.settings.collectAsState()
     val notificationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { /* graceful */ }
+    ) { _ -> }
 
     Scaffold(
         topBar = {
@@ -76,6 +83,7 @@ fun SettingsScreen(
             onScheduleChange = viewModel::setDefaultSchedule,
             onChangedFilePolicyChange = viewModel::setDefaultChangedFilePolicy,
             onNetworkPolicyChange = viewModel::setDefaultNetworkPolicy,
+            onFileSizeLimitChange = viewModel::setDefaultFileSizeLimit,
             onThemeChange = viewModel::setTheme,
             onErrorReportsChange = viewModel::setAnonymousErrorReports,
             onShowOnboarding = {
@@ -98,6 +106,7 @@ private fun SettingsContent(
     onScheduleChange: (BackupSchedule) -> Unit,
     onChangedFilePolicyChange: (ChangedFilePolicy) -> Unit,
     onNetworkPolicyChange: (NetworkPolicy) -> Unit,
+    onFileSizeLimitChange: (Int) -> Unit,
     onThemeChange: (AppTheme) -> Unit,
     onErrorReportsChange: (Boolean) -> Unit,
     onShowOnboarding: () -> Unit,
@@ -127,7 +136,7 @@ private fun SettingsContent(
             label = stringResource(R.string.label_default_changed_file_policy),
             selected = settings.defaultChangedFilePolicy,
             options = ChangedFilePolicy.entries,
-            displayName = { context.getString(it.labelResId()) },
+            displayName = { context.getString(it.labelResId) },
             onSelect = onChangedFilePolicyChange,
         )
 
@@ -136,8 +145,14 @@ private fun SettingsContent(
             label = stringResource(R.string.label_default_network_policy),
             selected = settings.defaultNetworkPolicy,
             options = NetworkPolicy.entries,
-            displayName = { context.getString(it.labelResId()) },
+            displayName = { context.getString(it.labelResId) },
             onSelect = onNetworkPolicyChange,
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+        FileSizeLimitField(
+            defaultSizeMb = (settings.defaultFileSizeLimitBytes / (1024 * 1024)).toInt(),
+            onFileSizeLimitChange = onFileSizeLimitChange,
         )
 
         SectionDivider()
@@ -147,7 +162,7 @@ private fun SettingsContent(
             label = stringResource(R.string.label_theme),
             selected = settings.theme,
             options = AppTheme.entries,
-            displayName = { context.getString(it.labelResId()) },
+            displayName = { context.getString(it.labelResId) },
             onSelect = onThemeChange,
         )
 
@@ -221,6 +236,32 @@ private fun SwitchRow(
     }
 }
 
+@Suppress("MultipleEmitters")
+@Composable
+private fun FileSizeLimitField(defaultSizeMb: Int, onFileSizeLimitChange: (Int) -> Unit) {
+    var sizeLimitText by rememberSaveable(defaultSizeMb) { mutableStateOf(defaultSizeMb.toString()) }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        OutlinedTextField(
+            value = sizeLimitText,
+            onValueChange = { text ->
+                sizeLimitText = text
+                text.toIntOrNull()?.let { onFileSizeLimitChange(it) }
+            },
+            label = { Text(stringResource(R.string.label_default_file_size_limit)) },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.weight(1f),
+        )
+        InfoIconButton(
+            title = stringResource(R.string.info_file_size_limit_title),
+            body = stringResource(R.string.info_file_size_limit_body),
+        )
+    }
+}
+
 @StringRes
 private fun BackupSchedule.labelResId(): Int = when (this) {
     BackupSchedule.USE_GLOBAL_DEFAULT -> R.string.schedule_global_default
@@ -228,26 +269,6 @@ private fun BackupSchedule.labelResId(): Int = when (this) {
     BackupSchedule.DAILY -> R.string.schedule_daily
     BackupSchedule.WEEKLY -> R.string.schedule_weekly
     BackupSchedule.MONTHLY -> R.string.schedule_monthly
-}
-
-@StringRes
-private fun ChangedFilePolicy.labelResId(): Int = when (this) {
-    ChangedFilePolicy.DUPLICATE_WITH_TIMESTAMP -> R.string.changed_file_keep_timestamp
-    ChangedFilePolicy.OVERWRITE -> R.string.changed_file_overwrite
-    ChangedFilePolicy.IGNORE -> R.string.changed_file_skip
-}
-
-@StringRes
-private fun NetworkPolicy.labelResId(): Int = when (this) {
-    NetworkPolicy.WIFI_ONLY -> R.string.network_wifi_only
-    NetworkPolicy.ANY -> R.string.network_any
-}
-
-@StringRes
-private fun AppTheme.labelResId(): Int = when (this) {
-    AppTheme.SYSTEM -> R.string.theme_system
-    AppTheme.LIGHT -> R.string.theme_light
-    AppTheme.DARK -> R.string.theme_dark
 }
 
 @Preview(showBackground = true)
@@ -259,6 +280,7 @@ private fun SettingsScreenPreview() {
             onScheduleChange = {},
             onChangedFilePolicyChange = {},
             onNetworkPolicyChange = {},
+            onFileSizeLimitChange = {},
             onThemeChange = {},
             onErrorReportsChange = {},
             onShowOnboarding = {},

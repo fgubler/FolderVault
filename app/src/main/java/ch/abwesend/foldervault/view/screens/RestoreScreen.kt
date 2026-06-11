@@ -3,7 +3,6 @@ package ch.abwesend.foldervault.view.screens
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -60,12 +59,7 @@ fun RestoreScreen(
     modifier: Modifier = Modifier,
     viewModel: RestoreViewModel = koinViewModel(),
 ) {
-    val state by viewModel.state.collectAsState()
-    val cryptFileCount by viewModel.cryptFileCount.collectAsState()
-    val otherFileCount by viewModel.otherFileCount.collectAsState()
-    val outputUri by viewModel.outputUri.collectAsState()
-    val collisionPolicy by viewModel.collisionPolicy.collectAsState()
-    val progress by viewModel.progress.collectAsState()
+    val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
 
     val sourceLauncher = rememberLauncherForActivityResult(
@@ -92,8 +86,8 @@ fun RestoreScreen(
         }
     }
 
-    if (state is RestoreState.Running) {
-        RestoreProgressDialog(progress = progress, onCancel = viewModel::cancel)
+    if (uiState.state is RestoreState.Running) {
+        RestoreProgressDialog(progress = uiState.progress, onCancel = viewModel::cancel)
     }
 
     Scaffold(
@@ -110,11 +104,11 @@ fun RestoreScreen(
         },
     ) { innerPadding ->
         RestoreContent(
-            state = state,
-            cryptFileCount = cryptFileCount,
-            otherFileCount = otherFileCount,
-            outputUri = outputUri,
-            collisionPolicy = collisionPolicy,
+            state = uiState.state,
+            cryptFileCount = uiState.cryptFileCount,
+            otherFileCount = uiState.otherFileCount,
+            outputUri = uiState.outputUri,
+            collisionPolicy = uiState.collisionPolicy,
             onPickSource = { sourceLauncher.launch(null) },
             onPickOutput = { outputLauncher.launch(null) },
             onCollisionPolicyChange = viewModel::setCollisionPolicy,
@@ -282,7 +276,7 @@ private fun PasswordAndStartSection(
         label = stringResource(R.string.label_if_file_exists),
         selected = collisionPolicy,
         options = RestoreCollisionPolicy.entries,
-        displayName = { context.getString(it.labelResId()) },
+        displayName = { context.getString(it.labelResId) },
         onSelect = onCollisionPolicyChange,
     )
     Spacer(modifier = Modifier.height(8.dp))
@@ -378,13 +372,6 @@ private fun RestoreProgressDialog(progress: RestoreProgress?, onCancel: () -> Un
         confirmButton = {},
         dismissButton = { TextButton(onClick = onCancel) { Text(stringResource(R.string.button_cancel)) } },
     )
-}
-
-@StringRes
-private fun RestoreCollisionPolicy.labelResId(): Int = when (this) {
-    RestoreCollisionPolicy.SKIP -> R.string.collision_skip
-    RestoreCollisionPolicy.OVERWRITE -> R.string.collision_overwrite
-    RestoreCollisionPolicy.RENAME_WITH_SUFFIX -> R.string.collision_rename
 }
 
 @Preview(showBackground = true)

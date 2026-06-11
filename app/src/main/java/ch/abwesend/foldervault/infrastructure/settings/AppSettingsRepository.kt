@@ -10,15 +10,18 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import ch.abwesend.foldervault.domain.model.AppSettings
-import ch.abwesend.foldervault.domain.model.AppTheme
-import ch.abwesend.foldervault.domain.model.BackupSchedule
-import ch.abwesend.foldervault.domain.model.ChangedFilePolicy
-import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "app_settings")
+
+private inline fun <reified E : Enum<E>> Preferences.enum(key: Preferences.Key<String>, default: E): E =
+    this[key]?.let { runCatching { enumValueOf<E>(it) }.getOrNull() } ?: default
+
+private fun <E : Enum<E>> MutablePreferences.setEnum(key: Preferences.Key<String>, value: E) {
+    this[key] = value.name
+}
 
 class AppSettingsRepository(private val context: Context) : IAppSettingsRepository {
 
@@ -34,32 +37,23 @@ class AppSettingsRepository(private val context: Context) : IAppSettingsReposito
     private fun Preferences.toAppSettings(): AppSettings {
         val d = AppSettings()
         return AppSettings(
-            defaultSchedule = this[Keys.DEFAULT_SCHEDULE]
-                ?.let { runCatching { BackupSchedule.valueOf(it) }.getOrNull() }
-                ?: d.defaultSchedule,
-            defaultChangedFilePolicy = this[Keys.DEFAULT_CHANGED_FILE_POLICY]
-                ?.let { runCatching { ChangedFilePolicy.valueOf(it) }.getOrNull() }
-                ?: d.defaultChangedFilePolicy,
-            defaultFileSizeLimitBytes = this[Keys.DEFAULT_FILE_SIZE_LIMIT_BYTES]
-                ?: d.defaultFileSizeLimitBytes,
-            theme = this[Keys.THEME]
-                ?.let { runCatching { AppTheme.valueOf(it) }.getOrNull() }
-                ?: d.theme,
+            defaultSchedule = enum(Keys.DEFAULT_SCHEDULE, d.defaultSchedule),
+            defaultChangedFilePolicy = enum(Keys.DEFAULT_CHANGED_FILE_POLICY, d.defaultChangedFilePolicy),
+            defaultFileSizeLimitBytes = this[Keys.DEFAULT_FILE_SIZE_LIMIT_BYTES] ?: d.defaultFileSizeLimitBytes,
+            theme = enum(Keys.THEME, d.theme),
             showOnboarding = this[Keys.SHOW_ONBOARDING] ?: d.showOnboarding,
-            defaultNetworkPolicy = this[Keys.DEFAULT_NETWORK_POLICY]
-                ?.let { runCatching { NetworkPolicy.valueOf(it) }.getOrNull() }
-                ?: d.defaultNetworkPolicy,
+            defaultNetworkPolicy = enum(Keys.DEFAULT_NETWORK_POLICY, d.defaultNetworkPolicy),
             anonymousErrorReports = this[Keys.ANONYMOUS_ERROR_REPORTS] ?: d.anonymousErrorReports,
         )
     }
 
     private fun MutablePreferences.applyAppSettings(s: AppSettings) {
-        set(Keys.DEFAULT_SCHEDULE, s.defaultSchedule.name)
-        set(Keys.DEFAULT_CHANGED_FILE_POLICY, s.defaultChangedFilePolicy.name)
+        setEnum(Keys.DEFAULT_SCHEDULE, s.defaultSchedule)
+        setEnum(Keys.DEFAULT_CHANGED_FILE_POLICY, s.defaultChangedFilePolicy)
         set(Keys.DEFAULT_FILE_SIZE_LIMIT_BYTES, s.defaultFileSizeLimitBytes)
-        set(Keys.THEME, s.theme.name)
+        setEnum(Keys.THEME, s.theme)
         set(Keys.SHOW_ONBOARDING, s.showOnboarding)
-        set(Keys.DEFAULT_NETWORK_POLICY, s.defaultNetworkPolicy.name)
+        setEnum(Keys.DEFAULT_NETWORK_POLICY, s.defaultNetworkPolicy)
         set(Keys.ANONYMOUS_ERROR_REPORTS, s.anonymousErrorReports)
     }
 

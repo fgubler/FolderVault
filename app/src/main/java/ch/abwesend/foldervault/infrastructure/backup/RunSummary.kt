@@ -6,7 +6,9 @@ class RunSummary {
     var filesFailed: Int = 0
     var bytesUploaded: Long = 0L
     var oversizedCount: Int = 0
+    var totalFilesDiscovered: Int = 0
     var authLost: Boolean = false
     var quotaExceeded: Boolean = false
     var hitTimeBudget: Boolean = false
+    var consecutiveQuotaCount: Int = 0
 }

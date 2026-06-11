@@ -14,6 +14,7 @@ import ch.abwesend.foldervault.domain.result.SuccessResult
 import ch.abwesend.foldervault.infrastructure.storage.ScopedStorageHelper
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
+import java.io.InputStream
 import java.io.OutputStream
 
 class RestoreEngine(
@@ -105,13 +106,32 @@ class RestoreEngine(
     }
 
     @Suppress("SwallowedException")
-    private fun verifyPassword(entry: SourceFileEntry, password: String): Boolean =
+    private fun withInputStream(source: DocumentFile, block: (InputStream) -> Boolean): Boolean =
         try {
-            context.contentResolver.openInputStream(entry.documentFile.uri)?.use { input ->
-                cipher.decryptFileWithPassword(password, input, NullOutputStream) is SuccessResult
+            context.contentResolver.openInputStream(source.uri)?.use(block) ?: false
+        } catch (e: Exception) {
+            false
+        }
+
+    @Suppress("SwallowedException")
+    private fun withStreams(
+        source: DocumentFile,
+        output: DocumentFile,
+        block: (InputStream, OutputStream) -> Boolean,
+    ): Boolean =
+        try {
+            context.contentResolver.openInputStream(source.uri)?.use { input ->
+                context.contentResolver.openOutputStream(output.uri)?.use { out ->
+                    block(input, out)
+                } ?: false
             } ?: false
         } catch (e: Exception) {
             false
+        }
+
+    private fun verifyPassword(entry: SourceFileEntry, password: String): Boolean =
+        withInputStream(entry.documentFile) { input ->
+            cipher.decryptFileWithPassword(password, input, NullOutputStream) is SuccessResult
         }
 
     private fun resolveOutputFile(
@@ -145,28 +165,14 @@ class RestoreEngine(
         }
     }
 
-    @Suppress("SwallowedException")
     private fun decryptEntry(source: DocumentFile, output: DocumentFile, password: String): Boolean =
-        try {
-            context.contentResolver.openInputStream(source.uri)?.use { input ->
-                context.contentResolver.openOutputStream(output.uri)?.use { out ->
-                    cipher.decryptFileWithPassword(password, input, out) is SuccessResult
-                } ?: false
-            } ?: false
-        } catch (e: Exception) {
-            false
+        withStreams(source, output) { input, out ->
+            cipher.decryptFileWithPassword(password, input, out) is SuccessResult
         }
 
-    @Suppress("SwallowedException")
     private fun copyEntry(source: DocumentFile, output: DocumentFile): Boolean =
-        try {
-            context.contentResolver.openInputStream(source.uri)?.use { input ->
-                context.contentResolver.openOutputStream(output.uri)?.use { out ->
-                    input.copyTo(out)
-                    true
-                } ?: false
-            } ?: false
-        } catch (e: Exception) {
-            false
+        withStreams(source, output) { input, out ->
+            input.copyTo(out)
+            true
         }
 }

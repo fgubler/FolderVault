@@ -2,13 +2,13 @@ package ch.abwesend.foldervault.infrastructure.backup
 
 import android.content.Context
 import android.net.Uri
-import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.cloud.ICloudStorageProvider
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.model.ChangedFilePolicy
 import ch.abwesend.foldervault.domain.model.MessageSeverity
 import ch.abwesend.foldervault.domain.model.MessageType
+import ch.abwesend.foldervault.domain.result.ErrorResult
 import ch.abwesend.foldervault.domain.result.SuccessResult
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupMessageDao
 import ch.abwesend.foldervault.infrastructure.room.dao.UploadedFileIndexDao
@@ -45,17 +45,20 @@ class FileSystemAnalyzer(
         oversizedChannel: SendChannel<UploadTask>,
         fileSizeLimitBytes: Long,
         runId: String,
-    ) {
+        folderCache: FolderPathCache,
+    ): Int {
         val fileInfoList = collectFileInfos(config)
         // Collect into two lists first to avoid a producer/consumer deadlock: if we sent normal
         // and oversized tasks interleaved and the oversized channel (cap=8) filled up, the producer
         // would block before closing the normal channel, while the consumer was blocked waiting for
         // normal to close — deadlock. Collecting first lets us close normal before sending oversized.
-        val (normalTasks, oversizedTasks) = buildUploadTaskLists(config, fileInfoList, fileSizeLimitBytes, runId)
+        val (normalTasks, oversizedTasks) =
+            buildUploadTaskLists(config, fileInfoList, fileSizeLimitBytes, runId, folderCache)
         for (task in normalTasks) normalChannel.send(task)
         normalChannel.close()
         for (task in oversizedTasks) oversizedChannel.send(task)
         log.debug("Analyzer finished for config ${config.id}: ${fileInfoList.size} files scanned")
+        return fileInfoList.size
     }
 
     private suspend fun collectFileInfos(config: BackupConfigEntity): List<LocalFileInfo> =
@@ -80,6 +83,7 @@ class FileSystemAnalyzer(
         fileInfoList: List<LocalFileInfo>,
         fileSizeLimitBytes: Long,
         runId: String,
+        folderCache: FolderPathCache,
     ): Pair<List<UploadTask>, List<UploadTask>> {
         val normalTasks = mutableListOf<UploadTask>()
         val oversizedTasks = mutableListOf<UploadTask>()
@@ -109,7 +113,7 @@ class FileSystemAnalyzer(
                         unreliableMtimeWarned = true
                         emitUnreliableMtimeWarning(config, runId)
                     }
-                    val cloudExists = checkCloudExists(config, fileInfo.relativePath, indexed?.remoteName)
+                    val cloudExists = checkCloudExists(config, fileInfo.relativePath, indexed?.remoteName, folderCache)
                     if (cloudExists) {
                         null
                     } else {
@@ -140,24 +144,15 @@ class FileSystemAnalyzer(
         config: BackupConfigEntity,
         relativePath: String,
         remoteName: String?,
+        folderCache: FolderPathCache,
     ): Boolean {
         if (remoteName == null) return false
         val folderPath = relativePath.substringBeforeLast('/', "")
-        val cloudFolderId = resolveCloudFolderForPath(config, folderPath) ?: return false
+        val folderResult = folderCache.ensurePath(config.cloudRootFolderId, folderPath)
+        if (folderResult is ErrorResult) return false
+        val cloudFolderId = (folderResult as SuccessResult).value
         val children = cloudProvider.listChildren(cloudFolderId)
         return children is SuccessResult && children.value.any { it.name == remoteName }
-    }
-
-    private suspend fun resolveCloudFolderForPath(config: BackupConfigEntity, folderPath: String): String? {
-        if (folderPath.isEmpty()) return config.cloudRootFolderId
-        val segments = folderPath.split('/')
-        var currentId = config.cloudRootFolderId
-        for (segment in segments) {
-            val result = cloudProvider.getOrCreateChildFolder(currentId, segment)
-            if (result !is SuccessResult) return null
-            currentId = result.value.id
-        }
-        return currentId
     }
 
     private suspend fun emitUnreliableMtimeWarning(config: BackupConfigEntity, runId: String) {
@@ -168,7 +163,7 @@ class FileSystemAnalyzer(
                 timestamp = System.currentTimeMillis(),
                 severity = MessageSeverity.WARNING,
                 type = MessageType.UNRELIABLE_TIMESTAMPS,
-                messageText = context.getString(R.string.msg_unreliable_timestamps),
+                messageText = context.getString(MessageType.UNRELIABLE_TIMESTAMPS.labelResId),
                 formatArgs = emptyList(),
                 relativePath = null,
                 readAt = null,

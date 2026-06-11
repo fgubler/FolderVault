@@ -3,6 +3,7 @@ package ch.abwesend.foldervault.infrastructure.crypto
 import ch.abwesend.foldervault.domain.crypto.DecryptionError
 import ch.abwesend.foldervault.domain.crypto.Fvc1Header
 import ch.abwesend.foldervault.domain.crypto.IFvc1Cipher
+import ch.abwesend.foldervault.domain.crypto.classifyDecryptionError
 import ch.abwesend.foldervault.domain.result.BinaryResult
 import ch.abwesend.foldervault.domain.result.mapError
 import ch.abwesend.foldervault.domain.result.runCatchingAsResult
@@ -10,7 +11,6 @@ import java.io.DataOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.security.SecureRandom
-import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.SecretKey
 import javax.crypto.SecretKeyFactory
@@ -97,20 +97,15 @@ class Fvc1Cipher : IFvc1Cipher {
         // (that would close the caller-owned output stream prematurely).
         val dos = DataOutputStream(output)
         dos.write(MAGIC)
-        dos.write(FVC1_VERSION)
-        dos.write(KDF_ID_PBKDF2_SHA256)
+        dos.writeByte(FVC1_VERSION)
+        dos.writeByte(KDF_ID_PBKDF2_SHA256)
         dos.writeInt(PBKDF2_ITERATIONS)
-        dos.write(salt.size)
+        dos.writeByte(salt.size)
         dos.write(salt)
-        dos.write(iv.size)
+        dos.writeByte(iv.size)
         dos.write(iv)
         dos.flush()
     }
 
-    private fun toDecryptionError(e: Exception): DecryptionError = when {
-        e is AEADBadTagException -> DecryptionError.INVALID_PASSWORD
-        e.cause is AEADBadTagException -> DecryptionError.INVALID_PASSWORD
-        e is IllegalArgumentException -> DecryptionError.INVALID_FILE
-        else -> DecryptionError.UNKNOWN
-    }
+    private fun toDecryptionError(e: Exception): DecryptionError = classifyDecryptionError(e)
 }

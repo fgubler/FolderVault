@@ -24,13 +24,14 @@ class RetentionManager(
     }
 
     private suspend fun applyKeepLastN(configId: String, keepCount: Int) {
-        log.debug("Applying KeepLastN($keepCount) retention for config $configId")
+        val effective = keepCount.coerceAtLeast(1)
+        log.debug("Applying KeepLastN($effective) retention for config $configId")
         val paths = uploadedFileIndexDao.getDistinctPaths(configId)
         for (path in paths) {
             // Get all versions for this path, newest first
             val history = uploadedFileIndexDao.getVersionHistory(configId, path)
-            // Keep the newest keepCount; delete everything beyond that
-            val toDelete = history.drop(keepCount)
+            // Keep the newest effective count; delete everything beyond that
+            val toDelete = history.drop(effective)
             for (entry in toDelete) {
                 deleteCloudAndIndex(entry.cloudFileId, entry.id)
             }

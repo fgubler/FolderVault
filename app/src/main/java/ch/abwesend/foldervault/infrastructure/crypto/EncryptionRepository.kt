@@ -5,6 +5,7 @@ import ch.abwesend.foldervault.domain.crypto.DecryptionError
 import ch.abwesend.foldervault.domain.crypto.Fvc1Header
 import ch.abwesend.foldervault.domain.crypto.IEncryptionRepository
 import ch.abwesend.foldervault.domain.crypto.IKeyStoreRepository
+import ch.abwesend.foldervault.domain.crypto.classifyDecryptionError
 import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.result.BinaryResult
 import ch.abwesend.foldervault.domain.result.ifError
@@ -16,7 +17,6 @@ import kotlinx.serialization.json.Json
 import java.io.ByteArrayInputStream
 import java.security.SecureRandom
 import java.util.Base64
-import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.SecretKey
 import javax.crypto.SecretKeyFactory
@@ -28,13 +28,13 @@ class EncryptionRepository : IEncryptionRepository {
     private val keyStoreRepository: IKeyStoreRepository by injectAnywhere()
 
     companion object {
-        private const val AES_GCM_TRANSFORMATION = "AES/GCM/NoPadding"
-        private const val AES_KEY_SIZE_BITS = 256
-        private const val GCM_TAG_LENGTH_BITS = 128
-        private const val GCM_IV_LENGTH_BYTES = 12
-        private const val PBKDF2_ALGORITHM = "PBKDF2WithHmacSHA256"
-        private const val PBKDF2_ITERATIONS = 310_000
-        private const val PBKDF2_SALT_LENGTH_BYTES = 16
+        internal const val AES_GCM_TRANSFORMATION = "AES/GCM/NoPadding"
+        internal const val AES_KEY_SIZE_BITS = 256
+        internal const val GCM_TAG_LENGTH_BITS = 128
+        internal const val GCM_IV_LENGTH_BYTES = 12
+        internal const val PBKDF2_ALGORITHM = "PBKDF2WithHmacSHA256"
+        internal const val PBKDF2_ITERATIONS = 310_000
+        internal const val PBKDF2_SALT_LENGTH_BYTES = 16
         private const val JSON_VERSION = 1
     }
 
@@ -75,8 +75,8 @@ class EncryptionRepository : IEncryptionRepository {
      * a full GCM decrypt of [firstCiphertextBlock] (which must include the 16-byte GCM tag).
      * An incorrect password causes AEADBadTagException → DecryptionError.INVALID_PASSWORD.
      *
-     * Callers should pass the complete ciphertext of a small test file (e.g. the backup's
-     * .foldervault-meta.json.crypt) so the GCM tag is included and authentication can complete.
+     * Callers should pass the complete ciphertext of any FVC1 file from the backup so the
+     * GCM tag is included and authentication can complete.
      */
     override fun verifyPassword(
         headerBytes: ByteArray,
@@ -84,19 +84,12 @@ class EncryptionRepository : IEncryptionRepository {
         password: String,
     ): BinaryResult<Unit, DecryptionError> = runCatchingAsResult {
         val header = Fvc1Header.readFrom(ByteArrayInputStream(headerBytes))
-        val key = deriveKey(password, header.salt, header.iterations, aesKeySizeBits)
-        Cipher.getInstance(gcmTransformation).apply {
-            init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(gcmTagLengthBits, header.iv))
+        val key = deriveKey(password, header.salt, header.iterations, AES_KEY_SIZE_BITS)
+        Cipher.getInstance(AES_GCM_TRANSFORMATION).apply {
+            init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_LENGTH_BITS, header.iv))
         }.doFinal(firstCiphertextBlock)
         Unit
-    }.mapError { e ->
-        when {
-            e is AEADBadTagException -> DecryptionError.INVALID_PASSWORD
-            e.cause is AEADBadTagException -> DecryptionError.INVALID_PASSWORD
-            e is IllegalArgumentException -> DecryptionError.INVALID_FILE
-            else -> DecryptionError.UNKNOWN
-        }
-    }
+    }.mapError { e -> classifyDecryptionError(e) }
 
     // ---- Internal key derivation (used by §14.6 FVC1 extension) ----
 
@@ -107,21 +100,13 @@ class EncryptionRepository : IEncryptionRepository {
     }
 
     internal fun generateRandomBytes(size: Int): ByteArray = ByteArray(size).also { SecureRandom().nextBytes(it) }
-
-    internal val gcmTransformation get() = AES_GCM_TRANSFORMATION
-    internal val gcmTagLengthBits get() = GCM_TAG_LENGTH_BITS
-    internal val gcmIvLengthBytes get() = GCM_IV_LENGTH_BYTES
-    internal val pbkdf2Algorithm get() = PBKDF2_ALGORITHM
-    internal val pbkdf2Iterations get() = PBKDF2_ITERATIONS
-    internal val pbkdf2SaltLengthBytes get() = PBKDF2_SALT_LENGTH_BYTES
-    internal val aesKeySizeBits get() = AES_KEY_SIZE_BITS
 }
 
 @Serializable
 private data class EncryptedPasswordPayload(
     val version: Int,
     val algorithm: String,
-    val tagLength:Int,
+    val tagLength: Int,
     val iv: String,
     val ciphertext: String,
 )

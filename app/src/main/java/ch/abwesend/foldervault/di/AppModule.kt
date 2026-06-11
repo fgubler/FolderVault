@@ -9,6 +9,7 @@ import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.crypto.IEncryptionRepository
 import ch.abwesend.foldervault.domain.crypto.IFvc1Cipher
 import ch.abwesend.foldervault.domain.crypto.IKeyStoreRepository
+import ch.abwesend.foldervault.domain.logging.ITelemetryToggle
 import ch.abwesend.foldervault.domain.restore.IRestoreEngine
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
 import ch.abwesend.foldervault.infrastructure.backup.BackupConfigRepository
@@ -20,6 +21,7 @@ import ch.abwesend.foldervault.infrastructure.cloud.googledrive.GoogleDriveAutho
 import ch.abwesend.foldervault.infrastructure.crypto.AndroidKeyStoreRepository
 import ch.abwesend.foldervault.infrastructure.crypto.EncryptionRepository
 import ch.abwesend.foldervault.infrastructure.crypto.Fvc1Cipher
+import ch.abwesend.foldervault.infrastructure.logging.FirebaseTelemetryToggle
 import ch.abwesend.foldervault.infrastructure.restore.RestoreEngine
 import ch.abwesend.foldervault.infrastructure.room.FolderVaultDatabase
 import ch.abwesend.foldervault.infrastructure.settings.AppSettingsRepository
@@ -54,6 +56,7 @@ val appModule = module {
 
     // Settings
     single<IAppSettingsRepository> { AppSettingsRepository(androidContext()) }
+    single<ITelemetryToggle> { FirebaseTelemetryToggle(androidContext()) }
 
     // Backup notifications and scheduling
     single { BackupNotificationManager(androidContext(), get(), get()) }
@@ -78,7 +81,7 @@ val appModule = module {
     viewModel { RestoreViewModel(get()) }
     viewModel { HomeViewModel(get(), get()) }
     viewModel { OnboardingViewModel(get()) }
-    viewModel { SettingsViewModel(get()) }
+    viewModel { SettingsViewModel(get(), get()) }
     viewModel { params ->
         AddEditBackupViewModel(
             configRepo = get(),

@@ -240,7 +240,11 @@ private fun StatusSection(config: BackupConfig) {
     }
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(stringResource(R.string.status_section_header), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-        Text(stringResource(config.lastRunStatus.labelResId()), style = MaterialTheme.typography.bodyMedium, color = statusColor)
+        Text(
+            stringResource(config.lastRunStatus.labelResId),
+            style = MaterialTheme.typography.bodyMedium,
+            color = statusColor,
+        )
         if (config.totalFilesDiscovered > 0) {
             Text(
                 stringResource(R.string.progress_text, config.filesUploadedTotal, config.totalFilesDiscovered),
@@ -328,7 +332,7 @@ private fun MessageItem(
         Column(modifier = Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = stringResource(message.severity.labelResId()),
+                    text = stringResource(message.severity.labelResId),
                     style = MaterialTheme.typography.labelSmall,
                     color = borderColor,
                     modifier = Modifier.weight(1f),
@@ -341,7 +345,7 @@ private fun MessageItem(
                     )
                 }
             }
-            val text = message.messageText ?: stringResource(message.type.labelResId())
+            val text = message.messageText ?: stringResource(message.type.labelResId)
             Text(text, style = MaterialTheme.typography.bodySmall)
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -422,40 +426,6 @@ private fun BackupSchedule.labelResId(): Int = when (this) {
     BackupSchedule.DAILY -> R.string.schedule_daily
     BackupSchedule.WEEKLY -> R.string.schedule_weekly
     BackupSchedule.MONTHLY -> R.string.schedule_monthly
-}
-
-@StringRes
-private fun BackupRunStatus.labelResId(): Int = when (this) {
-    BackupRunStatus.IDLE -> R.string.status_idle
-    BackupRunStatus.RUNNING -> R.string.status_running
-    BackupRunStatus.INITIAL_SYNC_IN_PROGRESS -> R.string.status_initial_sync_in_progress
-    BackupRunStatus.UP_TO_DATE -> R.string.status_up_to_date
-    BackupRunStatus.COMPLETED_WITH_WARNINGS -> R.string.status_completed_with_warnings
-    BackupRunStatus.FAILED -> R.string.status_failed
-}
-
-@StringRes
-private fun MessageSeverity.labelResId(): Int = when (this) {
-    MessageSeverity.INFO -> R.string.severity_info
-    MessageSeverity.WARNING -> R.string.severity_warning
-    MessageSeverity.ERROR -> R.string.severity_error
-    MessageSeverity.CRITICAL -> R.string.severity_critical
-}
-
-@StringRes
-private fun MessageType.labelResId(): Int = when (this) {
-    MessageType.AUTH_LOST -> R.string.msg_auth_lost
-    MessageType.FOLDER_UNREADABLE -> R.string.msg_folder_unreadable
-    MessageType.FILE_TOO_LARGE -> R.string.msg_file_too_large
-    MessageType.UPLOAD_FAILED -> R.string.msg_upload_failed
-    MessageType.ENCRYPTION_FAILED -> R.string.msg_encryption_failed
-    MessageType.INITIAL_SYNC_COMPLETE -> R.string.msg_initial_sync_complete
-    MessageType.QUOTA_EXCEEDED -> R.string.msg_quota_exceeded
-    MessageType.UNRELIABLE_TIMESTAMPS -> R.string.msg_unreliable_timestamps
-    MessageType.RATE_LIMITED -> R.string.msg_rate_limited
-    MessageType.GENERIC_INFO -> R.string.msg_generic_info
-    MessageType.GENERIC_WARNING -> R.string.msg_generic_warning
-    MessageType.GENERIC_ERROR -> R.string.msg_generic_error
 }
 
 @Preview(showBackground = true)

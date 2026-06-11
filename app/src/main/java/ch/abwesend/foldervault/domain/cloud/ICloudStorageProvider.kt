@@ -5,7 +5,7 @@ import ch.abwesend.foldervault.domain.result.BinaryResult
 interface ICloudStorageProvider {
     suspend fun getAccountIdentifier(): BinaryResult<String, Exception>
 
-    suspend fun createRootFolder(displayName: String): BinaryResult<CloudFolder, Exception>
+    suspend fun createRootFolder(): BinaryResult<CloudFolder, Exception>
 
     suspend fun hasFolderAccess(folderId: String): BinaryResult<Boolean, Exception>
 

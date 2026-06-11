@@ -7,6 +7,57 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-06-11 — review-plan: Tiers 2, 3, 1, and 4 (full review-plan execution)
+
+### Tier 2 — Bug fixes (prior session)
+- **`WorkerErrorHandler`**: `CancellationException` is now re-thrown instead of returning `Result.retry()`.
+- **Backup while paused**: `BackupDetailViewModel.backUpNow()` now checks `isPaused` and skips scheduling if true.
+- **`KeepLastN(0)`**: Added `require(count > 0)` guard.
+- **`BackupRunStatus.labelResId`**: Changed from `labelResId()` function to `val labelResId: Int` property (consistent with other enums).
+- **`MessageType.FILE_TOO_LARGE`**: Added to `MessageType` enum with `notifies = false`.
+- **`BackupMessageDao.coalesceInsert`**: Added to DAO; `BackupUploader` and `FileSystemAnalyzer` use it to deduplicate messages per run.
+- **`INITIAL_SYNC_IN_PROGRESS` status**: Added to `BackupRunStatus` enum; `BackupRunner` sets it when `hitTimeBudget`.
+- **`notificationThrottleStateDao`**: Added missing DAO binding in `AppModule`.
+- **Quota per-file counting**: `BackupUploader.tryUpload` uses `consecutiveQuotaCount` with a 2-strike threshold.
+- **Worker requeue on progress**: `BackupWorker` re-enqueues via `scheduleExpedited` when `hitTimeBudget`.
+
+### Tier 3 — Refactors (prior session + current)
+- **3.1 `MessageType` and `MessageSeverity`**: Both now have `@StringRes val labelResId: Int` constructor param; old `labelResId()` functions removed from screen files. `ArchitectureLayerTest` whitelisted `androidx.annotation` in domain.
+- **3.2 `AppSettings` enum serialization**: `DataStore` key helpers use `inline fun <reified E> Preferences.Key` wrapper; `AppSettingsRepository` no longer imports specific enum types.
+- **3.3 `BackupUploader.kt`**: Extracted `tryUpload` / `handleAuthError` / `commitSuccess` methods; main loop is now ~10 lines.
+- **3.4 `AddEditBackupScreen` `RetentionPicker`**: `remember` replaced with `remember(policy)` for correct state invalidation.
+- **3.5 `HomeViewModel`**: `combine(configList.map {...})` properly wrapped with `SharingStarted.WhileSubscribed`.
+- **3.6 `RestoreViewModel`**: Collapsed 6 separate `MutableStateFlow`s into a single `MutableStateFlow<RestoreUiState>` data class; screen updated to use single `collectAsState()`.
+- **3.7 `FileSystemAnalyzer`**: Returns `Int` (files discovered count); analyzer and uploader run as separate coroutines via a two-tier `Channel` pipeline.
+
+### Tier 1 — Feature additions (current session)
+- **1.1 `BackupMeta`**: New `@Serializable` domain model; `AddEditBackupViewModel.writeMetaFile()` writes `.foldervault-meta.json` after folder creation.
+- **1.2 `ITelemetryToggle`**: New domain interface; `FirebaseTelemetryToggle` impl toggles both Crashlytics and Analytics; wired in `AppModule`; `SettingsViewModel` calls it on every `setAnonymousErrorReports`; `FolderVaultApp` applies saved setting on startup.
+- **1.3 `SettingsScreen`**: Added file size limit `OutlinedTextField` (MB, numeric) with `InfoIconButton` popup; new `FileSizeLimitField` composable; new `strings.xml` entries.
+- **1.4 Cross-run progress**: `RunSummary.totalFilesDiscovered` set from `analyzer.analyze()` return value; `BackupWorker` reads `filesUploadedTotal`/`totalFilesDiscovered` from DAO for initial foreground notification.
+- **1.5 `INITIAL_SYNC_COMPLETE` message**: `BackupRunner` emits INFO message when previous run had `INITIAL_SYNC_IN_PROGRESS` and current run completes cleanly.
+- **1.5 `FILE_TOO_LARGE` in uploader**: OVERSIZED tasks increment `oversizedCount` and emit `FILE_TOO_LARGE` WARNING; upload is skipped.
+- **1.6 `BackupNotificationManager`**: Problem notification body now lists joined short phrases (e.g. "auth lost, upload failed") via `notifPhraseResId()` extension on `MessageType`; new `strings.xml` entries; `NOTIFYING_TYPES` cached in companion.
+
+### Tier 4 — Minor cleanups (current session)
+- **4.1 `BackupUploader.cloudProvider`**: Moved from mutable public `var` to constructor parameter; stored as `private var` for re-auth rebinding.
+- **4.2 `FolderPathCache`**: Replaced `containsKey + cache[key]!!` double lookup with `cache[key]?.let { ... }` idiom.
+- **4.4/4.5 `EncryptionRepository`**: Test-only getter shims removed; constants promoted to `internal const val`; missing space in `tagLength: Int` fixed.
+- **4.6 `BackupNotificationManager.createForegroundInfo`**: Removed unused `configName` parameter; call sites in `BackupWorker` updated.
+- **4.7 `BackupRunner`**: Replaced fully-qualified `javax.crypto.SecretKey` and `java.util.Base64` references with imports.
+- **4.8 `BackupNotificationManager`**: `NOTIFYING_TYPES` cached in companion `val`.
+- **4.9 `SettingsScreen`**: Replaced `{ /* graceful */ }` empty lambda with `{ _ -> }`.
+
+### Tests added/updated
+- `BackupUploaderTest`: Added OVERSIZED task test; updated constructor calls for `cloudProvider` param.
+- `SettingsViewModelTest` (new): `FakeTelemetryToggle` + tests for `setAnonymousErrorReports(true/false)`.
+- `AddEditBackupViewModelTest` (new): Tests that `startDriveSetup` invokes `writeRootMetadata` with `.foldervault-meta.json`.
+
+### All checks passed
+`./gradlew assembleDebug` ✓ `./gradlew test` ✓ `./gradlew detekt` ✓
+
+---
+
 ## 2026-06-11 — i18n: extract all UI strings to strings.xml
 
 ### What was done

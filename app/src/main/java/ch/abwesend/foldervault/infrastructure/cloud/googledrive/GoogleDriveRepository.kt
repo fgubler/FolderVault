@@ -52,7 +52,7 @@ class GoogleDriveRepository(private val drive: Drive) : ICloudStorageProvider {
             }
         }
 
-    override suspend fun createRootFolder(displayName: String): BinaryResult<CloudFolder, Exception> =
+    override suspend fun createRootFolder(): BinaryResult<CloudFolder, Exception> =
         withContext(dispatchers.io) {
             runCatchingAsResult {
                 retryingDriveCall {
@@ -89,15 +89,24 @@ class GoogleDriveRepository(private val drive: Drive) : ICloudStorageProvider {
                 retryingDriveCall {
                     val query = "'$parentId' in parents and name = '$name' " +
                         "and mimeType = '$FOLDER_MIME_TYPE' and trashed = false"
-                    val matches = drive.files().list()
-                        .setQ(query)
-                        .setFields("files(id, name, createdTime)")
-                        .setSpaces("drive")
-                        .execute().files.orEmpty()
+                    val allMatches = buildList {
+                        var pageToken: String? = null
+                        do {
+                            val page = drive.files().list()
+                                .setQ(query)
+                                .setFields("nextPageToken, files(id, name, createdTime)")
+                                .setSpaces("drive")
+                                .setPageSize(1000)
+                                .apply { if (pageToken != null) this.pageToken = pageToken }
+                                .execute()
+                            addAll(page.files.orEmpty())
+                            pageToken = page.nextPageToken
+                        } while (pageToken != null)
+                    }
 
                     // Drive can accumulate duplicates from interrupted runs.
                     // Pick deterministic winner: oldest by createdTime, tie-broken by smallest id.
-                    val winner = matches
+                    val winner = allMatches
                         .sortedWith(compareBy({ it.createdTime?.value ?: Long.MAX_VALUE }, { it.id }))
                         .firstOrNull()
 

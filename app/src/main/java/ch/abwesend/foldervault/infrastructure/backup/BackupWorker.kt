@@ -33,8 +33,13 @@ class BackupWorker(
 
     override suspend fun doWork(): Result {
         val configId = inputData.getString(KEY_CONFIG_ID)
-        val configName = configId?.let { backupConfigDao.getByIdOnce(it)?.displayName } ?: ""
-        setForeground(notificationManager.createForegroundInfo(configName, 0, 0))
+        val initialConfig = configId?.let { backupConfigDao.getByIdOnce(it) }
+        setForeground(
+            notificationManager.createForegroundInfo(
+                initialConfig?.filesUploadedTotal ?: 0,
+                initialConfig?.totalFilesDiscovered ?: 0,
+            )
+        )
 
         return errorHandler.doWorkWithErrorHandling(
             workDescription = "FolderVault backup",
@@ -52,7 +57,7 @@ class BackupWorker(
             notificationManager.postProblemNotificationIfNeeded(
                 configId = id,
                 configName = config.displayName,
-                runId = id, // simplified — in v1.1, runId from RunSummary/RunResult
+                runId = result.runId,
             )
 
             when (result) {
@@ -68,8 +73,8 @@ class BackupWorker(
                     }
                 }
                 is RunResult.AuthLost -> {
-                    logger.warning("Backup run for $id lost auth; will retry on next periodic")
-                    Result.failure()
+                    logger.warning("Backup run for $id lost auth; retrying with WorkManager backoff")
+                    Result.retry()
                 }
                 is RunResult.FatalError -> {
                     logger.error("Backup run for $id failed fatally", result.error)
@@ -82,7 +87,10 @@ class BackupWorker(
     override suspend fun getForegroundInfo(): ForegroundInfo {
         // Best-effort — may be called before any config is loaded
         val configId = inputData.getString(KEY_CONFIG_ID)
-        val configName = configId?.let { backupConfigDao.getByIdOnce(it)?.displayName } ?: ""
-        return notificationManager.createForegroundInfo(configName, 0, 0)
+        val config = configId?.let { backupConfigDao.getByIdOnce(it) }
+        return notificationManager.createForegroundInfo(
+            config?.filesUploadedTotal ?: 0,
+            config?.totalFilesDiscovered ?: 0,
+        )
     }
 }

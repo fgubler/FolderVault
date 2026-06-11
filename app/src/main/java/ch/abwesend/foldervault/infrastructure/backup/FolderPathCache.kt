@@ -24,14 +24,15 @@ class FolderPathCache(private val provider: ICloudStorageProvider) {
             if (builder.isNotEmpty()) builder.append('/')
             builder.append(segment)
             val key = builder.toString()
-            if (cache.containsKey(key)) {
-                currentId = cache[key]!!
-                continue
+            val cached = cache[key]
+            if (cached != null) {
+                currentId = cached
+            } else {
+                val result = provider.getOrCreateChildFolder(currentId, segment)
+                if (result is ErrorResult) return result
+                currentId = (result as SuccessResult).value.id
+                cache[key] = currentId
             }
-            val result = provider.getOrCreateChildFolder(currentId, segment)
-            if (result is ErrorResult) return result
-            currentId = (result as SuccessResult).value.id
-            cache[key] = currentId
         }
         return SuccessResult(currentId)
     }

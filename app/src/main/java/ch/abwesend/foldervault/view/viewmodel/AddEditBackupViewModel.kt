@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.backup.BackupConfig
+import ch.abwesend.foldervault.domain.backup.BackupMeta
 import ch.abwesend.foldervault.domain.backup.IBackupConfigRepository
 import ch.abwesend.foldervault.domain.backup.IBackupScheduler
 import ch.abwesend.foldervault.domain.cloud.CloudAuthResult
@@ -28,6 +29,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
+import java.time.Instant
 import java.util.Base64
 import java.util.UUID
 
@@ -172,17 +175,31 @@ class AddEditBackupViewModel(
 
     private suspend fun createCloudFolder(provider: ICloudStorageProvider) {
         updateForm { it.copy(cloudSetup = CloudSetupState.CreatingFolder) }
-        val folderName = "FolderVault_${UUID.randomUUID()}"
-        val folderResult = provider.createRootFolder(folderName)
+        val folderResult = provider.createRootFolder()
         val accountResult = provider.getAccountIdentifier()
         if (folderResult is SuccessResult && accountResult is SuccessResult) {
             val folder = folderResult.value
             updateForm {
                 it.copy(cloudSetup = CloudSetupState.Done(folder.id, folder.name, accountResult.value))
             }
+            writeMetaFile(provider, folder.id)
         } else {
             updateForm { it.copy(cloudSetup = CloudSetupState.Error(UiText.Resource(R.string.error_create_folder_failed))) }
         }
+    }
+
+    private suspend fun writeMetaFile(provider: ICloudStorageProvider, folderId: String) {
+        val form = _form.value
+        val meta = BackupMeta(
+            displayName = form.displayName,
+            createdAt = Instant.now().toString(),
+            encrypted = form.encryptionEnabled,
+        )
+        provider.writeRootMetadata(
+            folderId,
+            BackupMeta.CLOUD_FILE_NAME,
+            Json.encodeToString(meta).toByteArray(Charsets.UTF_8),
+        )
     }
 
     fun save() {
@@ -266,9 +283,10 @@ class AddEditBackupViewModel(
         )
     }
 
-    private fun extractFolderDisplayName(uri: String): String {
-        if (uri.isBlank()) return ""
-        return uri.substringAfterLast('%').substringAfterLast('/').ifEmpty { uri.substringAfterLast('/') }
+    private fun extractFolderDisplayName(uriString: String): String {
+        if (uriString.isBlank()) return ""
+        return android.net.Uri.parse(uriString).lastPathSegment
+            ?.substringAfterLast(':')?.takeIf { it.isNotBlank() } ?: uriString
     }
 
     private fun updateForm(transform: (AddEditFormState) -> AddEditFormState) {

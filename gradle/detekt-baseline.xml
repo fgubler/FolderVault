@@ -2,6 +2,35 @@
 <SmellBaseline>
   <ManuallySuppressedIssues/>
   <CurrentIssues>
+    <ID>ArgumentListWrapping:AddEditBackupScreen.kt$(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.button_back_cd))</ID>
+    <ID>ArgumentListWrapping:AddEditBackupScreen.kt$(R.string.button_back_cd)</ID>
+    <ID>ArgumentListWrapping:AddEditBackupScreen.kt$(R.string.cloud_status_done, cloudSetup.accountId, cloudSetup.folderName)</ID>
+    <ID>ArgumentListWrapping:AddEditBackupScreen.kt$(if (configId == null) R.string.add_backup_title else R.string.edit_backup_title)</ID>
+    <ID>ArgumentListWrapping:AddEditBackupScreen.kt$(stringResource(if (configId == null) R.string.add_backup_title else R.string.edit_backup_title))</ID>
+    <ID>ArgumentListWrapping:AddEditBackupViewModel.kt$AddEditBackupViewModel$(R.string.error_auth_failed)</ID>
+    <ID>ArgumentListWrapping:AddEditBackupViewModel.kt$AddEditBackupViewModel$(R.string.error_create_folder_failed)</ID>
+    <ID>ArgumentListWrapping:AddEditBackupViewModel.kt$AddEditBackupViewModel$(R.string.error_encryption_setup_failed)</ID>
+    <ID>ArgumentListWrapping:AddEditBackupViewModel.kt$AddEditBackupViewModel$(R.string.error_passwords_dont_match)</ID>
+    <ID>ArgumentListWrapping:AddEditBackupViewModel.kt$AddEditBackupViewModel$(UiText.Resource(R.string.error_auth_failed))</ID>
+    <ID>ArgumentListWrapping:AddEditBackupViewModel.kt$AddEditBackupViewModel$(UiText.Resource(R.string.error_create_folder_failed))</ID>
+    <ID>ArgumentListWrapping:AddEditBackupViewModel.kt$AddEditBackupViewModel$(cloudSetup = CloudSetupState.Error(UiText.Resource(R.string.error_auth_failed)))</ID>
+    <ID>ArgumentListWrapping:AddEditBackupViewModel.kt$AddEditBackupViewModel$(cloudSetup = CloudSetupState.Error(UiText.Resource(R.string.error_create_folder_failed)))</ID>
+    <ID>ArgumentListWrapping:AddEditBackupViewModel.kt$AddEditBackupViewModel$(isSaving = false, errorMessage = UiText.Resource(R.string.error_encryption_setup_failed))</ID>
+    <ID>ArgumentListWrapping:BackupDetailScreen.kt$(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.button_back_cd))</ID>
+    <ID>ArgumentListWrapping:BackupDetailScreen.kt$(R.string.button_back_cd)</ID>
+    <ID>ArgumentListWrapping:BackupDetailScreen.kt$(R.string.status_section_header)</ID>
+    <ID>ArgumentListWrapping:BackupDetailScreen.kt$(config.lastRunStatus.labelResId())</ID>
+    <ID>ArgumentListWrapping:BackupDetailScreen.kt$(if (config.networkPolicy == NetworkPolicy.WIFI_ONLY) R.string.network_wifi_only else R.string.network_any_short)</ID>
+    <ID>ArgumentListWrapping:BackupDetailScreen.kt$(stringResource(R.string.status_section_header), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)</ID>
+    <ID>ArgumentListWrapping:BackupDetailScreen.kt$(stringResource(config.lastRunStatus.labelResId()), style = MaterialTheme.typography.bodyMedium, color = statusColor)</ID>
+    <ID>ArgumentListWrapping:RestoreScreen.kt$(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.button_back_cd))</ID>
+    <ID>ArgumentListWrapping:RestoreScreen.kt$(R.string.button_back_cd)</ID>
+    <ID>ArgumentListWrapping:RestoreScreen.kt$(R.string.restore_verifying_password)</ID>
+    <ID>ArgumentListWrapping:RestoreScreen.kt$(if (outputUri != null) R.string.restore_output_selected else R.string.restore_pick_output_folder)</ID>
+    <ID>ArgumentListWrapping:RestoreScreen.kt$(stringResource(R.string.restore_verifying_password), style = MaterialTheme.typography.bodyMedium)</ID>
+    <ID>ArgumentListWrapping:RestoreScreen.kt$(stringResource(if (outputUri != null) R.string.restore_output_selected else R.string.restore_pick_output_folder))</ID>
+    <ID>ArgumentListWrapping:SettingsScreen.kt$(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.button_back_cd))</ID>
+    <ID>ArgumentListWrapping:SettingsScreen.kt$(R.string.button_back_cd)</ID>
     <ID>BlockCommentInitialStarAlignment:Theme.kt$/* Other default colors to override background = Color(0xFFFFFBFE), surface = Color(0xFFFFFBFE), onPrimary = Color.White, onSecondary = Color.White, onTertiary = Color.White, onBackground = Color(0xFF1C1B1F), onSurface = Color(0xFF1C1B1F), */</ID>
     <ID>BlockCommentInitialStarAlignment:Type.kt$/* Other default text styles to override titleLarge = TextStyle( fontFamily = FontFamily.Default, fontWeight = FontWeight.Normal, fontSize = 22.sp, lineHeight = 28.sp, letterSpacing = 0.sp ), labelSmall = TextStyle( fontFamily = FontFamily.Default, fontWeight = FontWeight.Medium, fontSize = 11.sp, lineHeight = 16.sp, letterSpacing = 0.5.sp ) */</ID>
     <ID>FinalNewline:Color.kt$ch.abwesend.foldervault.ui.theme.Color.kt</ID>
@@ -10,8 +39,27 @@
     <ID>FinalNewline:Type.kt$ch.abwesend.foldervault.ui.theme.Type.kt</ID>
     <ID>ImportOrdering:ExampleUnitTest.kt$import org.junit.Test import org.junit.Assert.*</ID>
     <ID>InvalidPackageDeclaration:ExampleUnitTest.kt$package ch.abwesend.foldervault</ID>
-    <ID>MaxLineLength:GoogleDriveRepository.kt$GoogleDriveRepository$override suspend</ID>
-    <ID>MaximumLineLength:GoogleDriveRepository.kt$GoogleDriveRepository$ </ID>
+    <ID>LongMethod:BackupRunner.kt$BackupRunner$@Suppress("CyclomaticComplexMethod", "ReturnCount") suspend fun runBackup(configId: String, deadline: Instant? = null): RunResult</ID>
+    <ID>MaxLineLength:AddEditBackupScreen.kt$Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.button_back_cd))</ID>
+    <ID>MaxLineLength:AddEditBackupScreen.kt$is CloudSetupState.Done -&gt; stringResource(R.string.cloud_status_done, cloudSetup.accountId, cloudSetup.folderName)</ID>
+    <ID>MaxLineLength:AddEditBackupScreen.kt$title = { Text(stringResource(if (configId == null) R.string.add_backup_title else R.string.edit_backup_title)) }</ID>
+    <ID>MaxLineLength:AddEditBackupViewModel.kt$AddEditBackupViewModel$state.encryptionEnabled &amp;&amp; state.password != state.passwordConfirm -&gt; UiText.Resource(R.string.error_passwords_dont_match)</ID>
+    <ID>MaxLineLength:AddEditBackupViewModel.kt$AddEditBackupViewModel$updateForm { it.copy(cloudSetup = CloudSetupState.Error(UiText.Resource(R.string.error_auth_failed))) }</ID>
+    <ID>MaxLineLength:AddEditBackupViewModel.kt$AddEditBackupViewModel$updateForm { it.copy(cloudSetup = CloudSetupState.Error(UiText.Resource(R.string.error_create_folder_failed))) }</ID>
+    <ID>MaxLineLength:AddEditBackupViewModel.kt$AddEditBackupViewModel$updateForm { it.copy(isSaving = false, errorMessage = UiText.Resource(R.string.error_encryption_setup_failed)) }</ID>
+    <ID>MaxLineLength:BackupDetailScreen.kt$Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.button_back_cd))</ID>
+    <ID>MaxLineLength:BackupDetailScreen.kt$Text(stringResource(R.string.status_section_header), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)</ID>
+    <ID>MaxLineLength:BackupDetailScreen.kt$Text(stringResource(config.lastRunStatus.labelResId()), style = MaterialTheme.typography.bodyMedium, color = statusColor)</ID>
+    <ID>MaxLineLength:BackupDetailScreen.kt$stringResource(if (config.networkPolicy == NetworkPolicy.WIFI_ONLY) R.string.network_wifi_only else R.string.network_any_short)</ID>
+    <ID>MaxLineLength:RestoreScreen.kt$Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.button_back_cd))</ID>
+    <ID>MaxLineLength:RestoreScreen.kt$Text(stringResource(R.string.restore_verifying_password), style = MaterialTheme.typography.bodyMedium)</ID>
+    <ID>MaxLineLength:RestoreScreen.kt$Text(stringResource(if (outputUri != null) R.string.restore_output_selected else R.string.restore_pick_output_folder))</ID>
+    <ID>MaxLineLength:SettingsScreen.kt$Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.button_back_cd))</ID>
+    <ID>MaximumLineLength:AddEditBackupScreen.kt$ </ID>
+    <ID>MaximumLineLength:AddEditBackupViewModel.kt$AddEditBackupViewModel$ </ID>
+    <ID>MaximumLineLength:BackupDetailScreen.kt$ </ID>
+    <ID>MaximumLineLength:RestoreScreen.kt$ </ID>
+    <ID>MaximumLineLength:SettingsScreen.kt$ </ID>
     <ID>ModifierMissing:HomeScreen.kt$HomeScreen</ID>
     <ID>ModifierMissing:OnboardingScreen.kt$OnboardingScreen</ID>
     <ID>ModifierMissing:SettingsScreen.kt$SettingsScreen</ID>
@@ -21,15 +69,9 @@
     <ID>NewLineAtEndOfFile:ExampleUnitTest.kt$ch.abwesend.foldervault.ExampleUnitTest.kt</ID>
     <ID>NewLineAtEndOfFile:Theme.kt$ch.abwesend.foldervault.ui.theme.Theme.kt</ID>
     <ID>NewLineAtEndOfFile:Type.kt$ch.abwesend.foldervault.ui.theme.Type.kt</ID>
-    <ID>NoUnusedImports:EncryptionRepository.kt$ch.abwesend.foldervault.infrastructure.crypto.EncryptionRepository.kt</ID>
     <ID>NoUnusedImports:Theme.kt$ch.abwesend.foldervault.ui.theme.Theme.kt</ID>
     <ID>NoWildcardImports:ExampleUnitTest.kt$import org.junit.Assert.*</ID>
     <ID>SpacingAroundColon:EncryptionRepository.kt$EncryptedPasswordPayload$:</ID>
-    <ID>SpacingBetweenDeclarationsWithAnnotations:AppDestination.kt$AppDestination$Home : AppDestination</ID>
-    <ID>SpacingBetweenDeclarationsWithAnnotations:AppDestination.kt$AppDestination$Settings : AppDestination</ID>
-    <ID>UnusedParameter:HomeScreen.kt$onOpenSettings: () -&gt; Unit</ID>
-    <ID>UnusedParameter:OnboardingScreen.kt$onComplete: () -&gt; Unit</ID>
-    <ID>UnusedParameter:SettingsScreen.kt$onBack: () -&gt; Unit</ID>
     <ID>UseCheckOrError:EncryptionRepository.kt$EncryptionRepository$throw IllegalStateException("No KeyStore key available")</ID>
     <ID>WildcardImport:ExampleUnitTest.kt$import org.junit.Assert.*</ID>
   </CurrentIssues>

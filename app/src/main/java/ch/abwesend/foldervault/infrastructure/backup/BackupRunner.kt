@@ -1,6 +1,7 @@
 package ch.abwesend.foldervault.infrastructure.backup
 
 import android.content.Context
+import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.backup.CloudManifest
 import ch.abwesend.foldervault.domain.backup.ManifestEntry
 import ch.abwesend.foldervault.domain.cloud.CloudAuthResult
@@ -11,12 +12,15 @@ import ch.abwesend.foldervault.domain.crypto.IEncryptionRepository
 import ch.abwesend.foldervault.domain.crypto.IFvc1Cipher
 import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.model.BackupRunStatus
+import ch.abwesend.foldervault.domain.model.MessageSeverity
+import ch.abwesend.foldervault.domain.model.MessageType
 import ch.abwesend.foldervault.domain.result.SuccessResult
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupConfigDao
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupMessageDao
 import ch.abwesend.foldervault.infrastructure.room.dao.UploadedFileIndexDao
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupConfigEntity
+import ch.abwesend.foldervault.infrastructure.room.entity.BackupMessageEntity
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
@@ -24,12 +28,15 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.time.Instant
+import java.util.Base64
 import java.util.UUID
+import javax.crypto.SecretKey
 
 sealed class RunResult {
-    data class Success(val summary: RunSummary) : RunResult()
-    data class AuthLost(val summary: RunSummary) : RunResult()
-    data class FatalError(val error: Exception, val summary: RunSummary) : RunResult()
+    abstract val runId: String
+    data class Success(val summary: RunSummary, override val runId: String) : RunResult()
+    data class AuthLost(val summary: RunSummary, override val runId: String) : RunResult()
+    data class FatalError(val error: Exception, val summary: RunSummary, override val runId: String) : RunResult()
 }
 
 class BackupRunner(
@@ -45,16 +52,17 @@ class BackupRunner(
 ) {
     private val log get() = logger
 
-    @Suppress("CyclomaticComplexMethod")
+    @Suppress("CyclomaticComplexMethod", "ReturnCount")
     suspend fun runBackup(configId: String, deadline: Instant? = null): RunResult {
+        val runId = UUID.randomUUID().toString()
         val config = backupConfigDao.getByIdOnce(configId)
             ?: return RunResult.FatalError(
                 IllegalStateException("Backup config $configId not found"),
                 RunSummary(),
+                runId,
             )
 
         val summary = RunSummary()
-        val runId = UUID.randomUUID().toString()
 
         // Clean up stale staging dirs from previous interrupted runs
         val stagingRoot = File(context.cacheDir, "encrypt-staging")
@@ -66,7 +74,7 @@ class BackupRunner(
         val authResult = authorizer.authorize()
         if (authResult !is CloudAuthResult.Authorized) {
             summary.authLost = true
-            return RunResult.AuthLost(summary)
+            return RunResult.AuthLost(summary, runId)
         }
         val cloudProvider: ICloudStorageProvider = authResult.data
 
@@ -81,8 +89,8 @@ class BackupRunner(
             uploadedFileIndexDao = uploadedFileIndexDao,
             backupMessageDao = backupMessageDao,
             dispatchers = dispatchers,
+            cloudProvider = cloudProvider,
         )
-        uploader.cloudProvider = cloudProvider
 
         val analyzer = FileSystemAnalyzer(
             context = context,
@@ -95,7 +103,23 @@ class BackupRunner(
         try {
             // Derive the per-run encryption key once (PBKDF2 is too slow to run per-file)
             val encryptionKey = deriveEncryptionKey(config, summary)
-                ?: error("Failed to decrypt backup password")
+            if (encryptionKey == null) {
+                backupMessageDao.coalesceInsert(
+                    BackupMessageEntity(
+                        backupConfigId = config.id,
+                        runId = runId,
+                        timestamp = System.currentTimeMillis(),
+                        severity = MessageSeverity.ERROR,
+                        type = MessageType.ENCRYPTION_FAILED,
+                        messageText = context.getString(R.string.msg_encryption_failed),
+                        formatArgs = emptyList(),
+                        relativePath = null,
+                        readAt = null,
+                    )
+                )
+                commitRunStats(config.id, BackupRunStatus.FAILED, summary, false)
+                return RunResult.FatalError(IllegalStateException("Failed to decrypt backup password"), summary, runId)
+            }
             val (derivedKey, backupSalt) = encryptionKey
 
             runPipeline(
@@ -104,7 +128,6 @@ class BackupRunner(
             )
             if (!summary.authLost && !summary.quotaExceeded && !summary.hitTimeBudget) {
                 RetentionManager(uploadedFileIndexDao, cloudProvider).applyRetention(config)
-                MessageRetentionManager(backupMessageDao).prune(config.id)
             }
             if (!summary.authLost) writeManifest(configId, cloudProvider)
         } catch (e: Exception) {
@@ -115,7 +138,9 @@ class BackupRunner(
                 summary = summary,
                 completedNormally = false,
             )
-            return RunResult.FatalError(e, summary)
+            return RunResult.FatalError(e, summary, runId)
+        } finally {
+            MessageRetentionManager(backupMessageDao).prune(config.id)
         }
 
         val status = when {
@@ -125,6 +150,22 @@ class BackupRunner(
             summary.quotaExceeded || summary.filesFailed > 0 -> BackupRunStatus.COMPLETED_WITH_WARNINGS
             else -> BackupRunStatus.UP_TO_DATE
         }
+        val cleanRun = !summary.authLost && !summary.quotaExceeded && !summary.hitTimeBudget
+        if (cleanRun && config.lastRunStatus == BackupRunStatus.INITIAL_SYNC_IN_PROGRESS) {
+            backupMessageDao.coalesceInsert(
+                BackupMessageEntity(
+                    backupConfigId = config.id,
+                    runId = runId,
+                    timestamp = System.currentTimeMillis(),
+                    severity = MessageSeverity.INFO,
+                    type = MessageType.INITIAL_SYNC_COMPLETE,
+                    messageText = context.getString(MessageType.INITIAL_SYNC_COMPLETE.labelResId),
+                    formatArgs = emptyList(),
+                    relativePath = null,
+                    readAt = null,
+                )
+            )
+        }
         commitRunStats(
             configId = config.id,
             status = status,
@@ -132,7 +173,7 @@ class BackupRunner(
             completedNormally = !summary.authLost && !summary.quotaExceeded && !summary.hitTimeBudget,
         )
 
-        return if (summary.authLost) RunResult.AuthLost(summary) else RunResult.Success(summary)
+        return if (summary.authLost) RunResult.AuthLost(summary, runId) else RunResult.Success(summary, runId)
     }
 
     private suspend fun writeManifest(configId: String, cloudProvider: ICloudStorageProvider) {
@@ -171,18 +212,21 @@ class BackupRunner(
         runId: String,
         stagingDir: File,
         folderCache: FolderPathCache,
-        derivedKey: javax.crypto.SecretKey?,
+        derivedKey: SecretKey?,
         backupSalt: ByteArray?,
         summary: RunSummary,
         deadline: Instant? = null,
     ) {
         val normalChannel = Channel<UploadTask>(capacity = 64)
         val oversizedChannel = Channel<UploadTask>(capacity = 8)
+        var filesDiscovered = 0
         coroutineScope {
             // Producer: walk the file system and enqueue tasks
             launch {
                 try {
-                    analyzer.analyze(config, normalChannel, oversizedChannel, fileSizeLimitBytes, runId)
+                    filesDiscovered = analyzer.analyze(
+                        config, normalChannel, oversizedChannel, fileSizeLimitBytes, runId, folderCache,
+                    )
                 } finally {
                     normalChannel.close()
                     oversizedChannel.close()
@@ -202,6 +246,7 @@ class BackupRunner(
                 )
             }
         }
+        summary.totalFilesDiscovered = filesDiscovered
     }
 
     /**
@@ -211,7 +256,7 @@ class BackupRunner(
     private suspend fun deriveEncryptionKey(
         config: BackupConfigEntity,
         summary: RunSummary,
-    ): Pair<javax.crypto.SecretKey?, ByteArray?>? {
+    ): Pair<SecretKey?, ByteArray?>? {
         if (!config.encryptionEnabled || config.encryptedPasswordBlob == null) return Pair(null, null)
         val decryptResult = encryptionRepository.decryptPassword(config.encryptedPasswordBlob)
         if (decryptResult !is SuccessResult) {
@@ -220,7 +265,7 @@ class BackupRunner(
         }
         val password = decryptResult.value
         val salt = config.encryptionParams?.let {
-            java.util.Base64.getDecoder().decode(it.salt)
+            Base64.getDecoder().decode(it.salt)
         } ?: cipher.generateBackupSalt()
         return Pair(cipher.deriveKey(password, salt), salt)
     }
@@ -240,6 +285,18 @@ class BackupRunner(
             filesFailed = summary.filesFailed,
             bytesUploaded = summary.bytesUploaded,
             lastRunCompletedNormally = completedNormally,
+        )
+        val (totalDiscovered, uploadedTotal) = if (summary.hitTimeBudget) {
+            val prev = backupConfigDao.getByIdOnce(configId)
+            val prevTotal = prev?.filesUploadedTotal ?: 0
+            Pair(summary.totalFilesDiscovered, prevTotal + summary.filesUploaded)
+        } else {
+            Pair(0, 0)
+        }
+        backupConfigDao.updateCrossRunProgress(
+            id = configId,
+            totalFilesDiscovered = totalDiscovered,
+            filesUploadedTotal = uploadedTotal,
         )
     }
 }

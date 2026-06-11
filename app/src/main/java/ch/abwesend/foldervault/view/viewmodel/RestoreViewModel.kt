@@ -10,6 +10,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 sealed interface RestoreState {
@@ -21,75 +22,82 @@ sealed interface RestoreState {
     data class Done(val result: RestoreResult) : RestoreState
 }
 
+data class RestoreUiState(
+    val state: RestoreState = RestoreState.Idle,
+    val sourceUri: String? = null,
+    val outputUri: String? = null,
+    val cryptFileCount: Int = 0,
+    val otherFileCount: Int = 0,
+    val collisionPolicy: RestoreCollisionPolicy = RestoreCollisionPolicy.SKIP,
+    val progress: RestoreProgress? = null,
+)
+
 class RestoreViewModel(private val engine: IRestoreEngine) : ViewModel() {
 
-    private val _state = MutableStateFlow<RestoreState>(RestoreState.Idle)
-    val state: StateFlow<RestoreState> = _state.asStateFlow()
-
-    private val _sourceUri = MutableStateFlow<String?>(null)
-    val sourceUri: StateFlow<String?> = _sourceUri.asStateFlow()
-
-    private val _outputUri = MutableStateFlow<String?>(null)
-    val outputUri: StateFlow<String?> = _outputUri.asStateFlow()
-
-    private val _cryptFileCount = MutableStateFlow(0)
-    val cryptFileCount: StateFlow<Int> = _cryptFileCount.asStateFlow()
-
-    private val _otherFileCount = MutableStateFlow(0)
-    val otherFileCount: StateFlow<Int> = _otherFileCount.asStateFlow()
-
-    private val _collisionPolicy = MutableStateFlow(RestoreCollisionPolicy.SKIP)
-    val collisionPolicy: StateFlow<RestoreCollisionPolicy> = _collisionPolicy.asStateFlow()
-
-    private val _progress = MutableStateFlow<RestoreProgress?>(null)
-    val progress: StateFlow<RestoreProgress?> = _progress.asStateFlow()
+    private val _uiState = MutableStateFlow(RestoreUiState())
+    val uiState: StateFlow<RestoreUiState> = _uiState.asStateFlow()
 
     private var restoreJob: Job? = null
 
     fun setSourceFolder(uri: String) {
-        _sourceUri.value = uri
-        _state.value = RestoreState.Scanning
+        _uiState.update { it.copy(sourceUri = uri, state = RestoreState.Scanning) }
         viewModelScope.launch {
             val result = engine.scanSourceFolder(uri)
-            _cryptFileCount.value = result.cryptFileCount
-            _otherFileCount.value = result.otherFileCount
-            _state.value = if (_outputUri.value != null) RestoreState.ReadyToStart else RestoreState.SourceReady
+            _uiState.update { current ->
+                current.copy(
+                    cryptFileCount = result.cryptFileCount,
+                    otherFileCount = result.otherFileCount,
+                    state = if (current.outputUri != null) RestoreState.ReadyToStart else RestoreState.SourceReady,
+                )
+            }
         }
     }
 
     fun setOutputFolder(uri: String) {
-        _outputUri.value = uri
-        val current = _state.value
-        if (current == RestoreState.SourceReady || current == RestoreState.ReadyToStart) {
-            _state.value = RestoreState.ReadyToStart
+        _uiState.update { current ->
+            val newState = if (
+                current.state == RestoreState.SourceReady ||
+                current.state == RestoreState.ReadyToStart
+            ) {
+                RestoreState.ReadyToStart
+            } else {
+                current.state
+            }
+            current.copy(outputUri = uri, state = newState)
         }
     }
 
     fun setCollisionPolicy(policy: RestoreCollisionPolicy) {
-        _collisionPolicy.value = policy
+        _uiState.update { it.copy(collisionPolicy = policy) }
     }
 
     fun startRestore(password: String) {
-        val src = _sourceUri.value ?: return
-        val out = _outputUri.value ?: return
+        val snapshot = _uiState.value
+        val src = snapshot.sourceUri ?: return
+        val out = snapshot.outputUri ?: return
         restoreJob = viewModelScope.launch {
-            _state.value = RestoreState.Running
-            _progress.value = null
+            _uiState.update { it.copy(state = RestoreState.Running, progress = null) }
             try {
                 val result = engine.decryptAll(
                     sourceUri = src,
                     outputUri = out,
                     password = password,
-                    collisionPolicy = _collisionPolicy.value,
-                    onProgress = { _progress.value = it },
+                    collisionPolicy = _uiState.value.collisionPolicy,
+                    onProgress = { progress -> _uiState.update { it.copy(progress = progress) } },
                 )
-                _state.value = RestoreState.Done(result)
+                _uiState.update { it.copy(state = RestoreState.Done(result)) }
             } finally {
-                if (_state.value is RestoreState.Running) {
-                    _state.value = if (_outputUri.value != null) {
-                        RestoreState.ReadyToStart
+                _uiState.update { current ->
+                    if (current.state is RestoreState.Running) {
+                        current.copy(
+                            state = if (current.outputUri != null) {
+                                RestoreState.ReadyToStart
+                            } else {
+                                RestoreState.SourceReady
+                            },
+                        )
                     } else {
-                        RestoreState.SourceReady
+                        current
                     }
                 }
             }
@@ -104,11 +112,6 @@ class RestoreViewModel(private val engine: IRestoreEngine) : ViewModel() {
     fun reset() {
         restoreJob?.cancel()
         restoreJob = null
-        _sourceUri.value = null
-        _outputUri.value = null
-        _cryptFileCount.value = 0
-        _otherFileCount.value = 0
-        _progress.value = null
-        _state.value = RestoreState.Idle
+        _uiState.value = RestoreUiState()
     }
 }

@@ -294,7 +294,7 @@ private fun ScheduleSection(
         label = stringResource(R.string.label_network_policy),
         selected = networkPolicy,
         options = NetworkPolicy.entries,
-        displayName = { context.getString(it.labelResId()) },
+        displayName = { context.getString(it.labelResId) },
         onSelect = onNetworkPolicyChange,
     )
 }
@@ -315,7 +315,7 @@ private fun FileVersioningSection(
             label = stringResource(R.string.label_changed_file_policy),
             selected = changedFilePolicy,
             options = ChangedFilePolicy.entries,
-            displayName = { context.getString(it.labelResId()) },
+            displayName = { context.getString(it.labelResId) },
             onSelect = onChangedFilePolicyChange,
             modifier = Modifier.weight(1f),
         )
@@ -382,30 +382,41 @@ private fun RetentionPicker(
     }
 
     if (selectedIndex == 1) {
-        Spacer(modifier = Modifier.height(8.dp))
-        OutlinedTextField(
+        RetentionCountField(
             value = keepNCount,
             onValueChange = { v ->
                 keepNCount = v
                 v.toIntOrNull()?.let { onRetentionChange(RetentionPolicy.KeepLastN(it)) }
             },
-            label = { Text(stringResource(R.string.label_keep_n_copies)) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+            labelRes = R.string.label_keep_n_copies,
         )
     } else if (selectedIndex == 2) {
-        Spacer(modifier = Modifier.height(8.dp))
-        OutlinedTextField(
+        RetentionCountField(
             value = keepDays,
             onValueChange = { v ->
                 keepDays = v
                 v.toIntOrNull()?.let { onRetentionChange(RetentionPolicy.KeepNewerThan(it)) }
             },
-            label = { Text(stringResource(R.string.label_keep_newer_than_days)) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+            labelRes = R.string.label_keep_newer_than_days,
         )
     }
+}
+
+@Suppress("MultipleEmitters")
+@Composable
+private fun RetentionCountField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    @StringRes labelRes: Int,
+) {
+    Spacer(modifier = Modifier.height(8.dp))
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(stringResource(labelRes)) },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
 
 @Suppress("MultipleEmitters")
@@ -470,19 +481,6 @@ private fun BackupSchedule.labelResId(): Int = when (this) {
     BackupSchedule.DAILY -> R.string.schedule_daily
     BackupSchedule.WEEKLY -> R.string.schedule_weekly
     BackupSchedule.MONTHLY -> R.string.schedule_monthly
-}
-
-@StringRes
-private fun ChangedFilePolicy.labelResId(): Int = when (this) {
-    ChangedFilePolicy.DUPLICATE_WITH_TIMESTAMP -> R.string.changed_file_keep_timestamp
-    ChangedFilePolicy.OVERWRITE -> R.string.changed_file_overwrite
-    ChangedFilePolicy.IGNORE -> R.string.changed_file_skip
-}
-
-@StringRes
-private fun NetworkPolicy.labelResId(): Int = when (this) {
-    NetworkPolicy.WIFI_ONLY -> R.string.network_wifi_only
-    NetworkPolicy.ANY -> R.string.network_any
 }
 
 @Preview(showBackground = true)

@@ -53,7 +53,6 @@ import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.model.RetentionPolicy
 import ch.abwesend.foldervault.ui.theme.FolderVaultTheme
 import ch.abwesend.foldervault.view.viewmodel.HomeViewModel
-import kotlinx.coroutines.flow.flowOf
 import org.koin.androidx.compose.koinViewModel
 
 private const val MS_PER_MINUTE = 60_000L
@@ -70,6 +69,7 @@ fun HomeScreen(
     viewModel: HomeViewModel = koinViewModel(),
 ) {
     val configs by viewModel.configs.collectAsState()
+    val errorBadgeCounts by viewModel.errorBadgeCounts.collectAsState()
 
     Scaffold(
         topBar = {
@@ -102,7 +102,7 @@ fun HomeScreen(
                 items(configs, key = { it.id }) { config ->
                     BackupConfigCard(
                         config = config,
-                        errorBadgeFlow = viewModel.errorBadgeCount(config.id),
+                        errorCount = errorBadgeCounts[config.id] ?: 0,
                         onClick = { onOpenDetail(config.id) },
                         modifier = Modifier
                             .fillMaxWidth()
@@ -142,13 +142,12 @@ private fun HomeEmptyState(modifier: Modifier = Modifier) {
 @Composable
 private fun BackupConfigCard(
     config: BackupConfig,
-    errorBadgeFlow: kotlinx.coroutines.flow.Flow<Int>,
+    errorCount: Int,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val errorCount by errorBadgeFlow.collectAsState(initial = 0)
     val scheduleName = stringResource(config.schedule.labelResId())
-    val networkName = stringResource(config.networkPolicy.labelResId())
+    val networkName = stringResource(config.networkPolicy.labelResId)
 
     Card(
         modifier = modifier.clickable(onClick = onClick),
@@ -272,12 +271,6 @@ private fun BackupSchedule.labelResId(): Int = when (this) {
     BackupSchedule.MONTHLY -> R.string.schedule_monthly
 }
 
-@StringRes
-private fun NetworkPolicy.labelResId(): Int = when (this) {
-    NetworkPolicy.WIFI_ONLY -> R.string.network_wifi_only
-    NetworkPolicy.ANY -> R.string.network_any
-}
-
 @Preview(showBackground = true)
 @Composable
 private fun HomeScreenPreview() {
@@ -319,7 +312,7 @@ private fun BackupCardPreview() {
     FolderVaultTheme {
         BackupConfigCard(
             config = sample,
-            errorBadgeFlow = flowOf(2),
+            errorCount = 2,
             onClick = {},
         )
     }

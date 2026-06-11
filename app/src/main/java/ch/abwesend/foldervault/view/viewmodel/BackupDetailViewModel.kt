@@ -53,6 +53,7 @@ class BackupDetailViewModel(
     val events: SharedFlow<DetailEvent> = _events.asSharedFlow()
 
     fun backUpNow() {
+        if (config.value?.isPaused == true) return
         scheduler.scheduleOneTime(configId)
     }
 

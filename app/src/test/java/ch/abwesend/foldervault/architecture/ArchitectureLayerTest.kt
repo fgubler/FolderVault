@@ -16,7 +16,8 @@ class ArchitectureLayerTest : FunSpec({
             .assertTrue {
                 it.imports.none { imp ->
                     imp.name.startsWith("android.") ||
-                        imp.name.startsWith("androidx.") ||
+                        // androidx.annotation.* is allowed: annotation-only, no Android runtime dep
+                        (imp.name.startsWith("androidx.") && !imp.name.startsWith("androidx.annotation.")) ||
                         imp.name.startsWith("ch.abwesend.foldervault.infrastructure")
                 }
             }

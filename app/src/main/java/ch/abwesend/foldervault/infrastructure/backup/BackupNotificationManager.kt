@@ -16,6 +16,16 @@ import ch.abwesend.foldervault.infrastructure.room.dao.BackupMessageDao
 import ch.abwesend.foldervault.infrastructure.room.dao.NotificationThrottleStateDao
 import ch.abwesend.foldervault.infrastructure.room.entity.NotificationThrottleStateEntity
 
+private fun MessageType.notifPhraseResId(): Int? = when (this) {
+    MessageType.AUTH_LOST -> R.string.notif_problem_auth_lost
+    MessageType.FOLDER_UNREADABLE -> R.string.notif_problem_folder_unreadable
+    MessageType.UPLOAD_FAILED -> R.string.notif_problem_upload_failed
+    MessageType.ENCRYPTION_FAILED -> R.string.notif_problem_encryption_failed
+    MessageType.QUOTA_EXCEEDED -> R.string.notif_problem_quota_exceeded
+    MessageType.GENERIC_ERROR -> R.string.notif_problem_generic_error
+    else -> null
+}
+
 class BackupNotificationManager(
     private val context: Context,
     private val notificationThrottleStateDao: NotificationThrottleStateDao,
@@ -31,10 +41,18 @@ class BackupNotificationManager(
         private const val DEEP_LINK_SCHEME = "foldervault"
         private const val DEEP_LINK_HOST = "backup"
         private const val DEEP_LINK_PATH_PREFIX = "detail"
+        private const val NOTIF_ID_MASK = 0x0FFFFFFF
+        private const val NOTIF_ID_PREFIX = 0x10000000
 
         /** Pure: returns true when the given throttle state does NOT suppress a new notification. */
         internal fun shouldNotify(state: NotificationThrottleStateEntity?, nowMs: Long): Boolean =
             state == null || (nowMs - state.lastNotifiedAt) >= THROTTLE_WINDOW_MS
+
+        /** Isolates problem notification IDs from the progress ID range via a high-bit prefix. */
+        internal fun problemId(configId: String): Int =
+            (configId.hashCode() and NOTIF_ID_MASK) or NOTIF_ID_PREFIX
+
+        private val NOTIFYING_TYPES = MessageType.entries.filter { it.notifies }
     }
 
     fun createNotificationChannels() {
@@ -57,8 +75,7 @@ class BackupNotificationManager(
         nm.createNotificationChannel(problemsChannel)
     }
 
-    @Suppress("UnusedParameter")
-    fun createForegroundInfo(configName: String, filesUploaded: Int, totalDiscovered: Int): ForegroundInfo {
+    fun createForegroundInfo(filesUploaded: Int, totalDiscovered: Int): ForegroundInfo {
         val text = if (totalDiscovered > 0) {
             context.getString(R.string.backup_notification_progress_text_with_count, filesUploaded, totalDiscovered)
         } else {
@@ -81,7 +98,7 @@ class BackupNotificationManager(
         configName: String,
         runId: String,
     ) {
-        val notifyingTypes = MessageType.entries.filter { it.notifies }
+        val notifyingTypes = NOTIFYING_TYPES
         if (notifyingTypes.isEmpty()) return
 
         val now = System.currentTimeMillis()
@@ -100,7 +117,7 @@ class BackupNotificationManager(
         if (pendingTypes.isEmpty()) return
 
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val notifId = configId.hashCode()
+        val notifId = problemId(configId)
 
         val deepLinkUri = Uri.parse("$DEEP_LINK_SCHEME://$DEEP_LINK_HOST/$DEEP_LINK_PATH_PREFIX/$configId")
         val deepLinkIntent = Intent(Intent.ACTION_VIEW, deepLinkUri).apply {
@@ -114,10 +131,15 @@ class BackupNotificationManager(
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
 
+        val problemPhrases = pendingTypes
+            .mapNotNull { it.notifPhraseResId() }
+            .joinToString(", ") { context.getString(it) }
         val notification = NotificationCompat.Builder(context, PROBLEMS_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(context.getString(R.string.backup_notification_problems_title))
-            .setContentText(context.getString(R.string.backup_notification_problems_text, configName))
+            .setContentText(
+                context.getString(R.string.backup_notification_problems_text, configName, problemPhrases)
+            )
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .build()

@@ -1,7 +1,6 @@
 package ch.abwesend.foldervault.infrastructure.backup
 
 import android.content.Context
-import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.cloud.CloudAuthException
 import ch.abwesend.foldervault.domain.cloud.CloudAuthResult
 import ch.abwesend.foldervault.domain.cloud.CloudFile
@@ -37,9 +36,10 @@ class BackupUploader(
     private val uploadedFileIndexDao: UploadedFileIndexDao,
     private val backupMessageDao: BackupMessageDao,
     private val dispatchers: IDispatchers,
+    cloudProvider: ICloudStorageProvider,
 ) {
     private val log get() = logger
-    var cloudProvider: ICloudStorageProvider? = null
+    private var cloudProvider: ICloudStorageProvider = cloudProvider
 
     @Suppress("LongParameterList")
     suspend fun processChannel(
@@ -56,19 +56,26 @@ class BackupUploader(
         // Always drain the channel even when stopped — a break without draining would leave the
         // producer blocked on send(), hanging the coroutineScope indefinitely.
         for (task in channel) {
-            if (summary.authLost || summary.quotaExceeded || summary.hitTimeBudget) continue // drain without processing
-            uploadOne(
-                config = config,
-                task = task,
-                runId = runId,
-                stagingDir = stagingDir,
-                folderCache = folderCache,
-                derivedKey = derivedKey,
-                backupSalt = backupSalt,
-                summary = summary,
-            )
-            if (deadline != null && Instant.now().isAfter(deadline)) {
-                summary.hitTimeBudget = true
+            val shouldSkip = summary.authLost || summary.quotaExceeded || summary.hitTimeBudget
+            if (!shouldSkip) {
+                if (task.tier == UploadTier.OVERSIZED) {
+                    summary.oversizedCount++
+                    emitMessage(config, runId, MessageSeverity.WARNING, MessageType.FILE_TOO_LARGE)
+                } else {
+                    uploadOne(
+                        config = config,
+                        task = task,
+                        runId = runId,
+                        stagingDir = stagingDir,
+                        folderCache = folderCache,
+                        derivedKey = derivedKey,
+                        backupSalt = backupSalt,
+                        summary = summary,
+                    )
+                    if (deadline != null && Instant.now().isAfter(deadline)) {
+                        summary.hitTimeBudget = true
+                    }
+                }
             }
         }
     }
@@ -158,7 +165,7 @@ class BackupUploader(
         if (task.tier == UploadTier.OVERSIZED) summary.oversizedCount++
         // For CHANGED_OVERWRITE: delete the now-superseded cloud file after indexing success
         if (task.mode == UploadMode.CHANGED_OVERWRITE && task.previousCloudFileId != null) {
-            val deleteResult = cloudProvider?.deleteFile(task.previousCloudFileId)
+            val deleteResult = cloudProvider.deleteFile(task.previousCloudFileId)
             if (deleteResult is ErrorResult) {
                 log.warning("Failed to delete old cloud file ${task.previousCloudFileId}: ${deleteResult.error}")
             }
@@ -212,12 +219,7 @@ class BackupUploader(
         runId: String,
         summary: RunSummary,
     ): BinaryResult<CloudFile, Exception>? {
-        val provider = cloudProvider ?: run {
-            summary.authLost = true
-            return null
-        }
-
-        val result = provider.uploadFile(parentFolderId, remoteName, mimeType, content)
+        val result = cloudProvider.uploadFile(parentFolderId, remoteName, mimeType, content)
         if (result is SuccessResult) return result
 
         val error = (result as ErrorResult).error
@@ -232,11 +234,14 @@ class BackupUploader(
                 summary,
             )
             error is CloudQuotaExceededException -> {
-                if (!summary.quotaExceeded) {
+                summary.consecutiveQuotaCount++
+                if (summary.consecutiveQuotaCount >= 2) {
                     summary.quotaExceeded = true
-                    emitMessage(config, runId, MessageSeverity.ERROR, MessageType.QUOTA_EXCEEDED)
+                    null
+                } else {
+                    emitMessage(config, runId, MessageSeverity.WARNING, MessageType.QUOTA_EXCEEDED)
+                    result
                 }
-                null
             }
             else -> result
         }
@@ -289,18 +294,5 @@ class BackupUploader(
         )
     }
 
-    private fun resolveMessageText(type: MessageType): String = when (type) {
-        MessageType.AUTH_LOST -> context.getString(R.string.msg_auth_lost)
-        MessageType.FOLDER_UNREADABLE -> context.getString(R.string.msg_folder_unreadable)
-        MessageType.FILE_TOO_LARGE -> context.getString(R.string.msg_file_too_large)
-        MessageType.UPLOAD_FAILED -> context.getString(R.string.msg_upload_failed)
-        MessageType.ENCRYPTION_FAILED -> context.getString(R.string.msg_encryption_failed)
-        MessageType.INITIAL_SYNC_COMPLETE -> context.getString(R.string.msg_initial_sync_complete)
-        MessageType.QUOTA_EXCEEDED -> context.getString(R.string.msg_quota_exceeded)
-        MessageType.UNRELIABLE_TIMESTAMPS -> context.getString(R.string.msg_unreliable_timestamps)
-        MessageType.RATE_LIMITED -> context.getString(R.string.msg_rate_limited)
-        MessageType.GENERIC_INFO -> context.getString(R.string.msg_generic_info)
-        MessageType.GENERIC_WARNING -> context.getString(R.string.msg_generic_warning)
-        MessageType.GENERIC_ERROR -> context.getString(R.string.msg_generic_error)
-    }
+    private fun resolveMessageText(type: MessageType): String = context.getString(type.labelResId)
 }

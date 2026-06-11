@@ -450,3 +450,113 @@ This is borderline: the function is already at 3–4 indentation levels, so wrap
 - [ ] 5.7.a, 5.7.b, 5.7.c refactored; 5.7.d resolved per human decision.
 - [ ] `./gradlew assembleDebug && ./gradlew test && ./gradlew detekt` — green.
 - [ ] `docs/prompt-history.md` updated with a Tier 5 dated entry.
+
+---
+
+## Tier 6 — Oversized files: switch to deferral semantics (added 2026-06-11)
+
+### Background
+
+The two-channel pipeline (`normalChannel` + `oversizedChannel`) and the `UploadTier.NORMAL`/`UploadTier.OVERSIZED` tags were designed so that files exceeding `defaultFileSizeLimitBytes` are deferred to the back of the queue — uploaded after smaller files, possibly across multiple runs (the spec hint reads: "3 large files (>256 MB) may need several runs to finish").
+
+The current implementation **drops** oversized tasks instead: when the consumer pulls an `OVERSIZED` task, it only increments `summary.oversizedCount` and emits `FILE_TOO_LARGE` — `uploadOne(...)` is never called for them. See `BackupUploader.kt:58-79`.
+
+This tier corrects the semantics: oversized files must be uploaded, just at the back of the queue and across runs if necessary.
+
+### 6.1 Upload oversized files instead of dropping them
+**File**: `app/src/main/java/ch/abwesend/foldervault/infrastructure/backup/BackupUploader.kt:58-79`
+
+Remove the tier branch in `processChannel`. The consumer should treat all tasks uniformly — `uploadOne(...)` for every pulled task. The tier distinction now lives only in the analyser (which routes tasks to two channels) and `BackupRunner` (which drains normal first, then oversized).
+
+**Before**:
+```kotlin
+if (!shouldSkip) {
+    if (task.tier == UploadTier.OVERSIZED) {
+        summary.oversizedCount++
+        emitMessage(config, runId, MessageSeverity.WARNING, MessageType.FILE_TOO_LARGE)
+    } else {
+        uploadOne(...)
+        if (deadline != null && Instant.now().isAfter(deadline)) {
+            summary.hitTimeBudget = true
+        }
+    }
+}
+```
+
+**After**:
+```kotlin
+if (!shouldSkip) {
+    uploadOne(...)
+    if (deadline != null && Instant.now().isAfter(deadline)) {
+        summary.hitTimeBudget = true
+    }
+}
+```
+
+### 6.2 Rename `summary.oversizedCount` → `summary.oversizedUploaded`
+**Files**:
+- `app/src/main/java/ch/abwesend/foldervault/infrastructure/backup/RunSummary.kt`
+- `app/src/main/java/ch/abwesend/foldervault/infrastructure/backup/BackupUploader.kt` (the remaining increment site inside the success path of `uploadOne`, formerly at `:165`)
+- Any test or notification site that reads the field (`grep -rn "oversizedCount"` to be sure)
+
+After 6.1, the only remaining increment of the old `oversizedCount` lives in `uploadOne`'s success path — it now counts oversized files **successfully uploaded** this run. Rename the field accordingly: `var oversizedUploaded: Int`. Update all read sites (use IDE rename or `grep -rn`).
+
+### 6.3 Re-target the `FILE_TOO_LARGE` message (Option A — emit on deferral)
+**Files**:
+- `app/src/main/java/ch/abwesend/foldervault/infrastructure/backup/RunSummary.kt`
+- `app/src/main/java/ch/abwesend/foldervault/infrastructure/backup/BackupUploader.kt`
+- `app/src/main/res/values/strings.xml` (string `msg_file_too_large`)
+
+The old message ("file dropped because too large") is now incorrect. Emit `FILE_TOO_LARGE` only when an oversized file remains un-uploaded at the end of the run due to `hitTimeBudget` (i.e. the file got deferred but didn't fit in this window).
+
+**Implementation**:
+1. Add a new field `var oversizedDeferred: Int = 0` to `RunSummary`. Counts oversized tasks pulled from the channel but skipped because `shouldSkip` (any of `authLost`, `quotaExceeded`, `hitTimeBudget`) was true.
+2. In `BackupUploader.processChannel`, **before** the `if (!shouldSkip)` branch (so the increment happens even when skipped), add:
+   ```kotlin
+   if (shouldSkip && task.tier == UploadTier.OVERSIZED) {
+       summary.oversizedDeferred++
+   }
+   ```
+3. After the `for (task in channel)` loop ends in `processChannel`, emit one coalesced message **only if** `summary.hitTimeBudget && summary.oversizedDeferred > 0`:
+   ```kotlin
+   if (summary.hitTimeBudget && summary.oversizedDeferred > 0) {
+       emitMessage(config, runId, MessageSeverity.INFO, MessageType.FILE_TOO_LARGE)
+   }
+   ```
+   *(Note: `coalesceInsert` already dedupes per `(runId, configId, type)` so even multiple loop entries would coalesce — but emitting once at the end keeps the flow explicit. Severity downgraded from `WARNING` to `INFO` to match the reassuring tone.)*
+4. **Update `strings.xml`** `msg_file_too_large` to a deferral-friendly wording. Suggested:
+   ```xml
+   <string name="msg_file_too_large">Some large files are still being backed up — they may take several runs to finish.</string>
+   ```
+   If `MessageType.FILE_TOO_LARGE` has a separate `notif_problem_*` string used by `BackupNotificationManager` for the system-tray text, update it too with similar wording.
+
+### 6.4 Update Settings copy
+**Files**:
+- `app/src/main/res/values/strings.xml` (`label_default_file_size_limit` + helper/info text)
+
+The setting was labelled as a hard cap. Re-word it so the user understands the new behaviour:
+
+- Label: "Defer files larger than" (or similar). Avoid "Skip" / "Exclude".
+- Info-icon body: "Files above this size are uploaded last so they don't block smaller files. Very large files may need several backup runs to finish — they'll be picked up automatically on subsequent runs."
+
+### 6.5 Update tests
+**Files**:
+- `app/src/test/java/ch/abwesend/folderVault/infrastructure/backup/...` — the Tier 1.5 test that asserted `FILE_TOO_LARGE` is emitted when a single oversized task is enqueued must be replaced.
+
+New test cases:
+- "Oversized task enqueued, time budget not hit → `uploadOne` is called for it and the file is uploaded; `summary.oversizedUploaded` incremented; no `FILE_TOO_LARGE` message emitted."
+- "Oversized task pulled after `hitTimeBudget` fires → `summary.oversizedDeferred` incremented; one `FILE_TOO_LARGE` message (severity INFO) emitted at end of `processChannel`."
+- "Two oversized tasks pulled after `hitTimeBudget` fires → still only one `FILE_TOO_LARGE` message (coalesced)."
+- "No oversized files deferred (all uploaded normally) → no `FILE_TOO_LARGE` message even if `hitTimeBudget` is true."
+
+The existing analyzer tier-routing tests should still pass — only the consumer behaviour changes.
+
+### Tier 6 — Definition of Done
+
+- [ ] 6.1 applied — `processChannel` no longer short-circuits on `task.tier`; `uploadOne` is called for every non-skipped task.
+- [ ] 6.2 applied — `summary.oversizedCount` renamed to `oversizedUploaded`; all read sites updated.
+- [ ] 6.3 applied — `RunSummary.oversizedDeferred` added; `FILE_TOO_LARGE` emitted once at end of `processChannel` when `hitTimeBudget && oversizedDeferred > 0`; `strings.xml` wording updated to deferral-friendly copy.
+- [ ] 6.4 applied — settings copy reflects "deferral" semantics.
+- [ ] 6.5 applied — tests updated as per the four cases above.
+- [ ] `./gradlew assembleDebug && ./gradlew test && ./gradlew detekt` — green.
+- [ ] `docs/prompt-history.md` updated with a Tier 6 dated entry.

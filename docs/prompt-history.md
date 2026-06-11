@@ -7,6 +7,27 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-06-11 — §14.12: Tests, README, ARCHITECTURE.md
+
+### What was done
+- **`README.md`**: expanded with §1 product concept (strengths, honest limitations, restore workflow), build commands, Firebase setup note.
+- **`ARCHITECTURE.md`** (new): full layer diagram, package structure tree, and write-ups of key patterns (BinaryResult, IDispatchers, FVC1 container, upload pipeline, notification throttling, Room schema).
+- **Konsist naming/placement tests** added to `ArchitectureLayerTest`:
+  - `files with @Entity annotation reside in infrastructure.room and are named *Entity`
+  - `files with @Dao annotation reside in infrastructure.room and are named *Dao`
+  - `files named *ViewModel reside in the view layer`
+- **Robolectric Compose smoke tests** (`ScreenSmokeTest`, JUnit4 + Robolectric SDK 35):
+  - `onboarding screen renders the first page title` — verifies "Incremental folder backup" is displayed
+  - `onboarding screen shows Skip button on the first page`
+  - Uses a `FakeAppSettingsRepository` (in-memory `MutableStateFlow`) to construct `OnboardingViewModel` without Koin
+
+### CPST status
+Compose Preview Screenshot Testing is deferred: the `com.android.compose.screenshot` plugin is commented out in `build.gradle.kts` pending AGP 9.x compatibility confirmation. The `@Preview` composables on every screen are ready to serve as screenshot test targets once the plugin is activated.
+
+### Key decisions
+- Konsist naming tests use the **file-level import API** (`file.imports.any { it.name == "androidx.room.Entity" }`) rather than the class-level API, since the file-level API is consistent with the existing tests and has no API ambiguity at Konsist 0.17.3.
+- `FakeAppSettingsRepository` (anonymous inner class) rather than MockK for the Robolectric test — simpler, no mock-agent issues with final classes under Robolectric.
+
 ## 2026-06-11 — §14.11: Restore screen (§10)
 
 ### What was done

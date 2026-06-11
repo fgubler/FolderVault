@@ -75,4 +75,33 @@ class ArchitectureLayerTest : FunSpec({
                 it.imports.none { imp -> imp.name == "kotlin.Exception" || imp.name == "java.lang.Exception" }
             }
     }
+
+    // ── Naming & placement ────────────────────────────────────────────────────
+
+    test("files with @Entity annotation reside in infrastructure.room and are named *Entity") {
+        mainScope
+            .files
+            .filter { file -> file.imports.any { it.name == "androidx.room.Entity" } }
+            .assertTrue { file ->
+                file.path.contains("/infrastructure/room/") && file.name.endsWith("Entity.kt")
+            }
+    }
+
+    test("files with @Dao annotation reside in infrastructure.room and are named *Dao") {
+        mainScope
+            .files
+            .filter { file -> file.imports.any { it.name == "androidx.room.Dao" } }
+            .assertTrue { file ->
+                file.path.contains("/infrastructure/room/") && file.name.endsWith("Dao.kt")
+            }
+    }
+
+    test("files named *ViewModel reside in the view layer") {
+        mainScope
+            .files
+            .filter { file -> file.name.endsWith("ViewModel.kt") }
+            .assertTrue { file ->
+                file.path.contains("/view/")
+            }
+    }
 })

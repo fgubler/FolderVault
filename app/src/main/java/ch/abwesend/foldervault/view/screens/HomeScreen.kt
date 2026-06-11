@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -62,6 +63,7 @@ fun HomeScreen(
     onOpenSettings: () -> Unit,
     onAddBackup: () -> Unit,
     onOpenDetail: (String) -> Unit,
+    onOpenRestore: () -> Unit,
     viewModel: HomeViewModel = koinViewModel(),
 ) {
     val configs by viewModel.configs.collectAsState()
@@ -71,6 +73,9 @@ fun HomeScreen(
             TopAppBar(
                 title = { Text("FolderVault") },
                 actions = {
+                    IconButton(onClick = onOpenRestore) {
+                        Icon(Icons.Default.Restore, contentDescription = "Restore backup")
+                    }
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings")
                     }

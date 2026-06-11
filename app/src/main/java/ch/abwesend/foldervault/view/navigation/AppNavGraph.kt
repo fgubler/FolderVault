@@ -8,6 +8,7 @@ import ch.abwesend.foldervault.view.screens.AddEditBackupScreen
 import ch.abwesend.foldervault.view.screens.BackupDetailScreen
 import ch.abwesend.foldervault.view.screens.HomeScreen
 import ch.abwesend.foldervault.view.screens.OnboardingScreen
+import ch.abwesend.foldervault.view.screens.RestoreScreen
 import ch.abwesend.foldervault.view.screens.SettingsScreen
 
 @Composable
@@ -32,6 +33,7 @@ fun AppNavGraph(startDestination: AppDestination = AppDestination.Home) {
                         onOpenSettings = { backStack.add(AppDestination.Settings) },
                         onAddBackup = { backStack.add(AppDestination.AddEditBackup()) },
                         onOpenDetail = { configId -> backStack.add(AppDestination.BackupDetail(configId)) },
+                        onOpenRestore = { backStack.add(AppDestination.Restore) },
                     )
                 }
                 is AppDestination.Settings -> NavEntry(key) {
@@ -54,6 +56,9 @@ fun AppNavGraph(startDestination: AppDestination = AppDestination.Home) {
                         onBack = { backStack.removeLastOrNull() },
                         onSave = { backStack.removeLastOrNull() },
                     )
+                }
+                is AppDestination.Restore -> NavEntry(key) {
+                    RestoreScreen(onBack = { backStack.removeLastOrNull() })
                 }
                 else -> error("Unknown destination: $key")
             }

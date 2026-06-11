@@ -13,4 +13,6 @@ sealed interface AppDestination : NavKey {
     @Serializable data class BackupDetail(val configId: String) : AppDestination
 
     @Serializable data class AddEditBackup(val configId: String? = null) : AppDestination
+
+    @Serializable data object Restore : AppDestination
 }

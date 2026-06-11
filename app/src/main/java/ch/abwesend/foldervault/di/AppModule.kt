@@ -9,6 +9,7 @@ import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.crypto.IEncryptionRepository
 import ch.abwesend.foldervault.domain.crypto.IFvc1Cipher
 import ch.abwesend.foldervault.domain.crypto.IKeyStoreRepository
+import ch.abwesend.foldervault.domain.restore.IRestoreEngine
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
 import ch.abwesend.foldervault.infrastructure.backup.BackupConfigRepository
 import ch.abwesend.foldervault.infrastructure.backup.BackupMessageRepository
@@ -19,12 +20,14 @@ import ch.abwesend.foldervault.infrastructure.cloud.googledrive.GoogleDriveAutho
 import ch.abwesend.foldervault.infrastructure.crypto.AndroidKeyStoreRepository
 import ch.abwesend.foldervault.infrastructure.crypto.EncryptionRepository
 import ch.abwesend.foldervault.infrastructure.crypto.Fvc1Cipher
+import ch.abwesend.foldervault.infrastructure.restore.RestoreEngine
 import ch.abwesend.foldervault.infrastructure.room.FolderVaultDatabase
 import ch.abwesend.foldervault.infrastructure.settings.AppSettingsRepository
 import ch.abwesend.foldervault.view.viewmodel.AddEditBackupViewModel
 import ch.abwesend.foldervault.view.viewmodel.BackupDetailViewModel
 import ch.abwesend.foldervault.view.viewmodel.HomeViewModel
 import ch.abwesend.foldervault.view.viewmodel.OnboardingViewModel
+import ch.abwesend.foldervault.view.viewmodel.RestoreViewModel
 import ch.abwesend.foldervault.view.viewmodel.SettingsViewModel
 import org.koin.android.ext.koin.androidContext
 import org.koin.androidx.viewmodel.dsl.viewModel
@@ -47,6 +50,7 @@ val appModule = module {
     // Repositories
     single<IBackupConfigRepository> { BackupConfigRepository(get()) }
     single<IBackupMessageRepository> { BackupMessageRepository(get()) }
+    single<IRestoreEngine> { RestoreEngine(androidContext(), get(), get()) }
 
     // Settings
     single<IAppSettingsRepository> { AppSettingsRepository(androidContext()) }
@@ -71,6 +75,7 @@ val appModule = module {
     }
 
     // ViewModels
+    viewModel { RestoreViewModel(get()) }
     viewModel { HomeViewModel(get(), get()) }
     viewModel { OnboardingViewModel(get()) }
     viewModel { SettingsViewModel(get()) }

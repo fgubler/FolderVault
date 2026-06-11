@@ -7,6 +7,27 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-06-11 — §14.11: Restore screen (§10)
+
+### What was done
+- **Domain** (`domain/restore/`): `RestoreCollisionPolicy` (SKIP / OVERWRITE / RENAME_WITH_SUFFIX), `RestoreResult` (Success / Cancelled / InvalidPassword / Failure), `RestoreScanResult`, `RestoreProgress`, `IRestoreEngine` interface.
+- **`RestorePathResolver`** (infrastructure, pure): `outputRelativePath` strips `.crypt` suffix; `resolvedName` applies collision policy; `appendRestoreSuffix` inserts `_restored` before the extension.
+- **`RestoreEngine`** (infrastructure): implements `IRestoreEngine`. Constructor takes `Context` (stored as applicationContext), `IFvc1Cipher`, `IDispatchers`. `scanSourceFolder` walks the SAF tree via `ScopedStorageHelper` and counts `.crypt` vs plain files. `decryptAll` walks again, verifies the password against the first `.crypt` file (using `decryptFileWithPassword` + `NullOutputStream`), then processes each file: `.crypt` → decrypt-to-output, plain → copy-through, existing file → collision policy applied via `resolveOutputFile`. Uses `isActive` for cooperative cancellation.
+- **`RestoreViewModel`**: injects `IRestoreEngine` (domain interface only). Separate StateFlows for `cryptFileCount`, `otherFileCount`, source/output URIs, collision policy, progress. `startRestore(password)` stores the Job; `try/finally` resets state to `ReadyToStart` if the coroutine is cancelled before completing.
+- **`RestoreScreen`**: `Scaffold` + `TopAppBar`. Scrollable `Column` with four conditional sections — Explanation, Source folder (with scan status / unencrypted-backup special case), Output folder, Password + options + Start button. `AlertDialog` progress dialog shown while `Running` (indeterminate during verify, determinate during decrypt). Result section shown on `Done`. SAF permissions taken in the Composable.
+- **Navigation**: `AppDestination.Restore` data object; wired in `AppNavGraph`; `Icons.Default.Restore` button added to `HomeScreen` TopAppBar.
+- **DI**: `single<IRestoreEngine> { RestoreEngine(androidContext(), get(), get()) }` + `viewModel { RestoreViewModel(get()) }`.
+
+### Tests (`RestoreTest`, Kotest StringSpec)
+- 3 decrypt round-trip / wrong-password / binary-payload cases using `Fvc1Cipher.decryptFileWithPassword` directly (pure JVM streams).
+- 5 path-resolution cases covering `.crypt` stripping, nested paths, plain-file passthrough.
+- 5 collision-policy cases for SKIP (null), OVERWRITE (original name), RENAME_WITH_SUFFIX (with/without extension, dotfile).
+
+### Key design decisions
+- `verifyPassword` uses `NullOutputStream` (private object, not `OutputStream.nullOutputStream()` which requires API 30+) — minSdk is 24.
+- `decryptAll` walks the source tree **twice** (once in `scanSourceFolder` for the count, once in `decryptAll` for processing) so `IRestoreEngine` methods are stateless and the ViewModel doesn't hold infrastructure types.
+- Cancellation via coroutine `Job.cancel()` + `try/finally` in the ViewModel (rather than a flag) to keep the domain interface clean.
+
 ## 2026-06-10 — §14.10: UI screens (§9)
 
 ### What was done

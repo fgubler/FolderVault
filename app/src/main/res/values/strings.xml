@@ -1,3 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Folder Vault</string>
 
@@ -11,4 +12,242 @@
     <string name="backup_notification_progress_text_with_count">Uploading %1$d / %2$d files</string>
     <string name="backup_notification_problems_title">Backup problem</string>
     <string name="backup_notification_problems_text">Backup \'%1$s\' had issues — tap to review</string>
+
+    <!-- Common -->
+    <string name="loading">Loading…</string>
+    <string name="button_back_cd">Back</string>
+    <string name="button_cancel">Cancel</string>
+    <string name="button_delete">Delete</string>
+    <string name="button_close">Close</string>
+    <string name="button_got_it">Got it</string>
+    <string name="info_cd_about">About %1$s</string>
+
+    <!-- Backup schedule display names -->
+    <string name="schedule_default">Default</string>
+    <string name="schedule_global_default">Global default</string>
+    <string name="schedule_use_global_default">Use global default</string>
+    <string name="schedule_manual">Manual</string>
+    <string name="schedule_manual_only">Manual only</string>
+    <string name="schedule_daily">Daily</string>
+    <string name="schedule_weekly">Weekly</string>
+    <string name="schedule_monthly">Monthly</string>
+
+    <!-- Network policy display names -->
+    <string name="network_wifi_only">Wi-Fi only</string>
+    <string name="network_any">Any network</string>
+    <string name="network_any_short">Any</string>
+
+    <!-- Changed-file policy display names -->
+    <string name="changed_file_keep_timestamp">Keep timestamped copy</string>
+    <string name="changed_file_overwrite">Overwrite</string>
+    <string name="changed_file_skip">Skip changed files</string>
+
+    <!-- Retention policy display names -->
+    <string name="retention_keep_all">Keep all</string>
+    <string name="retention_keep_last_n_option">Keep last N copies</string>
+    <string name="retention_keep_newer_than_n_option">Keep newer than N days</string>
+    <string name="retention_keep_last_n">Keep last %1$d</string>
+    <string name="retention_keep_newer_than">Keep &lt; %1$d days</string>
+
+    <!-- Theme display names -->
+    <string name="theme_system">System default</string>
+    <string name="theme_light">Light</string>
+    <string name="theme_dark">Dark</string>
+
+    <!-- BackupRunStatus display names -->
+    <string name="status_idle">Idle</string>
+    <string name="status_running">Running</string>
+    <string name="status_initial_sync_in_progress">Initial sync in progress</string>
+    <string name="status_up_to_date">Up to date</string>
+    <string name="status_completed_with_warnings">Completed with warnings</string>
+    <string name="status_failed">Failed</string>
+
+    <!-- MessageSeverity display names -->
+    <string name="severity_info">Info</string>
+    <string name="severity_warning">Warning</string>
+    <string name="severity_error">Error</string>
+    <string name="severity_critical">Critical</string>
+
+    <!-- Backup run message texts (resolved at creation time, frozen in device language) -->
+    <string name="msg_auth_lost">Google Drive authorization lost — re-connect your account.</string>
+    <string name="msg_folder_unreadable">A folder could not be read.</string>
+    <string name="msg_file_too_large">One or more files exceeded the size limit and were skipped.</string>
+    <string name="msg_upload_failed">One or more files failed to upload.</string>
+    <string name="msg_encryption_failed">One or more files could not be encrypted.</string>
+    <string name="msg_initial_sync_complete">Initial sync complete.</string>
+    <string name="msg_quota_exceeded">Google Drive storage quota exceeded — backup stopped.</string>
+    <string name="msg_unreliable_timestamps">File timestamps are unreliable. Some unchanged files may be re-checked.</string>
+    <string name="msg_rate_limited">Upload was rate-limited. Backup will continue in the next run.</string>
+    <string name="msg_generic_info">Info</string>
+    <string name="msg_generic_warning">Warning</string>
+    <string name="msg_generic_error">Error</string>
+
+    <!-- Home screen -->
+    <string name="home_title">FolderVault</string>
+    <string name="home_cd_restore">Restore backup</string>
+    <string name="home_cd_settings">Settings</string>
+    <string name="home_cd_add">Add backup</string>
+    <string name="home_cd_encrypted">Encrypted</string>
+    <string name="home_cd_paused">Paused</string>
+    <string name="home_empty_title">No backups yet</string>
+    <string name="home_empty_subtitle">Tap + to create your first backup</string>
+    <string name="home_status_paused">Paused</string>
+    <string name="home_status_initial_sync">Initial backup: %1$d / %2$d files — continues in next run</string>
+    <string name="home_status_running">Running…</string>
+    <string name="home_status_never_run">Never run</string>
+    <string name="home_status_just_now">just now</string>
+    <string name="home_status_ago_minutes">%1$dm ago</string>
+    <string name="home_status_ago_hours">%1$dh ago</string>
+    <string name="home_status_ago_days">%1$dd ago</string>
+    <string name="home_status_last_run">Last run %1$s • %2$s</string>
+    <string name="home_status_uploaded">%1$d uploaded</string>
+    <string name="home_status_failed">%1$d failed</string>
+    <string name="home_card_schedule_network">Schedule: %1$s  •  %2$s</string>
+
+    <!-- Add/Edit backup screen -->
+    <string name="add_backup_title">Add backup</string>
+    <string name="edit_backup_title">Edit backup</string>
+    <string name="section_basics">Basics</string>
+    <string name="section_cloud_destination">Cloud destination</string>
+    <string name="section_schedule_network">Schedule &amp; network</string>
+    <string name="section_file_versioning">File versioning</string>
+    <string name="section_encryption">Encryption</string>
+    <string name="label_display_name">Display name</string>
+    <string name="button_select_folder">Select source folder…</string>
+    <string name="button_folder_selected">Folder: %1$s</string>
+    <string name="cloud_status_idle">Not connected</string>
+    <string name="cloud_status_authorizing">Signing in…</string>
+    <string name="cloud_status_awaiting_auth">Awaiting authorization…</string>
+    <string name="cloud_status_creating_folder">Creating backup folder…</string>
+    <string name="cloud_status_done">Google Drive • %1$s\nFolder: %2$s</string>
+    <string name="cloud_status_error">Error: %1$s</string>
+    <string name="button_connect_drive">Connect to Google Drive</string>
+    <string name="label_schedule">Schedule</string>
+    <string name="label_network_policy">Network policy</string>
+    <string name="label_changed_file_policy">Changed-file policy</string>
+    <string name="label_retention_policy">Retention policy</string>
+    <string name="label_keep_n_copies">Number of copies to keep</string>
+    <string name="label_keep_newer_than_days">Keep files newer than (days)</string>
+    <string name="label_encrypt_backup">Encrypt backup</string>
+    <string name="warning_encryption_password">Warning: If you forget the password, the backup cannot be recovered.</string>
+    <string name="label_password">Password</string>
+    <string name="label_confirm_password">Confirm password</string>
+    <string name="button_save">Save</string>
+    <string name="button_saving">Saving…</string>
+    <string name="info_changed_file_policy_title">Changed-file policy</string>
+    <string name="info_changed_file_policy_body">FolderVault is built for files that rarely change. When a file you\'ve already backed up gets edited, this setting decides whether to upload it as a new timestamped copy, overwrite the previous upload, or skip the change.</string>
+    <string name="info_retention_policy_title">Retention policy</string>
+    <string name="info_retention_policy_body">When files change repeatedly, copies accumulate in the cloud. Retention lets FolderVault prune older copies — keep only the last N versions, or only versions newer than N days. "Keep all" never deletes anything automatically.</string>
+    <string name="info_encryption_title">Encryption</string>
+    <string name="info_encryption_body">When enabled, your files are encrypted on this device before being uploaded. Google Drive only sees scrambled data; only FolderVault on a device with your password can read them back. If you forget the password, the backup cannot be recovered.</string>
+
+    <!-- Validation / ViewModel error messages -->
+    <string name="error_display_name_required">Display name is required</string>
+    <string name="error_no_source_folder">Please select a source folder</string>
+    <string name="error_no_drive_connection">Please connect to Google Drive</string>
+    <string name="error_password_required">Password is required when encryption is enabled</string>
+    <string name="error_passwords_dont_match">Passwords do not match</string>
+    <string name="error_encryption_setup_failed">Encryption setup failed</string>
+    <string name="error_save_failed">Save failed: %1$s</string>
+    <string name="error_auth_failed">Authorization failed</string>
+    <string name="error_create_folder_failed">Could not create backup folder</string>
+
+    <!-- Backup detail screen -->
+    <string name="detail_default_title">Backup detail</string>
+    <string name="label_cloud_folder">Cloud folder</string>
+    <string name="label_account">Account</string>
+    <string name="label_network">Network</string>
+    <string name="label_encryption">Encryption</string>
+    <string name="label_retention">Retention</string>
+    <string name="encryption_enabled">Enabled</string>
+    <string name="encryption_disabled">Disabled</string>
+    <string name="status_section_header">Status</string>
+    <string name="progress_text">Progress: %1$d / %2$d files total</string>
+    <string name="last_run_text">Last run: %1$dm ago  •  %2$d uploaded, %3$d failed</string>
+    <string name="messages_header">Messages</string>
+    <string name="button_clear_all">Clear all</string>
+    <string name="no_messages">No messages</string>
+    <string name="button_mark_read">Mark read</string>
+    <string name="button_dismiss">Dismiss</string>
+    <string name="button_back_up_now">Back up now</string>
+    <string name="button_resume">Resume</string>
+    <string name="button_pause">Pause</string>
+    <string name="button_check_password">Check my password</string>
+    <string name="dialog_delete_title">Delete backup?</string>
+    <string name="dialog_delete_body">Your data on Google Drive is safe. The app will forget which files have been backed up — if you ever re-create this backup, it will upload everything again. You can delete the Drive folder yourself in the Google Drive app if you wish.</string>
+    <string name="dialog_check_password_title">Check my password</string>
+    <string name="dialog_check_password_body">Enter your backup password to verify you still remember it.</string>
+    <string name="password_correct">✓ Password is correct</string>
+    <string name="password_incorrect">✗ Password is incorrect</string>
+    <string name="button_check">Check</string>
+
+    <!-- Settings screen -->
+    <string name="settings_title">Settings</string>
+    <string name="section_backup_defaults">Backup defaults</string>
+    <string name="section_appearance">Appearance</string>
+    <string name="section_privacy">Privacy</string>
+    <string name="section_notifications">Notifications</string>
+    <string name="section_help">Help</string>
+    <string name="label_default_schedule">Default schedule</string>
+    <string name="label_default_changed_file_policy">Default changed-file policy</string>
+    <string name="label_default_network_policy">Default network policy</string>
+    <string name="label_theme">Theme</string>
+    <string name="label_anonymous_error_reports">Anonymous error reports</string>
+    <string name="desc_anonymous_error_reports">Help improve the app by sending anonymous crash reports</string>
+    <string name="button_request_notification_permission">Re-request notification permission</string>
+    <string name="button_show_onboarding">Show onboarding again</string>
+
+    <!-- Onboarding screen -->
+    <string name="onboarding_skip">Skip</string>
+    <string name="onboarding_next">Next</string>
+    <string name="onboarding_get_started">Get started</string>
+    <string name="onboarding_page1_title">Incremental folder backup</string>
+    <string name="onboarding_page1_body">FolderVault backs up a folder on your device to Google Drive, automatically and in the background.</string>
+    <string name="onboarding_page2_title">Best for files that rarely change</string>
+    <string name="onboarding_page2_body">Photos, scans, and document archives are ideal. FolderVault is not designed for frequently-changing databases or app data.</string>
+    <string name="onboarding_page3_title">Only new or changed files</string>
+    <string name="onboarding_page3_body">Each run uploads only files that are new or have changed. Unchanged files are never re-sent — saving time and data.</string>
+    <string name="onboarding_page4_title">Honest limitations</string>
+    <string name="onboarding_page4_body">One-way push only — recovery means downloading from Drive and decrypting in-app. Changed files create timestamped copies. Re-installing the app means re-uploading everything from scratch. Nothing is ever deleted from Drive automatically.</string>
+    <string name="onboarding_page5_title">Your files stay private</string>
+    <string name="onboarding_page5_body">Enable AES-256-GCM encryption and only encrypted bytes ever leave your device. If you forget the password, the backup cannot be recovered — there is no reset.</string>
+    <string name="onboarding_page6_title">Stay informed</string>
+    <string name="onboarding_page6_body">Allow notifications so FolderVault can alert you if a backup stops working — without you having to open the app.</string>
+
+    <!-- Restore screen -->
+    <string name="restore_title">Restore backup</string>
+    <string name="restore_explanation_title">Restore an encrypted backup</string>
+    <string name="restore_explanation_body">1. Use the Google Drive app to download your backup folder to local storage.\n2. Pick the downloaded folder and an empty output folder here.\n3. Enter your backup password — every file will be decrypted locally.</string>
+    <string name="restore_step1_header">Step 1: downloaded backup folder</string>
+    <string name="restore_pick_backup_folder">Pick backup folder</string>
+    <string name="restore_scanning">Scanning…</string>
+    <string name="restore_no_encrypted_files">No encrypted files found. Your %1$d file(s) are already usable without decryption.</string>
+    <string name="restore_found_encrypted">Found %1$d encrypted file(s).</string>
+    <string name="restore_found_encrypted_and_other">Found %1$d encrypted file(s) and %2$d other file(s).</string>
+    <string name="restore_step2_header">Step 2: output folder</string>
+    <string name="restore_pick_output_folder">Pick output folder</string>
+    <string name="restore_output_selected">Output folder selected ✓</string>
+    <string name="restore_output_hint">Pick an empty folder. Non-empty folders trigger the collision policy below.</string>
+    <string name="restore_step3_header">Step 3: password &amp; options</string>
+    <string name="label_backup_password">Backup password</string>
+    <string name="label_if_file_exists">If file already exists</string>
+    <string name="button_start_restore">Start restore</string>
+    <string name="restore_result_header">Result</string>
+    <string name="restore_success_base">Restored %1$d encrypted file(s)</string>
+    <string name="restore_success_and_copied">, copied %1$d plain file(s)</string>
+    <string name="restore_success_and_skipped">, skipped %1$d</string>
+    <string name="restore_success_and_failed">, %1$d failed</string>
+    <string name="restore_wrong_password">Wrong password. No files were modified.</string>
+    <string name="restore_cancelled">Restore was cancelled.</string>
+    <string name="restore_failed">Restore failed: %1$s</string>
+    <string name="button_restore_again">Restore again</string>
+    <string name="dialog_restoring_title">Restoring…</string>
+    <string name="restore_verifying_password">Verifying password…</string>
+    <string name="restore_decrypting_progress">Decrypting %1$d / %2$d files</string>
+    <string name="restore_failed_count">%1$d failed</string>
+
+    <!-- Restore collision policy display names -->
+    <string name="collision_skip">Skip existing files</string>
+    <string name="collision_overwrite">Overwrite</string>
+    <string name="collision_rename">Rename with _restored suffix</string>
 </resources>

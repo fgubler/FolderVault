@@ -1,5 +1,6 @@
 package ch.abwesend.foldervault.view.screens
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -39,9 +40,11 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.backup.BackupConfig
 import ch.abwesend.foldervault.domain.model.BackupRunStatus
 import ch.abwesend.foldervault.domain.model.BackupSchedule
@@ -71,20 +74,20 @@ fun HomeScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("FolderVault") },
+                title = { Text(stringResource(R.string.home_title)) },
                 actions = {
                     IconButton(onClick = onOpenRestore) {
-                        Icon(Icons.Default.Restore, contentDescription = "Restore backup")
+                        Icon(Icons.Default.Restore, contentDescription = stringResource(R.string.home_cd_restore))
                     }
                     IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
+                        Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.home_cd_settings))
                     }
                 },
             )
         },
         floatingActionButton = {
             FloatingActionButton(onClick = onAddBackup) {
-                Icon(Icons.Default.Add, contentDescription = "Add backup")
+                Icon(Icons.Default.Add, contentDescription = stringResource(R.string.home_cd_add))
             }
         },
     ) { innerPadding ->
@@ -123,12 +126,12 @@ private fun HomeEmptyState(modifier: Modifier = Modifier) {
             )
             Spacer(modifier = Modifier.height(16.dp))
             Text(
-                "No backups yet",
+                stringResource(R.string.home_empty_title),
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
-                "Tap + to create your first backup",
+                stringResource(R.string.home_empty_subtitle),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.outlineVariant,
             )
@@ -144,6 +147,8 @@ private fun BackupConfigCard(
     modifier: Modifier = Modifier,
 ) {
     val errorCount by errorBadgeFlow.collectAsState(initial = 0)
+    val scheduleName = stringResource(config.schedule.labelResId())
+    val networkName = stringResource(config.networkPolicy.labelResId())
 
     Card(
         modifier = modifier.clickable(onClick = onClick),
@@ -169,7 +174,7 @@ private fun BackupConfigCard(
                 if (config.encryptionEnabled) {
                     Icon(
                         Icons.Default.Lock,
-                        contentDescription = "Encrypted",
+                        contentDescription = stringResource(R.string.home_cd_encrypted),
                         modifier = Modifier.size(16.dp),
                         tint = MaterialTheme.colorScheme.secondary,
                     )
@@ -178,7 +183,7 @@ private fun BackupConfigCard(
                 if (config.isPaused) {
                     Icon(
                         Icons.Default.Pause,
-                        contentDescription = "Paused",
+                        contentDescription = stringResource(R.string.home_cd_paused),
                         modifier = Modifier.size(16.dp),
                         tint = MaterialTheme.colorScheme.outline,
                     )
@@ -194,7 +199,7 @@ private fun BackupConfigCard(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = "Schedule: ${config.schedule.displayName()}  •  ${config.networkPolicy.displayName()}",
+                text = stringResource(R.string.home_card_schedule_network, scheduleName, networkName),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -215,13 +220,12 @@ private fun BackupStatusLine(config: BackupConfig) {
     }
 
     val statusText = when {
-        config.isPaused -> "Paused"
+        config.isPaused -> stringResource(R.string.home_status_paused)
         config.lastRunStatus == BackupRunStatus.INITIAL_SYNC_IN_PROGRESS ->
-            "Initial backup: ${config.filesUploadedTotal} / ${config.totalFilesDiscovered}" +
-                " files — continues in next run"
-        config.lastRunStatus == BackupRunStatus.RUNNING -> "Running…"
+            stringResource(R.string.home_status_initial_sync, config.filesUploadedTotal, config.totalFilesDiscovered)
+        config.lastRunStatus == BackupRunStatus.RUNNING -> stringResource(R.string.home_status_running)
         config.lastRunAt != null -> buildLastRunText(config)
-        else -> "Never run"
+        else -> stringResource(R.string.home_status_never_run)
     }
 
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -242,33 +246,36 @@ private fun BackupStatusLine(config: BackupConfig) {
     }
 }
 
+@Composable
 private fun buildLastRunText(config: BackupConfig): String {
-    val lastRun = config.lastRunAt ?: return "Never run"
+    val lastRun = config.lastRunAt ?: return stringResource(R.string.home_status_never_run)
     val agoMs = System.currentTimeMillis() - lastRun
     val agoText = when {
-        agoMs < MS_PER_MINUTE -> "just now"
-        agoMs < MS_PER_HOUR -> "${agoMs / MS_PER_MINUTE}m ago"
-        agoMs < MS_PER_DAY -> "${agoMs / MS_PER_HOUR}h ago"
-        else -> "${agoMs / MS_PER_DAY}d ago"
+        agoMs < MS_PER_MINUTE -> stringResource(R.string.home_status_just_now)
+        agoMs < MS_PER_HOUR -> stringResource(R.string.home_status_ago_minutes, (agoMs / MS_PER_MINUTE).toInt())
+        agoMs < MS_PER_DAY -> stringResource(R.string.home_status_ago_hours, (agoMs / MS_PER_HOUR).toInt())
+        else -> stringResource(R.string.home_status_ago_days, (agoMs / MS_PER_DAY).toInt())
     }
     val parts = buildList {
-        add("${config.filesUploaded} uploaded")
-        if (config.filesFailed > 0) add("${config.filesFailed} failed")
+        add(stringResource(R.string.home_status_uploaded, config.filesUploaded))
+        if (config.filesFailed > 0) add(stringResource(R.string.home_status_failed, config.filesFailed))
     }
-    return "Last run $agoText • ${parts.joinToString(" • ")}"
+    return stringResource(R.string.home_status_last_run, agoText, parts.joinToString(" • "))
 }
 
-private fun BackupSchedule.displayName() = when (this) {
-    BackupSchedule.USE_GLOBAL_DEFAULT -> "Default"
-    BackupSchedule.MANUAL_ONLY -> "Manual"
-    BackupSchedule.DAILY -> "Daily"
-    BackupSchedule.WEEKLY -> "Weekly"
-    BackupSchedule.MONTHLY -> "Monthly"
+@StringRes
+private fun BackupSchedule.labelResId(): Int = when (this) {
+    BackupSchedule.USE_GLOBAL_DEFAULT -> R.string.schedule_default
+    BackupSchedule.MANUAL_ONLY -> R.string.schedule_manual
+    BackupSchedule.DAILY -> R.string.schedule_daily
+    BackupSchedule.WEEKLY -> R.string.schedule_weekly
+    BackupSchedule.MONTHLY -> R.string.schedule_monthly
 }
 
-private fun NetworkPolicy.displayName() = when (this) {
-    NetworkPolicy.WIFI_ONLY -> "Wi-Fi only"
-    NetworkPolicy.ANY -> "Any network"
+@StringRes
+private fun NetworkPolicy.labelResId(): Int = when (this) {
+    NetworkPolicy.WIFI_ONLY -> R.string.network_wifi_only
+    NetworkPolicy.ANY -> R.string.network_any
 }
 
 @Preview(showBackground = true)

@@ -7,6 +7,21 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-06-11 — i18n: extract all UI strings to strings.xml
+
+### What was done
+- **strings.xml expanded** from 9 notification-only entries to ~175 entries covering every screen, dialog, enum display name, and error message in the app.
+- **`UiText` sealed class** (`view/viewmodel/UiText.kt`) introduced as a ViewModel → Compose bridge: `UiText.Resource(@StringRes id)` for static strings and `UiText.ResourceWithArg(@StringRes id, arg: String)` for formatted ones. A `@Composable fun UiText.asString()` extension resolves them.
+- **`AddEditBackupViewModel`**: `AddEditFormState.errorMessage` changed from `String?` to `UiText?`; `CloudSetupState.Error.message` changed from `String` to `UiText`. All hardcoded validation and error literals replaced with `R.string.*` references.
+- **All five screens + InfoIconButton** rewritten to use `stringResource()`. Enum display names use private `@StringRes fun T.labelResId()` extension functions per file; `EnumDropdown` lambdas capture `LocalContext.current` and call `context.getString(it.labelResId())`.
+- **Onboarding** pages moved from `String` fields to `@StringRes Int` fields in `OnboardingPage`, so the `PAGES` top-level val no longer holds raw strings.
+- **`BackupRunStatus`, `MessageSeverity`, `MessageType`** all get `labelResId()` extensions in `BackupDetailScreen` so enum `.name` is never shown to users.
+- **`BackupUploader` and `FileSystemAnalyzer`**: backup-run messages now call `context.getString(R.string.msg_*)` at creation time and store the resolved text in `BackupMessageEntity.messageText`. This freezes the message in the device language active at the time of the backup run, so messages don't silently change wording if the user later switches language.
+
+### Key decisions
+- **No migration** for existing `BackupMessage` rows that have `messageText = null`: the display layer falls back to the string resource (`message.messageText ?: stringResource(message.type.labelResId())`), so old rows remain legible in any language.
+- **Schedule display names differ by screen by design**: Home shows "Default" (short), Settings shows "Global default", AddEdit shows "Use global default" — all map to `BackupSchedule.USE_GLOBAL_DEFAULT` but each screen has its own `labelResId()` for context-appropriate wording.
+
 ## 2026-06-11 — UI polish: insets, onboarding, info dialogs, section grouping
 
 ### Bugs fixed

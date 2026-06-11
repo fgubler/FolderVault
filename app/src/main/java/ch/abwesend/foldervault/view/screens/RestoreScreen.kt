@@ -3,6 +3,7 @@ package ch.abwesend.foldervault.view.screens
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -38,9 +39,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.restore.RestoreCollisionPolicy
 import ch.abwesend.foldervault.domain.restore.RestoreProgress
 import ch.abwesend.foldervault.domain.restore.RestoreResult
@@ -97,10 +100,10 @@ fun RestoreScreen(
         modifier = modifier,
         topBar = {
             TopAppBar(
-                title = { Text("Restore backup") },
+                title = { Text(stringResource(R.string.restore_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.button_back_cd))
                     }
                 },
             )
@@ -187,11 +190,9 @@ private fun RestoreContent(
 @Suppress("MultipleEmitters")
 @Composable
 private fun ExplanationSection() {
-    Text("Restore an encrypted backup", style = MaterialTheme.typography.titleSmall)
+    Text(stringResource(R.string.restore_explanation_title), style = MaterialTheme.typography.titleSmall)
     Text(
-        "1. Use the Google Drive app to download your backup folder to local storage.\n" +
-            "2. Pick the downloaded folder and an empty output folder here.\n" +
-            "3. Enter your backup password — every file will be decrypted locally.",
+        stringResource(R.string.restore_explanation_body),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -205,27 +206,31 @@ private fun SourceFolderSection(
     otherFileCount: Int,
     onPickSource: () -> Unit,
 ) {
-    Text("Step 1: downloaded backup folder", style = MaterialTheme.typography.labelLarge)
+    Text(stringResource(R.string.restore_step1_header), style = MaterialTheme.typography.labelLarge)
     OutlinedButton(onClick = onPickSource, modifier = Modifier.fillMaxWidth()) {
-        Text("Pick backup folder")
+        Text(stringResource(R.string.restore_pick_backup_folder))
     }
     when (state) {
         RestoreState.Scanning -> Text(
-            "Scanning…",
+            stringResource(R.string.restore_scanning),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         RestoreState.SourceReady, RestoreState.ReadyToStart, is RestoreState.Done -> {
             if (cryptFileCount == 0 && otherFileCount > 0) {
                 Text(
-                    "No encrypted files found. Your $otherFileCount file(s) are already usable without decryption.",
+                    stringResource(R.string.restore_no_encrypted_files, otherFileCount),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.tertiary,
                 )
             } else if (cryptFileCount > 0) {
+                val msg = if (otherFileCount > 0) {
+                    stringResource(R.string.restore_found_encrypted_and_other, cryptFileCount, otherFileCount)
+                } else {
+                    stringResource(R.string.restore_found_encrypted, cryptFileCount)
+                }
                 Text(
-                    "Found $cryptFileCount encrypted file(s)" +
-                        "${if (otherFileCount > 0) " and $otherFileCount other file(s)" else ""}.",
+                    msg,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -238,13 +243,13 @@ private fun SourceFolderSection(
 @Suppress("MultipleEmitters")
 @Composable
 private fun OutputFolderSection(outputUri: String?, onPickOutput: () -> Unit) {
-    Text("Step 2: output folder", style = MaterialTheme.typography.labelLarge)
+    Text(stringResource(R.string.restore_step2_header), style = MaterialTheme.typography.labelLarge)
     OutlinedButton(onClick = onPickOutput, modifier = Modifier.fillMaxWidth()) {
-        Text(if (outputUri != null) "Output folder selected ✓" else "Pick output folder")
+        Text(stringResource(if (outputUri != null) R.string.restore_output_selected else R.string.restore_pick_output_folder))
     }
     if (outputUri == null) {
         Text(
-            "Pick an empty folder. Non-empty folders trigger the collision policy below.",
+            stringResource(R.string.restore_output_hint),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -259,24 +264,25 @@ private fun PasswordAndStartSection(
     onStartRestore: (String) -> Unit,
     enabled: Boolean,
 ) {
-    Text("Step 3: password & options", style = MaterialTheme.typography.labelLarge)
+    val context = LocalContext.current
+    Text(stringResource(R.string.restore_step3_header), style = MaterialTheme.typography.labelLarge)
 
     var password by remember { mutableStateOf("") }
 
     OutlinedTextField(
         value = password,
         onValueChange = { password = it },
-        label = { Text("Backup password") },
+        label = { Text(stringResource(R.string.label_backup_password)) },
         visualTransformation = PasswordVisualTransformation(),
         singleLine = true,
         modifier = Modifier.fillMaxWidth(),
     )
     Spacer(modifier = Modifier.height(8.dp))
     EnumDropdown(
-        label = "If file already exists",
+        label = stringResource(R.string.label_if_file_exists),
         selected = collisionPolicy,
         options = RestoreCollisionPolicy.entries,
-        displayName = { it.displayName() },
+        displayName = { context.getString(it.labelResId()) },
         onSelect = onCollisionPolicyChange,
     )
     Spacer(modifier = Modifier.height(8.dp))
@@ -285,44 +291,44 @@ private fun PasswordAndStartSection(
         enabled = enabled && password.isNotEmpty(),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Text("Start restore")
+        Text(stringResource(R.string.button_start_restore))
     }
 }
 
 @Suppress("MultipleEmitters")
 @Composable
 private fun RestoreResultSection(result: RestoreResult, onReset: () -> Unit) {
-    Text("Result", style = MaterialTheme.typography.labelLarge)
+    Text(stringResource(R.string.restore_result_header), style = MaterialTheme.typography.labelLarge)
     when (result) {
         is RestoreResult.Success -> {
             val msg = buildString {
-                append("Restored ${result.decrypted} encrypted file(s)")
-                if (result.copied > 0) append(", copied ${result.copied} plain file(s)")
-                if (result.skipped > 0) append(", skipped ${result.skipped}")
-                if (result.failed > 0) append(", ${result.failed} failed")
+                append(stringResource(R.string.restore_success_base, result.decrypted))
+                if (result.copied > 0) append(stringResource(R.string.restore_success_and_copied, result.copied))
+                if (result.skipped > 0) append(stringResource(R.string.restore_success_and_skipped, result.skipped))
+                if (result.failed > 0) append(stringResource(R.string.restore_success_and_failed, result.failed))
                 append(".")
             }
             Text(msg, style = MaterialTheme.typography.bodyMedium)
         }
         RestoreResult.InvalidPassword -> Text(
-            "Wrong password. No files were modified.",
+            stringResource(R.string.restore_wrong_password),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.error,
         )
         RestoreResult.Cancelled -> Text(
-            "Restore was cancelled.",
+            stringResource(R.string.restore_cancelled),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         is RestoreResult.Failure -> Text(
-            "Restore failed: ${result.message}",
+            stringResource(R.string.restore_failed, result.message),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.error,
         )
     }
     Spacer(modifier = Modifier.height(8.dp))
     OutlinedButton(onClick = onReset, modifier = Modifier.fillMaxWidth()) {
-        Text("Restore again")
+        Text(stringResource(R.string.button_restore_again))
     }
 }
 
@@ -330,11 +336,11 @@ private fun RestoreResultSection(result: RestoreResult, onReset: () -> Unit) {
 private fun RestoreProgressDialog(progress: RestoreProgress?, onCancel: () -> Unit) {
     AlertDialog(
         onDismissRequest = {},
-        title = { Text("Restoring…") },
+        title = { Text(stringResource(R.string.dialog_restoring_title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (progress == null || progress.total == 0) {
-                    Text("Verifying password…", style = MaterialTheme.typography.bodyMedium)
+                    Text(stringResource(R.string.restore_verifying_password), style = MaterialTheme.typography.bodyMedium)
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 } else {
                     val fraction = progress.processed.toFloat() / progress.total.toFloat()
@@ -347,12 +353,12 @@ private fun RestoreProgressDialog(progress: RestoreProgress?, onCancel: () -> Un
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
                         Text(
-                            "Decrypting ${progress.processed} / ${progress.total} files",
+                            stringResource(R.string.restore_decrypting_progress, progress.processed, progress.total),
                             style = MaterialTheme.typography.bodySmall,
                         )
                         if (progress.failed > 0) {
                             Text(
-                                "${progress.failed} failed",
+                                stringResource(R.string.restore_failed_count, progress.failed),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.error,
                             )
@@ -370,14 +376,15 @@ private fun RestoreProgressDialog(progress: RestoreProgress?, onCancel: () -> Un
             }
         },
         confirmButton = {},
-        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onCancel) { Text(stringResource(R.string.button_cancel)) } },
     )
 }
 
-private fun RestoreCollisionPolicy.displayName() = when (this) {
-    RestoreCollisionPolicy.SKIP -> "Skip existing files"
-    RestoreCollisionPolicy.OVERWRITE -> "Overwrite"
-    RestoreCollisionPolicy.RENAME_WITH_SUFFIX -> "Rename with _restored suffix"
+@StringRes
+private fun RestoreCollisionPolicy.labelResId(): Int = when (this) {
+    RestoreCollisionPolicy.SKIP -> R.string.collision_skip
+    RestoreCollisionPolicy.OVERWRITE -> R.string.collision_overwrite
+    RestoreCollisionPolicy.RENAME_WITH_SUFFIX -> R.string.collision_rename
 }
 
 @Preview(showBackground = true)

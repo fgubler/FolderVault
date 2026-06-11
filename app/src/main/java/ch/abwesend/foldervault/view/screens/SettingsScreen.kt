@@ -4,6 +4,7 @@ import android.Manifest
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -30,8 +31,11 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.model.AppSettings
 import ch.abwesend.foldervault.domain.model.AppTheme
 import ch.abwesend.foldervault.domain.model.BackupSchedule
@@ -57,10 +61,10 @@ fun SettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Settings") },
+                title = { Text(stringResource(R.string.settings_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.button_back_cd))
                     }
                 },
             )
@@ -100,79 +104,81 @@ private fun SettingsContent(
     onRequestNotificationPermission: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
+
     Column(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
     ) {
-        SettingsSectionHeader("Backup defaults")
+        SettingsSectionHeader(stringResource(R.string.section_backup_defaults))
 
         EnumDropdown(
-            label = "Default schedule",
+            label = stringResource(R.string.label_default_schedule),
             selected = settings.defaultSchedule,
             options = BackupSchedule.entries.filter { it != BackupSchedule.USE_GLOBAL_DEFAULT },
-            displayName = { it.displayName() },
+            displayName = { context.getString(it.labelResId()) },
             onSelect = onScheduleChange,
         )
 
         Spacer(modifier = Modifier.height(12.dp))
         EnumDropdown(
-            label = "Default changed-file policy",
+            label = stringResource(R.string.label_default_changed_file_policy),
             selected = settings.defaultChangedFilePolicy,
             options = ChangedFilePolicy.entries,
-            displayName = { it.displayName() },
+            displayName = { context.getString(it.labelResId()) },
             onSelect = onChangedFilePolicyChange,
         )
 
         Spacer(modifier = Modifier.height(12.dp))
         EnumDropdown(
-            label = "Default network policy",
+            label = stringResource(R.string.label_default_network_policy),
             selected = settings.defaultNetworkPolicy,
             options = NetworkPolicy.entries,
-            displayName = { it.displayName() },
+            displayName = { context.getString(it.labelResId()) },
             onSelect = onNetworkPolicyChange,
         )
 
         SectionDivider()
-        SettingsSectionHeader("Appearance")
+        SettingsSectionHeader(stringResource(R.string.section_appearance))
 
         EnumDropdown(
-            label = "Theme",
+            label = stringResource(R.string.label_theme),
             selected = settings.theme,
             options = AppTheme.entries,
-            displayName = { it.displayName() },
+            displayName = { context.getString(it.labelResId()) },
             onSelect = onThemeChange,
         )
 
         SectionDivider()
-        SettingsSectionHeader("Privacy")
+        SettingsSectionHeader(stringResource(R.string.section_privacy))
 
         SwitchRow(
-            label = "Anonymous error reports",
-            description = "Help improve the app by sending anonymous crash reports",
+            label = stringResource(R.string.label_anonymous_error_reports),
+            description = stringResource(R.string.desc_anonymous_error_reports),
             checked = settings.anonymousErrorReports,
             onCheckedChange = onErrorReportsChange,
         )
 
         SectionDivider()
-        SettingsSectionHeader("Notifications")
+        SettingsSectionHeader(stringResource(R.string.section_notifications))
 
         OutlinedButton(
             onClick = onRequestNotificationPermission,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Re-request notification permission")
+            Text(stringResource(R.string.button_request_notification_permission))
         }
 
         SectionDivider()
-        SettingsSectionHeader("Help")
+        SettingsSectionHeader(stringResource(R.string.section_help))
 
         OutlinedButton(
             onClick = onShowOnboarding,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Show onboarding again")
+            Text(stringResource(R.string.button_show_onboarding))
         }
     }
 }
@@ -215,29 +221,33 @@ private fun SwitchRow(
     }
 }
 
-private fun BackupSchedule.displayName() = when (this) {
-    BackupSchedule.USE_GLOBAL_DEFAULT -> "Global default"
-    BackupSchedule.MANUAL_ONLY -> "Manual only"
-    BackupSchedule.DAILY -> "Daily"
-    BackupSchedule.WEEKLY -> "Weekly"
-    BackupSchedule.MONTHLY -> "Monthly"
+@StringRes
+private fun BackupSchedule.labelResId(): Int = when (this) {
+    BackupSchedule.USE_GLOBAL_DEFAULT -> R.string.schedule_global_default
+    BackupSchedule.MANUAL_ONLY -> R.string.schedule_manual_only
+    BackupSchedule.DAILY -> R.string.schedule_daily
+    BackupSchedule.WEEKLY -> R.string.schedule_weekly
+    BackupSchedule.MONTHLY -> R.string.schedule_monthly
 }
 
-private fun ChangedFilePolicy.displayName() = when (this) {
-    ChangedFilePolicy.DUPLICATE_WITH_TIMESTAMP -> "Keep timestamped copy"
-    ChangedFilePolicy.OVERWRITE -> "Overwrite"
-    ChangedFilePolicy.IGNORE -> "Skip changed files"
+@StringRes
+private fun ChangedFilePolicy.labelResId(): Int = when (this) {
+    ChangedFilePolicy.DUPLICATE_WITH_TIMESTAMP -> R.string.changed_file_keep_timestamp
+    ChangedFilePolicy.OVERWRITE -> R.string.changed_file_overwrite
+    ChangedFilePolicy.IGNORE -> R.string.changed_file_skip
 }
 
-private fun NetworkPolicy.displayName() = when (this) {
-    NetworkPolicy.WIFI_ONLY -> "Wi-Fi only"
-    NetworkPolicy.ANY -> "Any network"
+@StringRes
+private fun NetworkPolicy.labelResId(): Int = when (this) {
+    NetworkPolicy.WIFI_ONLY -> R.string.network_wifi_only
+    NetworkPolicy.ANY -> R.string.network_any
 }
 
-private fun AppTheme.displayName() = when (this) {
-    AppTheme.SYSTEM -> "System default"
-    AppTheme.LIGHT -> "Light"
-    AppTheme.DARK -> "Dark"
+@StringRes
+private fun AppTheme.labelResId(): Int = when (this) {
+    AppTheme.SYSTEM -> R.string.theme_system
+    AppTheme.LIGHT -> R.string.theme_light
+    AppTheme.DARK -> R.string.theme_dark
 }
 
 @Preview(showBackground = true)

@@ -14,6 +14,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import ch.abwesend.foldervault.R
 
 @Composable
 fun InfoIconButton(
@@ -26,7 +28,7 @@ fun InfoIconButton(
     IconButton(onClick = { showDialog = true }, modifier = modifier) {
         Icon(
             imageVector = Icons.Outlined.Info,
-            contentDescription = "About $title",
+            contentDescription = stringResource(R.string.info_cd_about, title),
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
@@ -37,7 +39,9 @@ fun InfoIconButton(
             title = { Text(title) },
             text = { Text(body) },
             confirmButton = {
-                TextButton(onClick = { showDialog = false }) { Text("Got it") }
+                TextButton(onClick = { showDialog = false }) {
+                    Text(stringResource(R.string.button_got_it))
+                }
             },
         )
     }

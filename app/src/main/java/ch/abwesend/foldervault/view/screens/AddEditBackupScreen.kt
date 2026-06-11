@@ -4,6 +4,7 @@ import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -40,9 +41,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.model.BackupSchedule
 import ch.abwesend.foldervault.domain.model.ChangedFilePolicy
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
@@ -54,6 +57,7 @@ import ch.abwesend.foldervault.view.viewmodel.AddEditBackupViewModel
 import ch.abwesend.foldervault.view.viewmodel.AddEditEvent
 import ch.abwesend.foldervault.view.viewmodel.AddEditFormState
 import ch.abwesend.foldervault.view.viewmodel.CloudSetupState
+import ch.abwesend.foldervault.view.viewmodel.asString
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
 
@@ -110,10 +114,10 @@ fun AddEditBackupScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (configId == null) "Add backup" else "Edit backup") },
+                title = { Text(stringResource(if (configId == null) R.string.add_backup_title else R.string.edit_backup_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.button_back_cd))
                     }
                 },
             )
@@ -200,7 +204,7 @@ private fun AddEditContent(
         )
 
         form.errorMessage?.let {
-            Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            Text(it.asString(), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         }
 
         Button(
@@ -208,7 +212,7 @@ private fun AddEditContent(
             enabled = !form.isSaving,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(if (form.isSaving) "Saving…" else "Save")
+            Text(stringResource(if (form.isSaving) R.string.button_saving else R.string.button_save))
         }
     }
 }
@@ -221,17 +225,23 @@ private fun BasicsSection(
     onDisplayNameChange: (String) -> Unit,
     onPickFolder: () -> Unit,
 ) {
-    SectionHeader("Basics")
+    SectionHeader(stringResource(R.string.section_basics))
     OutlinedTextField(
         value = displayName,
         onValueChange = onDisplayNameChange,
-        label = { Text("Display name") },
+        label = { Text(stringResource(R.string.label_display_name)) },
         singleLine = true,
         modifier = Modifier.fillMaxWidth(),
     )
     Spacer(modifier = Modifier.height(8.dp))
     OutlinedButton(onClick = onPickFolder, modifier = Modifier.fillMaxWidth()) {
-        Text(if (sourceFolderName.isNotEmpty()) "Folder: $sourceFolderName" else "Select source folder…")
+        Text(
+            if (sourceFolderName.isNotEmpty()) {
+                stringResource(R.string.button_folder_selected, sourceFolderName)
+            } else {
+                stringResource(R.string.button_select_folder)
+            },
+        )
     }
 }
 
@@ -241,14 +251,14 @@ private fun CloudSection(
     cloudSetup: CloudSetupState,
     onConnect: () -> Unit,
 ) {
-    SectionHeader("Cloud destination")
+    SectionHeader(stringResource(R.string.section_cloud_destination))
     val statusText = when (cloudSetup) {
-        CloudSetupState.Idle -> "Not connected"
-        CloudSetupState.Authorizing -> "Signing in…"
-        is CloudSetupState.ConsentRequired -> "Awaiting authorization…"
-        CloudSetupState.CreatingFolder -> "Creating backup folder…"
-        is CloudSetupState.Done -> "Google Drive • ${cloudSetup.accountId}\nFolder: ${cloudSetup.folderName}"
-        is CloudSetupState.Error -> "Error: ${cloudSetup.message}"
+        CloudSetupState.Idle -> stringResource(R.string.cloud_status_idle)
+        CloudSetupState.Authorizing -> stringResource(R.string.cloud_status_authorizing)
+        is CloudSetupState.ConsentRequired -> stringResource(R.string.cloud_status_awaiting_auth)
+        CloudSetupState.CreatingFolder -> stringResource(R.string.cloud_status_creating_folder)
+        is CloudSetupState.Done -> stringResource(R.string.cloud_status_done, cloudSetup.accountId, cloudSetup.folderName)
+        is CloudSetupState.Error -> stringResource(R.string.cloud_status_error, cloudSetup.message.asString())
     }
     Text(statusText, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     if (cloudSetup !is CloudSetupState.Done) {
@@ -257,7 +267,7 @@ private fun CloudSection(
             cloudSetup is CloudSetupState.ConsentRequired ||
             cloudSetup is CloudSetupState.CreatingFolder
         OutlinedButton(onClick = onConnect, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-            Text("Connect to Google Drive")
+            Text(stringResource(R.string.button_connect_drive))
         }
     }
 }
@@ -270,20 +280,21 @@ private fun ScheduleSection(
     onScheduleChange: (BackupSchedule) -> Unit,
     onNetworkPolicyChange: (NetworkPolicy) -> Unit,
 ) {
-    SectionHeader("Schedule & network")
+    val context = LocalContext.current
+    SectionHeader(stringResource(R.string.section_schedule_network))
     EnumDropdown(
-        label = "Schedule",
+        label = stringResource(R.string.label_schedule),
         selected = schedule,
         options = BackupSchedule.entries.filter { it != BackupSchedule.USE_GLOBAL_DEFAULT },
-        displayName = { it.displayName() },
+        displayName = { context.getString(it.labelResId()) },
         onSelect = onScheduleChange,
     )
     Spacer(modifier = Modifier.height(12.dp))
     EnumDropdown(
-        label = "Network policy",
+        label = stringResource(R.string.label_network_policy),
         selected = networkPolicy,
         options = NetworkPolicy.entries,
-        displayName = { it.displayName() },
+        displayName = { context.getString(it.labelResId()) },
         onSelect = onNetworkPolicyChange,
     )
 }
@@ -296,22 +307,21 @@ private fun FileVersioningSection(
     onChangedFilePolicyChange: (ChangedFilePolicy) -> Unit,
     onRetentionChange: (RetentionPolicy) -> Unit,
 ) {
-    SectionHeader("File versioning")
+    val context = LocalContext.current
+    SectionHeader(stringResource(R.string.section_file_versioning))
 
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         EnumDropdown(
-            label = "Changed-file policy",
+            label = stringResource(R.string.label_changed_file_policy),
             selected = changedFilePolicy,
             options = ChangedFilePolicy.entries,
-            displayName = { it.displayName() },
+            displayName = { context.getString(it.labelResId()) },
             onSelect = onChangedFilePolicyChange,
             modifier = Modifier.weight(1f),
         )
         InfoIconButton(
-            title = "Changed-file policy",
-            body = "FolderVault is built for files that rarely change. When a file you've " +
-                "already backed up gets edited, this setting decides whether to upload it as " +
-                "a new timestamped copy, overwrite the previous upload, or skip the change.",
+            title = stringResource(R.string.info_changed_file_policy_title),
+            body = stringResource(R.string.info_changed_file_policy_body),
         )
     }
 
@@ -325,6 +335,7 @@ private fun RetentionPicker(
     policy: RetentionPolicy,
     onRetentionChange: (RetentionPolicy) -> Unit,
 ) {
+    val context = LocalContext.current
     var keepNCount by remember(policy) {
         val initial = if (policy is RetentionPolicy.KeepLastN) policy.count else RETENTION_DEFAULT_KEEP_LAST_N
         mutableStateOf(initial.toString())
@@ -334,7 +345,11 @@ private fun RetentionPicker(
         mutableStateOf(initial.toString())
     }
 
-    val retentionOptions = listOf("Keep all", "Keep last N copies", "Keep newer than N days")
+    val retentionOptions = listOf(
+        stringResource(R.string.retention_keep_all),
+        stringResource(R.string.retention_keep_last_n_option),
+        stringResource(R.string.retention_keep_newer_than_n_option),
+    )
     val selectedIndex = when (policy) {
         RetentionPolicy.KeepAll -> 0
         is RetentionPolicy.KeepLastN -> 1
@@ -343,7 +358,7 @@ private fun RetentionPicker(
 
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         EnumDropdown(
-            label = "Retention policy",
+            label = stringResource(R.string.label_retention_policy),
             selected = selectedIndex,
             options = retentionOptions.indices.toList(),
             displayName = { retentionOptions[it] },
@@ -361,10 +376,8 @@ private fun RetentionPicker(
             modifier = Modifier.weight(1f),
         )
         InfoIconButton(
-            title = "Retention policy",
-            body = "When files change repeatedly, copies accumulate in the cloud. Retention " +
-                "lets FolderVault prune older copies — keep only the last N versions, or only " +
-                "versions newer than N days. \"Keep all\" never deletes anything automatically.",
+            title = stringResource(R.string.info_retention_policy_title),
+            body = stringResource(R.string.info_retention_policy_body),
         )
     }
 
@@ -376,7 +389,7 @@ private fun RetentionPicker(
                 keepNCount = v
                 v.toIntOrNull()?.let { onRetentionChange(RetentionPolicy.KeepLastN(it)) }
             },
-            label = { Text("Number of copies to keep") },
+            label = { Text(stringResource(R.string.label_keep_n_copies)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -388,7 +401,7 @@ private fun RetentionPicker(
                 keepDays = v
                 v.toIntOrNull()?.let { onRetentionChange(RetentionPolicy.KeepNewerThan(it)) }
             },
-            label = { Text("Keep files newer than (days)") },
+            label = { Text(stringResource(R.string.label_keep_newer_than_days)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -405,21 +418,18 @@ private fun EncryptionSection(
     onPasswordChange: (String) -> Unit,
     onPasswordConfirmChange: (String) -> Unit,
 ) {
-    SectionHeader("Encryption")
+    SectionHeader(stringResource(R.string.section_encryption))
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-        Text("Encrypt backup", modifier = Modifier.weight(1f))
+        Text(stringResource(R.string.label_encrypt_backup), modifier = Modifier.weight(1f))
         InfoIconButton(
-            title = "Encryption",
-            body = "When enabled, your files are encrypted on this device before being " +
-                "uploaded. Google Drive only sees scrambled data; only FolderVault on a " +
-                "device with your password can read them back. If you forget the password, " +
-                "the backup cannot be recovered.",
+            title = stringResource(R.string.info_encryption_title),
+            body = stringResource(R.string.info_encryption_body),
         )
         Switch(checked = enabled, onCheckedChange = onToggle)
     }
     if (enabled) {
         Text(
-            "Warning: If you forget the password, the backup cannot be recovered.",
+            stringResource(R.string.warning_encryption_password),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error,
         )
@@ -427,7 +437,7 @@ private fun EncryptionSection(
         OutlinedTextField(
             value = password,
             onValueChange = onPasswordChange,
-            label = { Text("Password") },
+            label = { Text(stringResource(R.string.label_password)) },
             visualTransformation = PasswordVisualTransformation(),
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
@@ -436,7 +446,7 @@ private fun EncryptionSection(
         OutlinedTextField(
             value = passwordConfirm,
             onValueChange = onPasswordConfirmChange,
-            label = { Text("Confirm password") },
+            label = { Text(stringResource(R.string.label_confirm_password)) },
             visualTransformation = PasswordVisualTransformation(),
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
@@ -453,23 +463,26 @@ private fun SectionHeader(title: String) {
     )
 }
 
-private fun BackupSchedule.displayName() = when (this) {
-    BackupSchedule.USE_GLOBAL_DEFAULT -> "Use global default"
-    BackupSchedule.MANUAL_ONLY -> "Manual only"
-    BackupSchedule.DAILY -> "Daily"
-    BackupSchedule.WEEKLY -> "Weekly"
-    BackupSchedule.MONTHLY -> "Monthly"
+@StringRes
+private fun BackupSchedule.labelResId(): Int = when (this) {
+    BackupSchedule.USE_GLOBAL_DEFAULT -> R.string.schedule_use_global_default
+    BackupSchedule.MANUAL_ONLY -> R.string.schedule_manual_only
+    BackupSchedule.DAILY -> R.string.schedule_daily
+    BackupSchedule.WEEKLY -> R.string.schedule_weekly
+    BackupSchedule.MONTHLY -> R.string.schedule_monthly
 }
 
-private fun ChangedFilePolicy.displayName() = when (this) {
-    ChangedFilePolicy.DUPLICATE_WITH_TIMESTAMP -> "Keep timestamped copy"
-    ChangedFilePolicy.OVERWRITE -> "Overwrite"
-    ChangedFilePolicy.IGNORE -> "Skip changed files"
+@StringRes
+private fun ChangedFilePolicy.labelResId(): Int = when (this) {
+    ChangedFilePolicy.DUPLICATE_WITH_TIMESTAMP -> R.string.changed_file_keep_timestamp
+    ChangedFilePolicy.OVERWRITE -> R.string.changed_file_overwrite
+    ChangedFilePolicy.IGNORE -> R.string.changed_file_skip
 }
 
-private fun NetworkPolicy.displayName() = when (this) {
-    NetworkPolicy.WIFI_ONLY -> "Wi-Fi only"
-    NetworkPolicy.ANY -> "Any network"
+@StringRes
+private fun NetworkPolicy.labelResId(): Int = when (this) {
+    NetworkPolicy.WIFI_ONLY -> R.string.network_wifi_only
+    NetworkPolicy.ANY -> R.string.network_any
 }
 
 @Preview(showBackground = true)

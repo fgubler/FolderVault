@@ -4,6 +4,7 @@ import android.app.PendingIntent
 import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.backup.BackupConfig
 import ch.abwesend.foldervault.domain.backup.IBackupConfigRepository
 import ch.abwesend.foldervault.domain.backup.IBackupScheduler
@@ -43,7 +44,7 @@ data class AddEditFormState(
     val passwordConfirm: String = "",
     val retentionPolicy: RetentionPolicy = RetentionPolicy.KeepAll,
     val isSaving: Boolean = false,
-    val errorMessage: String? = null,
+    val errorMessage: UiText? = null,
     val isEditMode: Boolean = false,
 )
 
@@ -57,7 +58,7 @@ sealed interface CloudSetupState {
         val folderName: String,
         val accountId: String,
     ) : CloudSetupState
-    data class Error(val message: String) : CloudSetupState
+    data class Error(val message: UiText) : CloudSetupState
 }
 
 sealed interface AddEditEvent {
@@ -153,7 +154,7 @@ class AddEditBackupViewModel(
                 is CloudAuthResult.ConsentRequired ->
                     updateForm { it.copy(cloudSetup = CloudSetupState.ConsentRequired(result.pendingIntent)) }
                 CloudAuthResult.Error ->
-                    updateForm { it.copy(cloudSetup = CloudSetupState.Error("Authorization failed")) }
+                    updateForm { it.copy(cloudSetup = CloudSetupState.Error(UiText.Resource(R.string.error_auth_failed))) }
             }
         }
     }
@@ -164,7 +165,7 @@ class AddEditBackupViewModel(
             if (result is SuccessResult) {
                 createCloudFolder(result.value)
             } else {
-                updateForm { it.copy(cloudSetup = CloudSetupState.Error("Authorization failed")) }
+                updateForm { it.copy(cloudSetup = CloudSetupState.Error(UiText.Resource(R.string.error_auth_failed))) }
             }
         }
     }
@@ -180,7 +181,7 @@ class AddEditBackupViewModel(
                 it.copy(cloudSetup = CloudSetupState.Done(folder.id, folder.name, accountResult.value))
             }
         } else {
-            updateForm { it.copy(cloudSetup = CloudSetupState.Error("Could not create backup folder")) }
+            updateForm { it.copy(cloudSetup = CloudSetupState.Error(UiText.Resource(R.string.error_create_folder_failed))) }
         }
     }
 
@@ -196,18 +197,23 @@ class AddEditBackupViewModel(
                 scheduler.schedulePeriodicIfNeeded(config.id, config.schedule, config.networkPolicy, globalDefault)
                 _events.emit(AddEditEvent.Saved)
             } catch (e: Exception) {
-                updateForm { it.copy(isSaving = false, errorMessage = "Save failed: ${e.message}") }
+                updateForm {
+                    it.copy(
+                        isSaving = false,
+                        errorMessage = UiText.ResourceWithArg(R.string.error_save_failed, e.message ?: ""),
+                    )
+                }
             }
         }
     }
 
     private fun validate(state: AddEditFormState): Boolean {
-        val error = when {
-            state.displayName.isBlank() -> "Display name is required"
-            state.sourceTreeUri.isBlank() -> "Please select a source folder"
-            state.cloudSetup !is CloudSetupState.Done -> "Please connect to Google Drive"
-            state.encryptionEnabled && state.password.isBlank() -> "Password is required when encryption is enabled"
-            state.encryptionEnabled && state.password != state.passwordConfirm -> "Passwords do not match"
+        val error: UiText? = when {
+            state.displayName.isBlank() -> UiText.Resource(R.string.error_display_name_required)
+            state.sourceTreeUri.isBlank() -> UiText.Resource(R.string.error_no_source_folder)
+            state.cloudSetup !is CloudSetupState.Done -> UiText.Resource(R.string.error_no_drive_connection)
+            state.encryptionEnabled && state.password.isBlank() -> UiText.Resource(R.string.error_password_required)
+            state.encryptionEnabled && state.password != state.passwordConfirm -> UiText.Resource(R.string.error_passwords_dont_match)
             else -> null
         }
         if (error != null) updateForm { it.copy(errorMessage = error) }
@@ -221,7 +227,7 @@ class AddEditBackupViewModel(
         val (encryptedBlob, saltBase64) = if (state.encryptionEnabled) {
             val result = encryptionRepo.encryptPassword(state.password)
             if (result !is SuccessResult) {
-                updateForm { it.copy(isSaving = false, errorMessage = "Encryption setup failed") }
+                updateForm { it.copy(isSaving = false, errorMessage = UiText.Resource(R.string.error_encryption_setup_failed)) }
                 return null
             }
             val salt = existingConfig?.encryptionSaltBase64

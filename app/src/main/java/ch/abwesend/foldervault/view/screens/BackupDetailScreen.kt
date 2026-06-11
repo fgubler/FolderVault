@@ -1,5 +1,6 @@
 package ch.abwesend.foldervault.view.screens
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -43,9 +44,11 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.backup.BackupConfig
 import ch.abwesend.foldervault.domain.backup.BackupMessage
 import ch.abwesend.foldervault.domain.model.BackupRunStatus
@@ -112,16 +115,18 @@ fun BackupDetailScreen(
         modifier = modifier,
         topBar = {
             TopAppBar(
-                title = { Text(config?.displayName ?: "Backup detail") },
+                title = { Text(config?.displayName ?: stringResource(R.string.detail_default_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.button_back_cd))
                     }
                 },
                 actions = {
-                    IconButton(onClick = onEdit) { Icon(Icons.Default.Edit, "Edit") }
+                    IconButton(onClick = onEdit) {
+                        Icon(Icons.Default.Edit, stringResource(R.string.edit_backup_title))
+                    }
                     IconButton(onClick = { showDeleteDialog = true }) {
-                        Icon(Icons.Default.Delete, "Delete")
+                        Icon(Icons.Default.Delete, stringResource(R.string.dialog_delete_title))
                     }
                 },
             )
@@ -129,7 +134,7 @@ fun BackupDetailScreen(
     ) { innerPadding ->
         val cfg = config
         if (cfg == null) {
-            Text("Loading…", modifier = Modifier.padding(innerPadding).padding(16.dp))
+            Text(stringResource(R.string.loading), modifier = Modifier.padding(innerPadding).padding(16.dp))
         } else {
             DetailContent(
                 config = cfg,
@@ -174,7 +179,7 @@ private fun DetailContent(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    "Messages",
+                    stringResource(R.string.messages_header),
                     style = MaterialTheme.typography.titleSmall,
                     modifier = Modifier.weight(1f),
                 )
@@ -182,14 +187,14 @@ private fun DetailContent(
                     TextButton(onClick = {
                         onMarkRead(messages.map { it.id })
                         onDismissAll()
-                    }) { Text("Clear all") }
+                    }) { Text(stringResource(R.string.button_clear_all)) }
                 }
             }
         }
         if (messages.isEmpty()) {
             item {
                 Text(
-                    "No messages",
+                    stringResource(R.string.no_messages),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -209,12 +214,18 @@ private fun DetailContent(
 @Composable
 private fun ConfigInfoSection(config: BackupConfig) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        InfoRow("Cloud folder", config.cloudRootFolderName)
-        InfoRow("Account", config.cloudAccountIdentifier)
-        InfoRow("Schedule", config.schedule.name.lowercase().replaceFirstChar { it.uppercase() })
-        InfoRow("Network", if (config.networkPolicy == NetworkPolicy.WIFI_ONLY) "Wi-Fi only" else "Any")
-        InfoRow("Encryption", if (config.encryptionEnabled) "Enabled" else "Disabled")
-        InfoRow("Retention", config.retentionPolicy.displayName())
+        InfoRow(stringResource(R.string.label_cloud_folder), config.cloudRootFolderName)
+        InfoRow(stringResource(R.string.label_account), config.cloudAccountIdentifier)
+        InfoRow(stringResource(R.string.label_schedule), stringResource(config.schedule.labelResId()))
+        InfoRow(
+            stringResource(R.string.label_network),
+            stringResource(if (config.networkPolicy == NetworkPolicy.WIFI_ONLY) R.string.network_wifi_only else R.string.network_any_short),
+        )
+        InfoRow(
+            stringResource(R.string.label_encryption),
+            stringResource(if (config.encryptionEnabled) R.string.encryption_enabled else R.string.encryption_disabled),
+        )
+        InfoRow(stringResource(R.string.label_retention), config.retentionPolicy.displayName())
         Spacer(modifier = Modifier.height(8.dp))
         StatusSection(config)
     }
@@ -228,11 +239,11 @@ private fun StatusSection(config: BackupConfig) {
         else -> MaterialTheme.colorScheme.onSurface
     }
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text("Status", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-        Text(config.lastRunStatus.name, style = MaterialTheme.typography.bodyMedium, color = statusColor)
+        Text(stringResource(R.string.status_section_header), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+        Text(stringResource(config.lastRunStatus.labelResId()), style = MaterialTheme.typography.bodyMedium, color = statusColor)
         if (config.totalFilesDiscovered > 0) {
             Text(
-                "Progress: ${config.filesUploadedTotal} / ${config.totalFilesDiscovered} files total",
+                stringResource(R.string.progress_text, config.filesUploadedTotal, config.totalFilesDiscovered),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -240,7 +251,7 @@ private fun StatusSection(config: BackupConfig) {
         config.lastRunAt?.let { lastRun ->
             val ago = (System.currentTimeMillis() - lastRun) / MS_PER_MINUTE
             Text(
-                "Last run: ${ago}m ago  •  ${config.filesUploaded} uploaded, ${config.filesFailed} failed",
+                stringResource(R.string.last_run_text, ago, config.filesUploaded, config.filesFailed),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -272,18 +283,20 @@ private fun ActionButtonRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Button(onClick = onBackUpNow, modifier = Modifier.weight(1f)) { Text("Back up now") }
+            Button(onClick = onBackUpNow, modifier = Modifier.weight(1f)) {
+                Text(stringResource(R.string.button_back_up_now))
+            }
             OutlinedButton(onClick = onTogglePause, modifier = Modifier.weight(1f)) {
                 Icon(
                     if (config.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
                     contentDescription = null,
                 )
-                Text(if (config.isPaused) "Resume" else "Pause")
+                Text(stringResource(if (config.isPaused) R.string.button_resume else R.string.button_pause))
             }
         }
         if (config.encryptionEnabled) {
             OutlinedButton(onClick = onCheckPassword, modifier = Modifier.fillMaxWidth()) {
-                Text("Check my password")
+                Text(stringResource(R.string.button_check_password))
             }
         }
     }
@@ -315,7 +328,7 @@ private fun MessageItem(
         Column(modifier = Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = message.severity.name,
+                    text = stringResource(message.severity.labelResId()),
                     style = MaterialTheme.typography.labelSmall,
                     color = borderColor,
                     modifier = Modifier.weight(1f),
@@ -328,16 +341,16 @@ private fun MessageItem(
                     )
                 }
             }
-            val text = message.messageText ?: message.type.name.lowercase().replace('_', ' ')
+            val text = message.messageText ?: stringResource(message.type.labelResId())
             Text(text, style = MaterialTheme.typography.bodySmall)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End,
             ) {
                 if (message.readAt == null) {
-                    TextButton(onClick = onMarkRead) { Text("Mark read") }
+                    TextButton(onClick = onMarkRead) { Text(stringResource(R.string.button_mark_read)) }
                 }
-                TextButton(onClick = onDismiss) { Text("Dismiss") }
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.button_dismiss)) }
             }
         }
     }
@@ -347,17 +360,10 @@ private fun MessageItem(
 private fun DeleteConfirmDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Delete backup?") },
-        text = {
-            Text(
-                "Your data on Google Drive is safe. The app will forget which files have " +
-                    "been backed up — if you ever re-create this backup, it will upload " +
-                    "everything again. You can delete the Drive folder yourself in the Google " +
-                    "Drive app if you wish.",
-            )
-        },
-        confirmButton = { Button(onClick = onConfirm) { Text("Delete") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        title = { Text(stringResource(R.string.dialog_delete_title)) },
+        text = { Text(stringResource(R.string.dialog_delete_body)) },
+        confirmButton = { Button(onClick = onConfirm) { Text(stringResource(R.string.button_delete)) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.button_cancel)) } },
     )
 }
 
@@ -371,18 +377,18 @@ private fun CheckPasswordDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Check my password") },
+        title = { Text(stringResource(R.string.dialog_check_password_title)) },
         text = {
             Column {
                 Text(
-                    "Enter your backup password to verify you still remember it.",
+                    stringResource(R.string.dialog_check_password_body),
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 OutlinedTextField(
                     value = candidate,
                     onValueChange = { candidate = it },
-                    label = { Text("Password") },
+                    label = { Text(stringResource(R.string.label_password)) },
                     visualTransformation = PasswordVisualTransformation(),
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
@@ -390,26 +396,66 @@ private fun CheckPasswordDialog(
                 result?.let { matches ->
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        if (matches) "✓ Password is correct" else "✗ Password is incorrect",
-                        color = if (matches) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.error
-                        },
+                        stringResource(if (matches) R.string.password_correct else R.string.password_incorrect),
+                        color = if (matches) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
             }
         },
-        confirmButton = { Button(onClick = { onCheck(candidate) }) { Text("Check") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        confirmButton = { Button(onClick = { onCheck(candidate) }) { Text(stringResource(R.string.button_check)) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.button_close)) } },
     )
 }
 
-private fun RetentionPolicy.displayName() = when (this) {
-    RetentionPolicy.KeepAll -> "Keep all"
-    is RetentionPolicy.KeepLastN -> "Keep last $count"
-    is RetentionPolicy.KeepNewerThan -> "Keep < $days days"
+@Composable
+private fun RetentionPolicy.displayName(): String = when (this) {
+    RetentionPolicy.KeepAll -> stringResource(R.string.retention_keep_all)
+    is RetentionPolicy.KeepLastN -> stringResource(R.string.retention_keep_last_n, count)
+    is RetentionPolicy.KeepNewerThan -> stringResource(R.string.retention_keep_newer_than, days)
+}
+
+@StringRes
+private fun BackupSchedule.labelResId(): Int = when (this) {
+    BackupSchedule.USE_GLOBAL_DEFAULT -> R.string.schedule_default
+    BackupSchedule.MANUAL_ONLY -> R.string.schedule_manual_only
+    BackupSchedule.DAILY -> R.string.schedule_daily
+    BackupSchedule.WEEKLY -> R.string.schedule_weekly
+    BackupSchedule.MONTHLY -> R.string.schedule_monthly
+}
+
+@StringRes
+private fun BackupRunStatus.labelResId(): Int = when (this) {
+    BackupRunStatus.IDLE -> R.string.status_idle
+    BackupRunStatus.RUNNING -> R.string.status_running
+    BackupRunStatus.INITIAL_SYNC_IN_PROGRESS -> R.string.status_initial_sync_in_progress
+    BackupRunStatus.UP_TO_DATE -> R.string.status_up_to_date
+    BackupRunStatus.COMPLETED_WITH_WARNINGS -> R.string.status_completed_with_warnings
+    BackupRunStatus.FAILED -> R.string.status_failed
+}
+
+@StringRes
+private fun MessageSeverity.labelResId(): Int = when (this) {
+    MessageSeverity.INFO -> R.string.severity_info
+    MessageSeverity.WARNING -> R.string.severity_warning
+    MessageSeverity.ERROR -> R.string.severity_error
+    MessageSeverity.CRITICAL -> R.string.severity_critical
+}
+
+@StringRes
+private fun MessageType.labelResId(): Int = when (this) {
+    MessageType.AUTH_LOST -> R.string.msg_auth_lost
+    MessageType.FOLDER_UNREADABLE -> R.string.msg_folder_unreadable
+    MessageType.FILE_TOO_LARGE -> R.string.msg_file_too_large
+    MessageType.UPLOAD_FAILED -> R.string.msg_upload_failed
+    MessageType.ENCRYPTION_FAILED -> R.string.msg_encryption_failed
+    MessageType.INITIAL_SYNC_COMPLETE -> R.string.msg_initial_sync_complete
+    MessageType.QUOTA_EXCEEDED -> R.string.msg_quota_exceeded
+    MessageType.UNRELIABLE_TIMESTAMPS -> R.string.msg_unreliable_timestamps
+    MessageType.RATE_LIMITED -> R.string.msg_rate_limited
+    MessageType.GENERIC_INFO -> R.string.msg_generic_info
+    MessageType.GENERIC_WARNING -> R.string.msg_generic_warning
+    MessageType.GENERIC_ERROR -> R.string.msg_generic_error
 }
 
 @Preview(showBackground = true)

@@ -2,6 +2,7 @@ package ch.abwesend.foldervault.infrastructure.backup
 
 import android.content.Context
 import android.net.Uri
+import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.cloud.ICloudStorageProvider
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.logging.logger
@@ -167,7 +168,7 @@ class FileSystemAnalyzer(
                 timestamp = System.currentTimeMillis(),
                 severity = MessageSeverity.WARNING,
                 type = MessageType.UNRELIABLE_TIMESTAMPS,
-                messageText = null,
+                messageText = context.getString(R.string.msg_unreliable_timestamps),
                 formatArgs = emptyList(),
                 relativePath = null,
                 readAt = null,

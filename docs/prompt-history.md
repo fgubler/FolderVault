@@ -7,6 +7,21 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-06-11 — review-plan: Tier 6 (oversized files — switch to deferral semantics)
+
+### What was done
+
+- **6.1 `BackupUploader.processChannel`**: Removed the tier branch that dropped `OVERSIZED` tasks. All non-skipped tasks now call `uploadOne` regardless of tier. The post-loop `FILE_TOO_LARGE` emission block is the only place the tier is inspected.
+- **6.2 `RunSummary.oversizedCount` rename**: Renamed to `oversizedUploaded` and added a companion field `oversizedDeferred: Int`. All read/write sites in `BackupUploader` updated.
+- **6.3 Deferral tracking + single post-loop message**: In `processChannel`, when `shouldSkip && task.tier == OVERSIZED`, `summary.oversizedDeferred++` is incremented. After the loop, if `hitTimeBudget && oversizedDeferred > 0`, a single `FILE_TOO_LARGE` message at `INFO` severity is emitted (using the existing `coalesceInsert` dedup).
+- **6.4 `strings.xml` copy update**: Updated `msg_file_too_large` to deferral wording ("Some large files were deferred and will be uploaded in the next run."). Renamed `label_default_file_size_limit` to "Defer files larger than (MB)" and updated `info_file_size_limit_title`/`info_file_size_limit_body` to describe deferral rather than a hard cap.
+- **6.5 `BackupUploaderTest` replacement**: Deleted the old incorrect OVERSIZED test (asserted no-upload + WARNING). Added four new tests: (a) successful oversized upload increments `oversizedUploaded` and `filesUploaded`; (b) OVERSIZED task skipped after `hitTimeBudget` increments `oversizedDeferred` and emits exactly one INFO `FILE_TOO_LARGE` message; (c) two deferred OVERSIZED tasks still emit exactly one message; (d) no deferred OVERSIZED tasks means no `FILE_TOO_LARGE` message.
+
+### All checks passed
+`./gradlew assembleDebug` ✓ `./gradlew test` ✓ `./gradlew detekt` ✓
+
+---
+
 ## 2026-06-11 — review-plan: Tier 5 (verification follow-ups)
 
 ### What was done

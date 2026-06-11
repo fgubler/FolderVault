@@ -3,6 +3,7 @@ package ch.abwesend.folderVault.infrastructure.backup
 import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
+import ch.abwesend.foldervault.domain.cloud.CloudFile
 import ch.abwesend.foldervault.domain.cloud.CloudQuotaExceededException
 import ch.abwesend.foldervault.domain.cloud.ICloudAuthorizer
 import ch.abwesend.foldervault.domain.cloud.ICloudStorageProvider
@@ -18,6 +19,7 @@ import ch.abwesend.foldervault.domain.model.MessageType
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.model.RetentionPolicy
 import ch.abwesend.foldervault.domain.result.ErrorResult
+import ch.abwesend.foldervault.domain.result.SuccessResult
 import ch.abwesend.foldervault.infrastructure.backup.BackupUploader
 import ch.abwesend.foldervault.infrastructure.backup.FolderPathCache
 import ch.abwesend.foldervault.infrastructure.backup.RunSummary
@@ -122,7 +124,39 @@ class BackupUploaderTest : StringSpec({
         }
     }
 
-    "OVERSIZED task emits FILE_TOO_LARGE message and increments oversizedCount without uploading" {
+    "OVERSIZED task is uploaded and increments oversizedUploaded" {
+        val cloudProvider = mockk<ICloudStorageProvider>(relaxed = true) {
+            coEvery { uploadFile(any(), any(), any(), any()) } returns SuccessResult(CloudFile("cf-1", "big.iso"))
+        }
+        val (uploader, folderCache) = makeUploader(makeContext(), cloudProvider)
+        val stagingDir = Files.createTempDirectory("fv-uploader-test").toFile()
+        try {
+            val channel = Channel<UploadTask>(1)
+            channel.send(
+                UploadTask("big.iso", mockk<Uri>(), 500L, 0L, UploadMode.NEW, UploadTier.OVERSIZED),
+            )
+            channel.close()
+
+            val summary = RunSummary()
+            uploader.processChannel(
+                makeConfig("cfg-oversized"),
+                channel,
+                "run-x",
+                stagingDir,
+                folderCache,
+                null,
+                null,
+                summary,
+            )
+
+            summary.oversizedUploaded shouldBe 1
+            summary.filesUploaded shouldBe 1
+        } finally {
+            stagingDir.deleteRecursively()
+        }
+    }
+
+    "OVERSIZED task after hitTimeBudget increments oversizedDeferred" {
         val cloudProvider = mockk<ICloudStorageProvider>(relaxed = true)
         val backupMessageDao = mockk<BackupMessageDao>(relaxed = true)
         val dispatchers = mockk<IDispatchers> { every { io } returns testDispatcher }
@@ -144,9 +178,9 @@ class BackupUploaderTest : StringSpec({
             )
             channel.close()
 
-            val summary = RunSummary()
+            val summary = RunSummary().apply { hitTimeBudget = true }
             uploader.processChannel(
-                makeConfig("cfg-oversized"),
+                makeConfig("cfg-deferred"),
                 channel,
                 "run-x",
                 stagingDir,
@@ -156,12 +190,98 @@ class BackupUploaderTest : StringSpec({
                 summary,
             )
 
-            summary.oversizedCount shouldBe 1
+            summary.oversizedDeferred shouldBe 1
             summary.filesUploaded shouldBe 0
             coVerify(exactly = 1) {
                 backupMessageDao.coalesceInsert(
-                    match { it.type == MessageType.FILE_TOO_LARGE && it.severity == MessageSeverity.WARNING },
+                    match { it.type == MessageType.FILE_TOO_LARGE && it.severity == MessageSeverity.INFO },
                 )
+            }
+        } finally {
+            stagingDir.deleteRecursively()
+        }
+    }
+
+    "two OVERSIZED tasks deferred produce exactly one FILE_TOO_LARGE message" {
+        val cloudProvider = mockk<ICloudStorageProvider>(relaxed = true)
+        val backupMessageDao = mockk<BackupMessageDao>(relaxed = true)
+        val dispatchers = mockk<IDispatchers> { every { io } returns testDispatcher }
+        val uploader = BackupUploader(
+            context = makeContext(),
+            cipher = mockk<IFvc1Cipher>(),
+            authorizer = mockk<ICloudAuthorizer>(),
+            uploadedFileIndexDao = mockk<UploadedFileIndexDao>(relaxed = true),
+            backupMessageDao = backupMessageDao,
+            dispatchers = dispatchers,
+            cloudProvider = cloudProvider,
+        )
+        val folderCache = FolderPathCache(cloudProvider)
+        val stagingDir = Files.createTempDirectory("fv-uploader-test").toFile()
+        try {
+            val uri = mockk<Uri>()
+            val channel = Channel<UploadTask>(2)
+            channel.send(UploadTask("a.iso", uri, 500L, 0L, UploadMode.NEW, UploadTier.OVERSIZED))
+            channel.send(UploadTask("b.iso", uri, 600L, 0L, UploadMode.NEW, UploadTier.OVERSIZED))
+            channel.close()
+
+            val summary = RunSummary().apply { hitTimeBudget = true }
+            uploader.processChannel(
+                makeConfig("cfg-two"),
+                channel,
+                "run-y",
+                stagingDir,
+                folderCache,
+                null,
+                null,
+                summary,
+            )
+
+            summary.oversizedDeferred shouldBe 2
+            coVerify(exactly = 1) {
+                backupMessageDao.coalesceInsert(match { it.type == MessageType.FILE_TOO_LARGE })
+            }
+        } finally {
+            stagingDir.deleteRecursively()
+        }
+    }
+
+    "no OVERSIZED tasks deferred means no FILE_TOO_LARGE message" {
+        val cloudProvider = mockk<ICloudStorageProvider>(relaxed = true)
+        val backupMessageDao = mockk<BackupMessageDao>(relaxed = true)
+        val dispatchers = mockk<IDispatchers> { every { io } returns testDispatcher }
+        val uploader = BackupUploader(
+            context = makeContext(),
+            cipher = mockk<IFvc1Cipher>(),
+            authorizer = mockk<ICloudAuthorizer>(),
+            uploadedFileIndexDao = mockk<UploadedFileIndexDao>(relaxed = true),
+            backupMessageDao = backupMessageDao,
+            dispatchers = dispatchers,
+            cloudProvider = cloudProvider,
+        )
+        val folderCache = FolderPathCache(cloudProvider)
+        val stagingDir = Files.createTempDirectory("fv-uploader-test").toFile()
+        try {
+            val channel = Channel<UploadTask>(1)
+            channel.send(
+                UploadTask("small.txt", mockk<Uri>(), 100L, 0L, UploadMode.NEW, UploadTier.NORMAL),
+            )
+            channel.close()
+
+            val summary = RunSummary().apply { hitTimeBudget = true }
+            uploader.processChannel(
+                makeConfig("cfg-none"),
+                channel,
+                "run-z",
+                stagingDir,
+                folderCache,
+                null,
+                null,
+                summary,
+            )
+
+            summary.oversizedDeferred shouldBe 0
+            coVerify(exactly = 0) {
+                backupMessageDao.coalesceInsert(match { it.type == MessageType.FILE_TOO_LARGE })
             }
         } finally {
             stagingDir.deleteRecursively()

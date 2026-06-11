@@ -77,7 +77,7 @@
     <!-- Backup run message texts (resolved at creation time, frozen in device language) -->
     <string name="msg_auth_lost">Google Drive authorization lost — re-connect your account.</string>
     <string name="msg_folder_unreadable">A folder could not be read.</string>
-    <string name="msg_file_too_large">One or more files exceeded the size limit and were skipped.</string>
+    <string name="msg_file_too_large">Some large files were deferred and will be uploaded in the next run.</string>
     <string name="msg_upload_failed">One or more files failed to upload.</string>
     <string name="msg_encryption_failed">One or more files could not be encrypted.</string>
     <string name="msg_initial_sync_complete">Initial sync complete.</string>
@@ -197,9 +197,9 @@
     <string name="label_default_schedule">Default schedule</string>
     <string name="label_default_changed_file_policy">Default changed-file policy</string>
     <string name="label_default_network_policy">Default network policy</string>
-    <string name="label_default_file_size_limit">Max file size (MB)</string>
-    <string name="info_file_size_limit_title">Max file size</string>
-    <string name="info_file_size_limit_body">Files larger than this limit are skipped during backup. This prevents very large files from stalling a run. Set to 0 to disable the limit.</string>
+    <string name="label_default_file_size_limit">Defer files larger than (MB)</string>
+    <string name="info_file_size_limit_title">Large file deferral</string>
+    <string name="info_file_size_limit_body">Files larger than this threshold are moved to the end of the upload queue. They are uploaded after all smaller files, so a large file never blocks a run. Set to 0 to disable deferral.</string>
     <string name="label_theme">Theme</string>
     <string name="label_anonymous_error_reports">Anonymous error reports</string>
     <string name="desc_anonymous_error_reports">Help improve the app by sending anonymous crash reports</string>

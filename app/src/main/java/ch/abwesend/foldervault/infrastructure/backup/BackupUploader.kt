@@ -57,26 +57,26 @@ class BackupUploader(
         // producer blocked on send(), hanging the coroutineScope indefinitely.
         for (task in channel) {
             val shouldSkip = summary.authLost || summary.quotaExceeded || summary.hitTimeBudget
-            if (!shouldSkip) {
-                if (task.tier == UploadTier.OVERSIZED) {
-                    summary.oversizedCount++
-                    emitMessage(config, runId, MessageSeverity.WARNING, MessageType.FILE_TOO_LARGE)
-                } else {
-                    uploadOne(
-                        config = config,
-                        task = task,
-                        runId = runId,
-                        stagingDir = stagingDir,
-                        folderCache = folderCache,
-                        derivedKey = derivedKey,
-                        backupSalt = backupSalt,
-                        summary = summary,
-                    )
-                    if (deadline != null && Instant.now().isAfter(deadline)) {
-                        summary.hitTimeBudget = true
-                    }
+            if (shouldSkip && task.tier == UploadTier.OVERSIZED) {
+                summary.oversizedDeferred++
+            } else if (!shouldSkip) {
+                uploadOne(
+                    config = config,
+                    task = task,
+                    runId = runId,
+                    stagingDir = stagingDir,
+                    folderCache = folderCache,
+                    derivedKey = derivedKey,
+                    backupSalt = backupSalt,
+                    summary = summary,
+                )
+                if (deadline != null && Instant.now().isAfter(deadline)) {
+                    summary.hitTimeBudget = true
                 }
             }
+        }
+        if (summary.hitTimeBudget && summary.oversizedDeferred > 0) {
+            emitMessage(config, runId, MessageSeverity.INFO, MessageType.FILE_TOO_LARGE)
         }
     }
 
@@ -162,7 +162,7 @@ class BackupUploader(
         )
         summary.filesUploaded++
         summary.bytesUploaded += task.localSize
-        if (task.tier == UploadTier.OVERSIZED) summary.oversizedCount++
+        if (task.tier == UploadTier.OVERSIZED) summary.oversizedUploaded++
         // For CHANGED_OVERWRITE: delete the now-superseded cloud file after indexing success
         if (task.mode == UploadMode.CHANGED_OVERWRITE && task.previousCloudFileId != null) {
             val deleteResult = cloudProvider.deleteFile(task.previousCloudFileId)

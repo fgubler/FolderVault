@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -48,6 +49,7 @@ import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.model.RetentionPolicy
 import ch.abwesend.foldervault.ui.theme.FolderVaultTheme
 import ch.abwesend.foldervault.view.components.EnumDropdown
+import ch.abwesend.foldervault.view.components.InfoIconButton
 import ch.abwesend.foldervault.view.viewmodel.AddEditBackupViewModel
 import ch.abwesend.foldervault.view.viewmodel.AddEditEvent
 import ch.abwesend.foldervault.view.viewmodel.AddEditFormState
@@ -157,6 +159,7 @@ private fun AddEditContent(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
+            .imePadding()
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
@@ -173,11 +176,17 @@ private fun AddEditContent(
         HorizontalDivider()
         ScheduleSection(
             schedule = form.schedule,
-            changedFilePolicy = form.changedFilePolicy,
             networkPolicy = form.networkPolicy,
             onScheduleChange = onScheduleChange,
-            onChangedFilePolicyChange = onChangedFilePolicyChange,
             onNetworkPolicyChange = onNetworkPolicyChange,
+        )
+
+        HorizontalDivider()
+        FileVersioningSection(
+            changedFilePolicy = form.changedFilePolicy,
+            retentionPolicy = form.retentionPolicy,
+            onChangedFilePolicyChange = onChangedFilePolicyChange,
+            onRetentionChange = onRetentionChange,
         )
 
         HorizontalDivider()
@@ -188,12 +197,6 @@ private fun AddEditContent(
             onToggle = onEncryptionToggle,
             onPasswordChange = onPasswordChange,
             onPasswordConfirmChange = onPasswordConfirmChange,
-        )
-
-        HorizontalDivider()
-        RetentionSection(
-            policy = form.retentionPolicy,
-            onRetentionChange = onRetentionChange,
         )
 
         form.errorMessage?.let {
@@ -263,27 +266,17 @@ private fun CloudSection(
 @Composable
 private fun ScheduleSection(
     schedule: BackupSchedule,
-    changedFilePolicy: ChangedFilePolicy,
     networkPolicy: NetworkPolicy,
     onScheduleChange: (BackupSchedule) -> Unit,
-    onChangedFilePolicyChange: (ChangedFilePolicy) -> Unit,
     onNetworkPolicyChange: (NetworkPolicy) -> Unit,
 ) {
-    SectionHeader("Schedule & policy")
+    SectionHeader("Schedule & network")
     EnumDropdown(
         label = "Schedule",
         selected = schedule,
-        options = BackupSchedule.entries,
+        options = BackupSchedule.entries.filter { it != BackupSchedule.USE_GLOBAL_DEFAULT },
         displayName = { it.displayName() },
         onSelect = onScheduleChange,
-    )
-    Spacer(modifier = Modifier.height(12.dp))
-    EnumDropdown(
-        label = "Changed-file policy",
-        selected = changedFilePolicy,
-        options = ChangedFilePolicy.entries,
-        displayName = { it.displayName() },
-        onSelect = onChangedFilePolicyChange,
     )
     Spacer(modifier = Modifier.height(12.dp))
     EnumDropdown(
@@ -293,6 +286,113 @@ private fun ScheduleSection(
         displayName = { it.displayName() },
         onSelect = onNetworkPolicyChange,
     )
+}
+
+@Suppress("MultipleEmitters")
+@Composable
+private fun FileVersioningSection(
+    changedFilePolicy: ChangedFilePolicy,
+    retentionPolicy: RetentionPolicy,
+    onChangedFilePolicyChange: (ChangedFilePolicy) -> Unit,
+    onRetentionChange: (RetentionPolicy) -> Unit,
+) {
+    SectionHeader("File versioning")
+
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        EnumDropdown(
+            label = "Changed-file policy",
+            selected = changedFilePolicy,
+            options = ChangedFilePolicy.entries,
+            displayName = { it.displayName() },
+            onSelect = onChangedFilePolicyChange,
+            modifier = Modifier.weight(1f),
+        )
+        InfoIconButton(
+            title = "Changed-file policy",
+            body = "FolderVault is built for files that rarely change. When a file you've " +
+                "already backed up gets edited, this setting decides whether to upload it as " +
+                "a new timestamped copy, overwrite the previous upload, or skip the change.",
+        )
+    }
+
+    Spacer(modifier = Modifier.height(12.dp))
+    RetentionPicker(policy = retentionPolicy, onRetentionChange = onRetentionChange)
+}
+
+@Suppress("MultipleEmitters")
+@Composable
+private fun RetentionPicker(
+    policy: RetentionPolicy,
+    onRetentionChange: (RetentionPolicy) -> Unit,
+) {
+    var keepNCount by remember(policy) {
+        val initial = if (policy is RetentionPolicy.KeepLastN) policy.count else RETENTION_DEFAULT_KEEP_LAST_N
+        mutableStateOf(initial.toString())
+    }
+    var keepDays by remember(policy) {
+        val initial = if (policy is RetentionPolicy.KeepNewerThan) policy.days else RETENTION_DEFAULT_KEEP_DAYS
+        mutableStateOf(initial.toString())
+    }
+
+    val retentionOptions = listOf("Keep all", "Keep last N copies", "Keep newer than N days")
+    val selectedIndex = when (policy) {
+        RetentionPolicy.KeepAll -> 0
+        is RetentionPolicy.KeepLastN -> 1
+        is RetentionPolicy.KeepNewerThan -> 2
+    }
+
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        EnumDropdown(
+            label = "Retention policy",
+            selected = selectedIndex,
+            options = retentionOptions.indices.toList(),
+            displayName = { retentionOptions[it] },
+            onSelect = { idx ->
+                onRetentionChange(
+                    when (idx) {
+                        0 -> RetentionPolicy.KeepAll
+                        1 -> RetentionPolicy.KeepLastN(keepNCount.toIntOrNull() ?: RETENTION_DEFAULT_KEEP_LAST_N)
+                        else -> RetentionPolicy.KeepNewerThan(
+                            keepDays.toIntOrNull() ?: RETENTION_DEFAULT_KEEP_DAYS,
+                        )
+                    },
+                )
+            },
+            modifier = Modifier.weight(1f),
+        )
+        InfoIconButton(
+            title = "Retention policy",
+            body = "When files change repeatedly, copies accumulate in the cloud. Retention " +
+                "lets FolderVault prune older copies — keep only the last N versions, or only " +
+                "versions newer than N days. \"Keep all\" never deletes anything automatically.",
+        )
+    }
+
+    if (selectedIndex == 1) {
+        Spacer(modifier = Modifier.height(8.dp))
+        OutlinedTextField(
+            value = keepNCount,
+            onValueChange = { v ->
+                keepNCount = v
+                v.toIntOrNull()?.let { onRetentionChange(RetentionPolicy.KeepLastN(it)) }
+            },
+            label = { Text("Number of copies to keep") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    } else if (selectedIndex == 2) {
+        Spacer(modifier = Modifier.height(8.dp))
+        OutlinedTextField(
+            value = keepDays,
+            onValueChange = { v ->
+                keepDays = v
+                v.toIntOrNull()?.let { onRetentionChange(RetentionPolicy.KeepNewerThan(it)) }
+            },
+            label = { Text("Keep files newer than (days)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
 }
 
 @Suppress("MultipleEmitters")
@@ -307,7 +407,14 @@ private fun EncryptionSection(
 ) {
     SectionHeader("Encryption")
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-        Text("Enable AES-256-GCM encryption", modifier = Modifier.weight(1f))
+        Text("Encrypt backup", modifier = Modifier.weight(1f))
+        InfoIconButton(
+            title = "Encryption",
+            body = "When enabled, your files are encrypted on this device before being " +
+                "uploaded. Google Drive only sees scrambled data; only FolderVault on a " +
+                "device with your password can read them back. If you forget the password, " +
+                "the backup cannot be recovered.",
+        )
         Switch(checked = enabled, onCheckedChange = onToggle)
     }
     if (enabled) {
@@ -331,75 +438,6 @@ private fun EncryptionSection(
             onValueChange = onPasswordConfirmChange,
             label = { Text("Confirm password") },
             visualTransformation = PasswordVisualTransformation(),
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-    }
-}
-
-@Suppress("MultipleEmitters")
-@Composable
-private fun RetentionSection(
-    policy: RetentionPolicy,
-    onRetentionChange: (RetentionPolicy) -> Unit,
-) {
-    SectionHeader("Retention")
-
-    var keepNCount by remember(policy) {
-        val initial = if (policy is RetentionPolicy.KeepLastN) policy.count else RETENTION_DEFAULT_KEEP_LAST_N
-        mutableStateOf(initial.toString())
-    }
-    var keepDays by remember(policy) {
-        val initial = if (policy is RetentionPolicy.KeepNewerThan) policy.days else RETENTION_DEFAULT_KEEP_DAYS
-        mutableStateOf(initial.toString())
-    }
-
-    val retentionOptions = listOf("Keep all", "Keep last N copies", "Keep newer than N days")
-    val selectedIndex = when (policy) {
-        RetentionPolicy.KeepAll -> 0
-        is RetentionPolicy.KeepLastN -> 1
-        is RetentionPolicy.KeepNewerThan -> 2
-    }
-
-    EnumDropdown(
-        label = "Retention policy",
-        selected = selectedIndex,
-        options = retentionOptions.indices.toList(),
-        displayName = { retentionOptions[it] },
-        onSelect = { idx ->
-            onRetentionChange(
-                when (idx) {
-                    0 -> RetentionPolicy.KeepAll
-                    1 -> RetentionPolicy.KeepLastN(keepNCount.toIntOrNull() ?: RETENTION_DEFAULT_KEEP_LAST_N)
-                    else -> RetentionPolicy.KeepNewerThan(
-                        keepDays.toIntOrNull() ?: RETENTION_DEFAULT_KEEP_DAYS,
-                    )
-                },
-            )
-        },
-    )
-
-    if (selectedIndex == 1) {
-        Spacer(modifier = Modifier.height(8.dp))
-        OutlinedTextField(
-            value = keepNCount,
-            onValueChange = { v ->
-                keepNCount = v
-                v.toIntOrNull()?.let { onRetentionChange(RetentionPolicy.KeepLastN(it)) }
-            },
-            label = { Text("Number of copies to keep") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-    } else if (selectedIndex == 2) {
-        Spacer(modifier = Modifier.height(8.dp))
-        OutlinedTextField(
-            value = keepDays,
-            onValueChange = { v ->
-                keepDays = v
-                v.toIntOrNull()?.let { onRetentionChange(RetentionPolicy.KeepNewerThan(it)) }
-            },
-            label = { Text("Keep files newer than (days)") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )

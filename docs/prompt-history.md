@@ -7,6 +7,23 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-06-11 — UI polish: insets, onboarding, info dialogs, section grouping
+
+### Bugs fixed
+- **Onboarding never auto-shown on first launch**: `MainActivity.resolveStartDestination()` ignored `AppSettings.showOnboarding`. Moved the check into `AppNavGraph`: it now injects `IAppSettingsRepository` via `koinInject()` and uses a one-shot `LaunchedEffect` to push `AppDestination.Onboarding` on top of Home when `showOnboarding=true` and the start destination is Home. Onboarding's `onComplete` now only re-adds Home if the back stack ends up empty (so dismissing from the auto-shown overlay correctly leaves the underlying Home in place).
+- **Keyboard covered fields in Add/Edit + Restore**: scrollable Columns now use `Modifier.imePadding()`.
+- **Onboarding "Next" button hidden behind OS nav bar**: root Column now uses `Modifier.safeDrawingPadding()` (the other screens already get this via Scaffold).
+
+### UX cleanup
+- **AES-GCM jargon removed from settings/details**: "Enabled (AES-256-GCM)" → "Enabled" in `BackupDetailScreen`; toggle label "Enable AES-256-GCM encryption" → "Encrypt backup" in `AddEditBackupScreen`. The acronym is kept only in the onboarding (educational context).
+- **Schedule: removed "Use global default" option**, pre-fill the form with the current global default instead. `AddEditBackupViewModel.init` now reads `settings.first()` and pre-fills `schedule`, `changedFilePolicy`, `networkPolicy` from the current global defaults. Edit mode resolves a legacy `USE_GLOBAL_DEFAULT` value to the current global default at load time. Dropdown filters `USE_GLOBAL_DEFAULT` out of its options. `AddEditFormState.schedule` default changed from `USE_GLOBAL_DEFAULT` to `DAILY` to avoid a brief flash of an unselectable value.
+- **Info icons + popup dialogs** for non-obvious technical features: new reusable `view/components/InfoIconButton.kt` (icon → `AlertDialog` with title + body + "Got it"). Added to: Changed-file policy, Retention policy, and the Encrypt-backup toggle. Bodies are 2-3 sentence plain-language explanations focused on the "why".
+- **Section reorganization** in Add/Edit: old "Schedule & policy" (Schedule + Changed-file + Network) split into "Schedule & network" (Schedule + Network) and a new "File versioning" section that pairs Changed-file policy with Retention — the two settings that interact (one creates versions, the other prunes them). The standalone `RetentionSection` was folded into a `RetentionPicker` helper inside the new section.
+
+### Key decisions
+- **Onboarding flag is observed in Compose** (via `koinInject<IAppSettingsRepository>()` + `LaunchedEffect`), not read synchronously in `MainActivity.onCreate`. Confirmed with the user. Slight trade-off: Home may render for one frame before Onboarding pushes on top, but it avoids `runBlocking` on DataStore in `onCreate`.
+- **`USE_GLOBAL_DEFAULT` kept in the enum** for backward compatibility with rows already in the DB; just hidden from the picker and resolved at load time. No migration needed.
+
 ## 2026-06-11 — §14.12: Tests, README, ARCHITECTURE.md
 
 ### What was done

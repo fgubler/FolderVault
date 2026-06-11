@@ -1,19 +1,40 @@
 package ch.abwesend.foldervault.view.navigation
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
+import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
 import ch.abwesend.foldervault.view.screens.AddEditBackupScreen
 import ch.abwesend.foldervault.view.screens.BackupDetailScreen
 import ch.abwesend.foldervault.view.screens.HomeScreen
 import ch.abwesend.foldervault.view.screens.OnboardingScreen
 import ch.abwesend.foldervault.view.screens.RestoreScreen
 import ch.abwesend.foldervault.view.screens.SettingsScreen
+import kotlinx.coroutines.flow.first
+import org.koin.compose.koinInject
 
 @Composable
-fun AppNavGraph(startDestination: AppDestination = AppDestination.Home) {
+fun AppNavGraph(
+    startDestination: AppDestination = AppDestination.Home,
+    settingsRepo: IAppSettingsRepository = koinInject(),
+) {
     val backStack = rememberNavBackStack(startDestination)
+    var hasAutoShownOnboarding by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        if (!hasAutoShownOnboarding && startDestination == AppDestination.Home) {
+            hasAutoShownOnboarding = true
+            if (settingsRepo.settings.first().showOnboarding) {
+                backStack.add(AppDestination.Onboarding)
+            }
+        }
+    }
 
     NavDisplay(
         backStack = backStack,
@@ -24,7 +45,7 @@ fun AppNavGraph(startDestination: AppDestination = AppDestination.Home) {
                     OnboardingScreen(
                         onComplete = {
                             backStack.removeLastOrNull()
-                            backStack.add(AppDestination.Home)
+                            if (backStack.isEmpty()) backStack.add(AppDestination.Home)
                         },
                     )
                 }

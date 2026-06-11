@@ -35,7 +35,7 @@ data class AddEditFormState(
     val sourceTreeUri: String = "",
     val sourceFolderDisplayName: String = "",
     val cloudSetup: CloudSetupState = CloudSetupState.Idle,
-    val schedule: BackupSchedule = BackupSchedule.USE_GLOBAL_DEFAULT,
+    val schedule: BackupSchedule = BackupSchedule.DAILY,
     val changedFilePolicy: ChangedFilePolicy = ChangedFilePolicy.DUPLICATE_WITH_TIMESTAMP,
     val networkPolicy: NetworkPolicy = NetworkPolicy.WIFI_ONLY,
     val encryptionEnabled: Boolean = false,
@@ -84,12 +84,21 @@ class AddEditBackupViewModel(
     private var existingConfig: BackupConfig? = null
 
     init {
-        if (existingConfigId != null) {
-            viewModelScope.launch { loadExisting(existingConfigId) }
+        viewModelScope.launch {
+            val settings = settingsRepo.settings.first()
+            if (existingConfigId != null) {
+                loadExisting(existingConfigId, settings.defaultSchedule)
+            } else {
+                _form.value = _form.value.copy(
+                    schedule = settings.defaultSchedule,
+                    changedFilePolicy = settings.defaultChangedFilePolicy,
+                    networkPolicy = settings.defaultNetworkPolicy,
+                )
+            }
         }
     }
 
-    private suspend fun loadExisting(id: String) {
+    private suspend fun loadExisting(id: String, globalDefaultSchedule: BackupSchedule) {
         val config = configRepo.getById(id).first() ?: return
         existingConfig = config
         val cloudState = if (config.cloudRootFolderId.isNotEmpty()) {
@@ -97,12 +106,17 @@ class AddEditBackupViewModel(
         } else {
             CloudSetupState.Idle
         }
+        val resolvedSchedule = if (config.schedule == BackupSchedule.USE_GLOBAL_DEFAULT) {
+            globalDefaultSchedule
+        } else {
+            config.schedule
+        }
         _form.value = AddEditFormState(
             displayName = config.displayName,
             sourceTreeUri = config.sourceTreeUri,
             sourceFolderDisplayName = extractFolderDisplayName(config.sourceTreeUri),
             cloudSetup = cloudState,
-            schedule = config.schedule,
+            schedule = resolvedSchedule,
             changedFilePolicy = config.changedFilePolicy,
             networkPolicy = config.networkPolicy,
             encryptionEnabled = config.encryptionEnabled,

@@ -213,7 +213,7 @@ private fun ConfigInfoSection(config: BackupConfig) {
         InfoRow("Account", config.cloudAccountIdentifier)
         InfoRow("Schedule", config.schedule.name.lowercase().replaceFirstChar { it.uppercase() })
         InfoRow("Network", if (config.networkPolicy == NetworkPolicy.WIFI_ONLY) "Wi-Fi only" else "Any")
-        InfoRow("Encryption", if (config.encryptionEnabled) "Enabled (AES-256-GCM)" else "Disabled")
+        InfoRow("Encryption", if (config.encryptionEnabled) "Enabled" else "Disabled")
         InfoRow("Retention", config.retentionPolicy.displayName())
         Spacer(modifier = Modifier.height(8.dp))
         StatusSection(config)

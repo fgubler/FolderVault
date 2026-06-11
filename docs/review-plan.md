@@ -306,3 +306,147 @@ After each tier completes:
 - **Tier 3 second**: refactors are mechanical and broad-reach. Doing them before Tier 1 means new functional code (Tier 1) lands on a cleaner base and gets to consume the new abstractions (e.g. Tier 1.6 reuses Tier 3.1's enum labels).
 - **Tier 1 third**: behaviour additions. Largest blast radius — needs the stable base from Tiers 2/3.
 - **Tier 4 last**: cosmetic-only. Doing it last avoids merge churn against earlier mechanical refactors that may already touch the same lines.
+
+---
+
+## Tier 5 — Verification follow-ups (added 2026-06-11)
+
+After a verification pass on Tiers 1–4, the items below were found applied-but-flawed or violating the project's "no early returns unless preventing massive indentation" style rule. Execute these after the main tiers and before closing out the review.
+
+### Style rule reminder
+
+**The user strongly dislikes early-return statements** (`return`, `return null`, `return ""`, `?: return`, etc.). Prefer single-exit functions expressed via `if/else`, `when`, `?.let`, `?:` Elvis, `requireNotNull`, `check()`, or `BinaryResult.flatMap` chaining. Early returns are acceptable **only** when an `if/else` wrap would push the rest of the body to 4+ levels of indentation. Guard-style early returns at the top of short functions are NOT acceptable.
+
+### 5.1 `WorkerErrorHandler` still swallows `CancellationException`
+**File**: `app/src/main/java/ch/abwesend/foldervault/infrastructure/backup/WorkerErrorHandler.kt:17`
+The Tier 2.1 fix removed the explicit `CancellationException` branch, but the broad `catch (e: Exception)` still catches it (`CancellationException` extends `RuntimeException` → `Exception`). The existing `WorkerErrorHandlerTest` will fail.
+
+**Fix**: add an explicit re-throw branch *before* the `Exception` catch:
+```kotlin
+} catch (e: CancellationException) {
+    throw e
+} catch (e: Exception) {
+    ...
+}
+```
+
+### 5.2 Folder display-name helper still duplicated
+**Files**:
+- `app/src/main/java/ch/abwesend/foldervault/view/viewmodel/AddEditBackupViewModel.kt:286-290`
+- `app/src/main/java/ch/abwesend/foldervault/view/screens/AddEditBackupScreen.kt:88`
+
+The ViewModel-side helper added by Tier 2.2 fixed the garbled output, but the screen-side inline version at `AddEditBackupScreen.kt:88` remained and is missing the blank-guard (`takeIf { it.isNotBlank() }`).
+
+**Fix**: extract `fun displayNameFromTreeUri(uri: Uri): String` into `infrastructure/storage/ScopedStorageHelper.kt` (or a new `view/util` file — domain is too pure for `Uri`). Both call sites should consume the helper.
+
+### 5.3 Quota counter isn't actually "consecutive"
+**File**: `app/src/main/java/ch/abwesend/foldervault/infrastructure/backup/BackupUploader.kt:236-245` (+ `RunSummary.kt:13`)
+
+Tier 2.11 added `summary.consecutiveQuotaCount` but it's never reset when a non-quota upload succeeds between two quota errors. The name promises "consecutive" but the behaviour is "total quota errors in run".
+
+**Fix (pick one)**:
+- **Preferred**: reset `summary.consecutiveQuotaCount = 0` after a successful upload (i.e. at the end of the success path in `uploadOne`), so the counter genuinely tracks consecutive errors.
+- **Or**: rename to `quotaErrorCount` and adjust the comment to match actual semantics.
+
+### 5.4 Cross-run progress resets too eagerly
+**File**: `app/src/main/java/ch/abwesend/foldervault/infrastructure/backup/BackupRunner.kt:289-295`
+
+Tier 1.4 added the reset, but it fires on every non-`hitTimeBudget` run, including failed / quota-exceeded ones. Spec intent (per the plan): only reset on a *clean* run (no `authLost`, no `quotaExceeded`, no `hitTimeBudget`), or when emitting `INITIAL_SYNC_COMPLETE`.
+
+**Fix**: narrow the reset condition to match the same gate already used for `INITIAL_SYNC_COMPLETE` emission (`cleanRun` flag). Move the reset call into the same `if (cleanRun) { ... }` branch as `INITIAL_SYNC_COMPLETE`.
+
+### 5.5 Redundant `toDecryptionError` wrapper in `Fvc1Cipher`
+**File**: `app/src/main/java/ch/abwesend/foldervault/infrastructure/crypto/Fvc1Cipher.kt:110` (+ call sites `:70`, `:81`)
+
+Tier 3.4 centralised `classifyDecryptionError` in `domain/crypto/DecryptionError.kt`, but `Fvc1Cipher` kept a private wrapper `private fun toDecryptionError(e) = classifyDecryptionError(e)`. Pure noise.
+
+**Fix**: inline the wrapper — replace both call sites (`:70`, `:81`) with direct calls to `classifyDecryptionError(...)` and delete the private function.
+
+### 5.6 String-resource naming deviations
+**Files**:
+- `app/src/main/res/values/strings.xml:15-20` — `notif_problem_*` keys (plan said `notification_problem_*`)
+- `app/src/main/res/values/strings.xml:200` — `label_default_file_size_limit` (plan said `pref_default_file_size_limit_label`)
+- `app/src/main/java/ch/abwesend/foldervault/infrastructure/backup/BackupNotificationManager.kt:136` — join separator `", "` (plan said `"; "`)
+
+Functional intent is met; the deviations are cosmetic. **Decision needed before fixing**: either rename to match the plan, or accept current naming as the new convention.
+
+**Recommendation**: accept current naming (shorter, no behaviour change). If you choose to standardise, rename in one commit.
+
+### 5.7 Early-return violations to refactor
+
+**5.7.a** `app/src/main/java/ch/abwesend/foldervault/view/viewmodel/BackupDetailViewModel.kt:56`
+Currently:
+```kotlin
+fun backUpNow() {
+    if (config.value?.isPaused == true) return
+    scheduler.scheduleOneTime(configId)
+}
+```
+Refactor to:
+```kotlin
+fun backUpNow() {
+    if (config.value?.isPaused != true) {
+        scheduler.scheduleOneTime(configId)
+    }
+}
+```
+
+**5.7.b** `app/src/main/java/ch/abwesend/foldervault/view/viewmodel/AddEditBackupViewModel.kt:287`
+Currently:
+```kotlin
+private fun displayNameFromTreeUri(uriString: String): String {
+    if (uriString.isBlank()) return ""
+    val uri = Uri.parse(uriString)
+    return uri.lastPathSegment?.substringAfterLast(':')?.takeIf { it.isNotBlank() } ?: uriString
+}
+```
+Refactor to single expression:
+```kotlin
+private fun displayNameFromTreeUri(uriString: String): String =
+    if (uriString.isBlank()) ""
+    else Uri.parse(uriString).lastPathSegment?.substringAfterLast(':')?.takeIf { it.isNotBlank() } ?: uriString
+```
+*(Note: when 5.2 extracts the helper to `ScopedStorageHelper`, apply the same single-exit shape there.)*
+
+**5.7.c** `app/src/main/java/ch/abwesend/foldervault/view/viewmodel/RestoreViewModel.kt:76-77`
+Currently:
+```kotlin
+fun startRestore(password: String) {
+    val snapshot = _state.value
+    val src = snapshot.sourceUri ?: return
+    val out = snapshot.outputUri ?: return
+    // ... rest of body
+}
+```
+Refactor to a single guarded block:
+```kotlin
+fun startRestore(password: String) {
+    val snapshot = _state.value
+    val src = snapshot.sourceUri
+    val out = snapshot.outputUri
+    if (src != null && out != null) {
+        // ... rest of body using src + out
+    }
+}
+```
+Function is only one indentation level deep before the change; the `if` block does not push code into "massive indentation" territory.
+
+**5.7.d (borderline — decision needed)** `app/src/main/java/ch/abwesend/foldervault/infrastructure/backup/BackupRunner.kt:121`
+Currently inside `runBackup`, deeply nested in `try` / `coroutineScope`:
+```kotlin
+if (encryptionKey == null) {
+    backupMessageDao.coalesceInsert(BackupMessage(type = ENCRYPTION_FAILED, ...))
+    return RunResult.FatalError(runId, "Failed to derive encryption key")
+}
+// ... rest of runBackup body
+```
+This is borderline: the function is already at 3–4 indentation levels, so wrapping the rest in `else { ... }` would push it to 4–5 levels. **Recommendation**: leave as-is and document the exemption with a brief comment, OR refactor `runBackup` to extract the post-key-derivation body into a private helper so both branches stay flat.
+
+**Decision needed from the human** before executing 5.7.d.
+
+### Tier 5 — Definition of Done
+
+- [ ] All 5.1–5.5 items applied; 5.6 decided (rename or accept) and applied if renaming.
+- [ ] 5.7.a, 5.7.b, 5.7.c refactored; 5.7.d resolved per human decision.
+- [ ] `./gradlew assembleDebug && ./gradlew test && ./gradlew detekt` — green.
+- [ ] `docs/prompt-history.md` updated with a Tier 5 dated entry.

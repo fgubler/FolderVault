@@ -73,31 +73,33 @@ class RestoreViewModel(private val engine: IRestoreEngine) : ViewModel() {
 
     fun startRestore(password: String) {
         val snapshot = _uiState.value
-        val src = snapshot.sourceUri ?: return
-        val out = snapshot.outputUri ?: return
-        restoreJob = viewModelScope.launch {
-            _uiState.update { it.copy(state = RestoreState.Running, progress = null) }
-            try {
-                val result = engine.decryptAll(
-                    sourceUri = src,
-                    outputUri = out,
-                    password = password,
-                    collisionPolicy = _uiState.value.collisionPolicy,
-                    onProgress = { progress -> _uiState.update { it.copy(progress = progress) } },
-                )
-                _uiState.update { it.copy(state = RestoreState.Done(result)) }
-            } finally {
-                _uiState.update { current ->
-                    if (current.state is RestoreState.Running) {
-                        current.copy(
-                            state = if (current.outputUri != null) {
-                                RestoreState.ReadyToStart
-                            } else {
-                                RestoreState.SourceReady
-                            },
-                        )
-                    } else {
-                        current
+        val src = snapshot.sourceUri
+        val out = snapshot.outputUri
+        if (src != null && out != null) {
+            restoreJob = viewModelScope.launch {
+                _uiState.update { it.copy(state = RestoreState.Running, progress = null) }
+                try {
+                    val result = engine.decryptAll(
+                        sourceUri = src,
+                        outputUri = out,
+                        password = password,
+                        collisionPolicy = _uiState.value.collisionPolicy,
+                        onProgress = { progress -> _uiState.update { it.copy(progress = progress) } },
+                    )
+                    _uiState.update { it.copy(state = RestoreState.Done(result)) }
+                } finally {
+                    _uiState.update { current ->
+                        if (current.state is RestoreState.Running) {
+                            current.copy(
+                                state = if (current.outputUri != null) {
+                                    RestoreState.ReadyToStart
+                                } else {
+                                    RestoreState.SourceReady
+                                },
+                            )
+                        } else {
+                            current
+                        }
                     }
                 }
             }

@@ -286,17 +286,22 @@ class BackupRunner(
             bytesUploaded = summary.bytesUploaded,
             lastRunCompletedNormally = completedNormally,
         )
-        val (totalDiscovered, uploadedTotal) = if (summary.hitTimeBudget) {
-            val prev = backupConfigDao.getByIdOnce(configId)
-            val prevTotal = prev?.filesUploadedTotal ?: 0
-            Pair(summary.totalFilesDiscovered, prevTotal + summary.filesUploaded)
-        } else {
-            Pair(0, 0)
+        when {
+            summary.hitTimeBudget -> {
+                val prev = backupConfigDao.getByIdOnce(configId)
+                val prevTotal = prev?.filesUploadedTotal ?: 0
+                backupConfigDao.updateCrossRunProgress(
+                    id = configId,
+                    totalFilesDiscovered = summary.totalFilesDiscovered,
+                    filesUploadedTotal = prevTotal + summary.filesUploaded,
+                )
+            }
+            completedNormally -> backupConfigDao.updateCrossRunProgress(
+                id = configId,
+                totalFilesDiscovered = 0,
+                filesUploadedTotal = 0,
+            )
+            // Failed/quota run without hitTimeBudget — leave cross-run counters unchanged.
         }
-        backupConfigDao.updateCrossRunProgress(
-            id = configId,
-            totalFilesDiscovered = totalDiscovered,
-            filesUploadedTotal = uploadedTotal,
-        )
     }
 }

@@ -2,6 +2,7 @@ package ch.abwesend.foldervault.infrastructure.backup
 
 import androidx.work.ListenableWorker.Result
 import ch.abwesend.foldervault.domain.logging.logger
+import kotlinx.coroutines.CancellationException
 
 class WorkerErrorHandler {
     companion object {
@@ -14,6 +15,8 @@ class WorkerErrorHandler {
         block: suspend () -> Result,
     ): Result = try {
         block()
+    } catch (e: CancellationException) {
+        throw e
     } catch (e: Exception) {
         logger.error("$workDescription failed with unexpected exception", e)
         onFatalError("$workDescription failed: ${e.message}")

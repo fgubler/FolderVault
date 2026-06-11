@@ -67,7 +67,7 @@ class Fvc1Cipher : IFvc1Cipher {
         runCatchingAsResult {
             val header = Fvc1Header.readFrom(input)
             decryptBody(key, header.iv, input, output)
-        }.mapError { toDecryptionError(it) }
+        }.mapError { classifyDecryptionError(it) }
 
     override fun decryptFileWithPassword(
         password: String,
@@ -78,7 +78,7 @@ class Fvc1Cipher : IFvc1Cipher {
             val header = Fvc1Header.readFrom(input)
             val key = deriveKey(password, header.salt)
             decryptBody(key, header.iv, input, output)
-        }.mapError { toDecryptionError(it) }
+        }.mapError { classifyDecryptionError(it) }
 
     private fun decryptBody(key: SecretKey, iv: ByteArray, input: InputStream, output: OutputStream) {
         val cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION).apply {
@@ -106,6 +106,4 @@ class Fvc1Cipher : IFvc1Cipher {
         dos.write(iv)
         dos.flush()
     }
-
-    private fun toDecryptionError(e: Exception): DecryptionError = classifyDecryptionError(e)
 }

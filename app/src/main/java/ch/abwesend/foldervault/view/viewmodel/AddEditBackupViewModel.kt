@@ -2,6 +2,7 @@ package ch.abwesend.foldervault.view.viewmodel
 
 import android.app.PendingIntent
 import android.content.Intent
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import ch.abwesend.foldervault.R
@@ -21,6 +22,7 @@ import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.model.RetentionPolicy
 import ch.abwesend.foldervault.domain.result.SuccessResult
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
+import ch.abwesend.foldervault.view.util.displayNameFromUri
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -283,11 +285,8 @@ class AddEditBackupViewModel(
         )
     }
 
-    private fun extractFolderDisplayName(uriString: String): String {
-        if (uriString.isBlank()) return ""
-        return android.net.Uri.parse(uriString).lastPathSegment
-            ?.substringAfterLast(':')?.takeIf { it.isNotBlank() } ?: uriString
-    }
+    private fun extractFolderDisplayName(uriString: String): String =
+        if (uriString.isBlank()) "" else displayNameFromUri(Uri.parse(uriString))
 
     private fun updateForm(transform: (AddEditFormState) -> AddEditFormState) {
         _form.value = transform(_form.value)

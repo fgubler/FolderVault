@@ -53,6 +53,7 @@ import ch.abwesend.foldervault.domain.model.RetentionPolicy
 import ch.abwesend.foldervault.ui.theme.FolderVaultTheme
 import ch.abwesend.foldervault.view.components.EnumDropdown
 import ch.abwesend.foldervault.view.components.InfoIconButton
+import ch.abwesend.foldervault.view.util.displayNameFromUri
 import ch.abwesend.foldervault.view.viewmodel.AddEditBackupViewModel
 import ch.abwesend.foldervault.view.viewmodel.AddEditEvent
 import ch.abwesend.foldervault.view.viewmodel.AddEditFormState
@@ -85,8 +86,7 @@ fun AddEditBackupScreen(
                 uri,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION,
             )
-            val displayName = uri.lastPathSegment?.substringAfterLast(':') ?: uri.toString()
-            viewModel.setSourceFolder(uri.toString(), displayName)
+            viewModel.setSourceFolder(uri.toString(), displayNameFromUri(uri))
         }
     }
 

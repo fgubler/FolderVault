@@ -7,6 +7,25 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-06-11 — review-plan: Tier 5 (verification follow-ups)
+
+### What was done
+
+- **5.1 `WorkerErrorHandler`**: Added explicit `catch (e: CancellationException) { throw e }` before the broad `catch (e: Exception)` handler, so coroutine cancellation is no longer swallowed.
+- **5.2 + 5.7.b Folder display-name helper**: Extracted `displayNameFromUri(uri: Uri): String` into new `view/util/UriUtils.kt`. Both call sites updated: `AddEditBackupScreen.kt` now calls the shared helper (gains the `takeIf { it.isNotBlank() }` guard it was missing); `AddEditBackupViewModel.extractFolderDisplayName` rewritten as a single-expression function using the helper.
+- **5.3 Quota counter reset**: Added `summary.consecutiveQuotaCount = 0` on the success path in `BackupUploader.tryUpload`, so the counter genuinely tracks *consecutive* errors rather than total errors in the run.
+- **5.4 Cross-run progress reset**: Narrowed the reset condition to `completedNormally` only. Failed and quota-exceeded runs (without `hitTimeBudget`) now leave the cross-run counters unchanged, matching the spec intent.
+- **5.5 `Fvc1Cipher.toDecryptionError`**: Deleted the one-liner private wrapper; both call sites now call `classifyDecryptionError(...)` directly.
+- **5.6 String naming**: Accepted current naming (`notif_problem_*`, `label_default_file_size_limit`, `", "` separator) as the new convention — no rename.
+- **5.7.a `BackupDetailViewModel.backUpNow`**: Replaced `if (...) return` guard with `if (!...) { ... }` single-exit form.
+- **5.7.c `RestoreViewModel.startRestore`**: Replaced two `?: return` early exits with a single `if (src != null && out != null)` guard wrapping the entire launch block.
+- **5.7.d `BackupRunner` encryption-key null check**: Left as-is per the plan recommendation (already at 3–4 indentation levels; wrapping would push to 4–5).
+
+### All checks passed
+`./gradlew assembleDebug` ✓ `./gradlew test` ✓ `./gradlew detekt` ✓
+
+---
+
 ## 2026-06-11 — review-plan: Tiers 2, 3, 1, and 4 (full review-plan execution)
 
 ### Tier 2 — Bug fixes (prior session)

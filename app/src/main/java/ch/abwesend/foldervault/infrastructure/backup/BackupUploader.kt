@@ -220,7 +220,10 @@ class BackupUploader(
         summary: RunSummary,
     ): BinaryResult<CloudFile, Exception>? {
         val result = cloudProvider.uploadFile(parentFolderId, remoteName, mimeType, content)
-        if (result is SuccessResult) return result
+        if (result is SuccessResult) {
+            summary.consecutiveQuotaCount = 0
+            return result
+        }
 
         val error = (result as ErrorResult).error
         return when {

@@ -36,7 +36,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
@@ -113,8 +112,6 @@ private fun SettingsContent(
     onRequestNotificationPermission: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val context = LocalContext.current
-
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -127,7 +124,7 @@ private fun SettingsContent(
             label = stringResource(R.string.label_default_schedule),
             selected = settings.defaultSchedule,
             options = BackupSchedule.entries.filter { it != BackupSchedule.USE_GLOBAL_DEFAULT },
-            displayName = { context.getString(it.labelResId()) },
+            displayName = { stringResource(it.labelResId()) },
             onSelect = onScheduleChange,
         )
 
@@ -136,7 +133,7 @@ private fun SettingsContent(
             label = stringResource(R.string.label_default_changed_file_policy),
             selected = settings.defaultChangedFilePolicy,
             options = ChangedFilePolicy.entries,
-            displayName = { context.getString(it.labelResId) },
+            displayName = { stringResource(it.labelResId) },
             onSelect = onChangedFilePolicyChange,
         )
 
@@ -145,7 +142,7 @@ private fun SettingsContent(
             label = stringResource(R.string.label_default_network_policy),
             selected = settings.defaultNetworkPolicy,
             options = NetworkPolicy.entries,
-            displayName = { context.getString(it.labelResId) },
+            displayName = { stringResource(it.labelResId) },
             onSelect = onNetworkPolicyChange,
         )
 
@@ -162,7 +159,7 @@ private fun SettingsContent(
             label = stringResource(R.string.label_theme),
             selected = settings.theme,
             options = AppTheme.entries,
-            displayName = { context.getString(it.labelResId) },
+            displayName = { stringResource(it.labelResId) },
             onSelect = onThemeChange,
         )
 

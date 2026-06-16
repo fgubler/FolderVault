@@ -280,13 +280,12 @@ private fun ScheduleSection(
     onScheduleChange: (BackupSchedule) -> Unit,
     onNetworkPolicyChange: (NetworkPolicy) -> Unit,
 ) {
-    val context = LocalContext.current
     SectionHeader(stringResource(R.string.section_schedule_network))
     EnumDropdown(
         label = stringResource(R.string.label_schedule),
         selected = schedule,
         options = BackupSchedule.entries.filter { it != BackupSchedule.USE_GLOBAL_DEFAULT },
-        displayName = { context.getString(it.labelResId()) },
+        displayName = { stringResource(it.labelResId()) },
         onSelect = onScheduleChange,
     )
     Spacer(modifier = Modifier.height(12.dp))
@@ -294,7 +293,7 @@ private fun ScheduleSection(
         label = stringResource(R.string.label_network_policy),
         selected = networkPolicy,
         options = NetworkPolicy.entries,
-        displayName = { context.getString(it.labelResId) },
+        displayName = { stringResource(it.labelResId) },
         onSelect = onNetworkPolicyChange,
     )
 }
@@ -307,7 +306,6 @@ private fun FileVersioningSection(
     onChangedFilePolicyChange: (ChangedFilePolicy) -> Unit,
     onRetentionChange: (RetentionPolicy) -> Unit,
 ) {
-    val context = LocalContext.current
     SectionHeader(stringResource(R.string.section_file_versioning))
 
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
@@ -315,7 +313,7 @@ private fun FileVersioningSection(
             label = stringResource(R.string.label_changed_file_policy),
             selected = changedFilePolicy,
             options = ChangedFilePolicy.entries,
-            displayName = { context.getString(it.labelResId) },
+            displayName = { stringResource(it.labelResId) },
             onSelect = onChangedFilePolicyChange,
             modifier = Modifier.weight(1f),
         )
@@ -335,7 +333,6 @@ private fun RetentionPicker(
     policy: RetentionPolicy,
     onRetentionChange: (RetentionPolicy) -> Unit,
 ) {
-    val context = LocalContext.current
     var keepNCount by remember(policy) {
         val initial = if (policy is RetentionPolicy.KeepLastN) policy.count else RETENTION_DEFAULT_KEEP_LAST_N
         mutableStateOf(initial.toString())

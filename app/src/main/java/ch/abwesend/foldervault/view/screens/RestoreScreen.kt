@@ -258,7 +258,6 @@ private fun PasswordAndStartSection(
     onStartRestore: (String) -> Unit,
     enabled: Boolean,
 ) {
-    val context = LocalContext.current
     Text(stringResource(R.string.restore_step3_header), style = MaterialTheme.typography.labelLarge)
 
     var password by remember { mutableStateOf("") }
@@ -276,7 +275,7 @@ private fun PasswordAndStartSection(
         label = stringResource(R.string.label_if_file_exists),
         selected = collisionPolicy,
         options = RestoreCollisionPolicy.entries,
-        displayName = { context.getString(it.labelResId) },
+        displayName = { stringResource(it.labelResId) },
         onSelect = onCollisionPolicyChange,
     )
     Spacer(modifier = Modifier.height(8.dp))

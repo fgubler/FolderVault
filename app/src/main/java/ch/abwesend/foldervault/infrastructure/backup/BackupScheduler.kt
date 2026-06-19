@@ -8,12 +8,16 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import ch.abwesend.foldervault.domain.backup.IBackupScheduler
 import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.model.BackupSchedule
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -93,6 +97,11 @@ class BackupScheduler(private val context: Context) : IBackupScheduler {
             log.error("Failed to cancel backup work for config $configId", e)
         }
     }
+
+    override fun observeIsRunning(configId: String): Flow<Boolean> =
+        workManager.getWorkInfosForUniqueWorkFlow(BackupWorker.workName(configId))
+            .map { infos -> infos.any { it.state == WorkInfo.State.RUNNING } }
+            .distinctUntilChanged()
 
     private fun buildConstraints(networkPolicy: NetworkPolicy) = Constraints.Builder()
         .setRequiredNetworkType(

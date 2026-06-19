@@ -173,9 +173,13 @@
     <string name="button_mark_read">Mark read</string>
     <string name="button_dismiss">Dismiss</string>
     <string name="button_back_up_now">Back up now</string>
+    <string name="button_backing_up">Backing up…</string>
     <string name="button_resume">Resume</string>
     <string name="button_pause">Pause</string>
     <string name="button_check_password">Check my password</string>
+    <string name="button_open_in_drive_cd">Open in Google Drive</string>
+    <string name="dialog_open_drive_error_title">Cannot open Google Drive</string>
+    <string name="dialog_open_drive_error_body">No app is available to open the Drive folder. Install the Google Drive app or a browser to view it.</string>
     <string name="dialog_delete_title">Delete backup?</string>
     <string name="dialog_delete_body">Your data on Google Drive is safe. The app will forget which files have been backed up — if you ever re-create this backup, it will upload everything again. You can delete the Drive folder yourself in the Google Drive app if you wish.</string>
     <string name="dialog_check_password_title">Check my password</string>

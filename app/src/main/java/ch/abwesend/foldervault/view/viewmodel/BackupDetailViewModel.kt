@@ -46,6 +46,9 @@ class BackupDetailViewModel(
         listOf(MessageSeverity.ERROR, MessageSeverity.CRITICAL),
     ).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
+    val isRunning: StateFlow<Boolean> = scheduler.observeIsRunning(configId)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
     private val _passwordCheckResult = MutableStateFlow<Boolean?>(null)
     val passwordCheckResult: StateFlow<Boolean?> = _passwordCheckResult.asStateFlow()
 
@@ -53,7 +56,7 @@ class BackupDetailViewModel(
     val events: SharedFlow<DetailEvent> = _events.asSharedFlow()
 
     fun backUpNow() {
-        if (config.value?.isPaused != true) {
+        if (config.value?.isPaused != true && !isRunning.value) {
             scheduler.scheduleOneTime(configId)
         }
     }

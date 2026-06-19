@@ -75,7 +75,9 @@ class BackupDetailViewModelTest : StringSpec({
             every { getUndismissed(configId) } returns flowOf(emptyList())
             every { getUnreadCountBySeverity(configId, any()) } returns flowOf(0)
         }
-        val scheduler = mockk<IBackupScheduler>()
+        val scheduler = mockk<IBackupScheduler> {
+            every { observeIsRunning(configId) } returns flowOf(false)
+        }
         val encryptionRepo = mockk<IEncryptionRepository>()
         val settingsRepo = mockk<IAppSettingsRepository>()
 
@@ -101,7 +103,9 @@ class BackupDetailViewModelTest : StringSpec({
             every { getUndismissed(configId) } returns flowOf(emptyList())
             every { getUnreadCountBySeverity(configId, any()) } returns flowOf(0)
         }
-        val scheduler = mockk<IBackupScheduler>(relaxed = true)
+        val scheduler = mockk<IBackupScheduler>(relaxed = true) {
+            every { observeIsRunning(configId) } returns flowOf(false)
+        }
         val encryptionRepo = mockk<IEncryptionRepository>()
         val settingsRepo = mockk<IAppSettingsRepository>()
 
@@ -125,7 +129,9 @@ class BackupDetailViewModelTest : StringSpec({
             every { getUndismissed(configId) } returns flowOf(emptyList())
             every { getUnreadCountBySeverity(configId, any()) } returns flowOf(0)
         }
-        val scheduler = mockk<IBackupScheduler>(relaxed = true)
+        val scheduler = mockk<IBackupScheduler>(relaxed = true) {
+            every { observeIsRunning(configId) } returns flowOf(false)
+        }
         val encryptionRepo = mockk<IEncryptionRepository>()
         val settingsRepo = mockk<IAppSettingsRepository>()
 
@@ -134,5 +140,35 @@ class BackupDetailViewModelTest : StringSpec({
         vm.backUpNow()
 
         verify(exactly = 1) { scheduler.scheduleOneTime(configId) }
+    }
+
+    "backUpNow does not call scheduler when a backup is already running" {
+        val configId = "cfg-4"
+        val activeConfig = makeConfig(configId, isPaused = false)
+
+        val configRepo = mockk<IBackupConfigRepository> {
+            every { getById(configId) } returns flowOf(activeConfig)
+        }
+        val messageRepo = mockk<IBackupMessageRepository> {
+            every { getUndismissed(configId) } returns flowOf(emptyList())
+            every { getUnreadCountBySeverity(configId, any()) } returns flowOf(0)
+        }
+        val scheduler = mockk<IBackupScheduler>(relaxed = true) {
+            every { observeIsRunning(configId) } returns MutableStateFlow(true)
+        }
+        val encryptionRepo = mockk<IEncryptionRepository>()
+        val settingsRepo = mockk<IAppSettingsRepository>()
+
+        val vm = BackupDetailViewModel(configId, configRepo, messageRepo, scheduler, encryptionRepo, settingsRepo)
+
+        // Subscribe to isRunning so its StateFlow's WhileSubscribed kicks in and pulls the true value.
+        val isRunningJob = vm.isRunning.launchIn(kotlinx.coroutines.CoroutineScope(testDispatcher))
+        val configJob = vm.config.launchIn(kotlinx.coroutines.CoroutineScope(testDispatcher))
+
+        vm.backUpNow()
+
+        verify(exactly = 0) { scheduler.scheduleOneTime(any()) }
+        isRunningJob.cancel()
+        configJob.cancel()
     }
 })

@@ -1,0 +1,166 @@
+name: Android CI
+
+# Explicitly grant only the permissions this workflow needs
+permissions:
+  contents: read  # Required to checkout repository code
+
+env:
+  main_project_module: app
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      # Set Current Date As Env Variable
+      - name: Set current date as env variable
+        run: echo "date_today=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
+
+      # Set Repository Name As Env Variable
+      - name: Set repository name as env variable
+        run: echo "repository_name=$(echo '${{ github.repository }}' | awk -F '/' '{print $2}')" >> $GITHUB_ENV
+
+      - name: Set Up JDK
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Change wrapper permissions
+        run: chmod +x ./gradlew
+
+      - name: Run Linting
+        run: ./gradlew ktlintCheck --continue
+
+      - name: Run gradle tests
+        run: ./gradlew test
+
+      - name: Build gradle project
+        run: ./gradlew build
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+
+    # Release job needs specific permissions for creating and pushing tags/releases
+    permissions:
+      contents: write  # Required to push git tags and create releases
+      # Note: GitHub doesn't have a separate 'releases: write' permission
+      # Creating releases requires 'contents: write' because:
+      # 1. We push git tags ourselves before creating a draft release
+      # 2. Releases are considered part of repository contents in GitHub's permission model
+
+    steps:
+      - uses: actions/checkout@v3
+
+      # Set Current Date As Env Variable
+      - name: Set current date as env variable
+        run: echo "date_today=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
+
+      # Set Repository Name As Env Variable
+      - name: Set repository name as env variable
+        run: echo "repository_name=$(echo '${{ github.repository }}' | awk -F '/' '{print $2}')" >> $GITHUB_ENV
+
+      - name: Set Up JDK
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Change wrapper permissions
+        run: chmod +x ./gradlew
+
+      - name: Build Release APK
+        run: ./gradlew assembleRelease
+
+      - name: List APK output directory
+        run: |
+          echo "Listing APK output directories:"
+          find ./app/build/outputs/apk -name "*.apk" -type f || echo "No APK files found"
+          echo ""
+          echo "Directory structure:"
+          ls -la ./app/build/outputs/apk/ || echo "APK output directory not found"
+          ls -la ./app/build/outputs/apk/*/ || echo "No flavor directories found"
+          ls -la ./app/build/outputs/apk/*/release/ || echo "No release directories found"
+          echo ""
+          echo "All APK files found:"
+          find ./app/build/outputs/apk -name "*.apk" -type f -exec ls -la {} \; || echo "No APK files to list"
+
+      - name: Get version name and code
+        run: |
+          VERSION_NAME=$(grep "versionName" app/build.gradle.kts | grep -oP '(?<="\")(?:[^"\\]|\\.)+(?="\")')
+          VERSION_CODE=$(grep "versionCode" app/build.gradle.kts | grep -oP '(?<=\=\s)\d+')
+          echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
+          echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_ENV
+
+      - name: Check if version tag already exists
+        run: |
+          # Tag scheme combines versionName + versionCode, e.g. v6.0.0-113.
+          # This keeps tags readable while ensuring uniqueness per versionCode.
+          TAG="v${VERSION_NAME}-${VERSION_CODE}"
+          if git ls-remote --tags origin "refs/tags/${TAG}" | grep -q "refs/tags/${TAG}$"; then
+            echo "TAG_EXISTS=true" >> $GITHUB_ENV
+          else
+            echo "TAG_EXISTS=false" >> $GITHUB_ENV
+          fi
+          echo "VERSION_TAG=$TAG" >> $GITHUB_ENV
+
+      - name: Create and push version tag immediately
+        if: env.TAG_EXISTS == 'false'
+        run: |
+          # Important: push the git tag before creating the draft release.
+          # Draft releases alone do not always create a visible/findable git ref.
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${VERSION_TAG}"
+          git push origin "refs/tags/${VERSION_TAG}"
+
+      - name: Verify APK files exist
+        run: |
+          echo "Checking if APK files exist at expected paths:"
+          if [ -f "./app/build/outputs/apk/release/app-release.apk" ]; then
+            echo "✓ Release APK found"
+            ls -la "./app/build/outputs/apk/release/app-release.apk"
+          elif [ -f "./app/build/outputs/apk/release/app-release-unsigned.apk" ]; then
+            echo "✓ Release APK found (unsigned)"
+            ls -la "./app/build/outputs/apk/release/app-release-unsigned.apk"
+          else
+            echo "✗ Release APK NOT found at expected path"
+          fi
+
+      - name: Create Draft Release with APKs
+        if: env.TAG_EXISTS == 'false'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ env.VERSION_TAG }}
+          name: Automated Release for v${{ env.VERSION_NAME }} (${{ env.VERSION_CODE }}) on ${{ env.date_today }}
+          body: |
+            Automated release for version ${{ env.VERSION_NAME }} (versionCode ${{ env.VERSION_CODE }})
+
+            Built on: ${{ env.date_today }}
+
+            ## APK Files
+            This release contains the default release APK.
+          draft: true
+          prerelease: false
+          files: |
+            ./app/build/outputs/apk/release/*.apk
+
+      - name: Skip release (tag already exists)
+        if: env.TAG_EXISTS == 'true'
+        run: echo "Tag ${{ env.VERSION_TAG }} already exists. Skipping release creation."

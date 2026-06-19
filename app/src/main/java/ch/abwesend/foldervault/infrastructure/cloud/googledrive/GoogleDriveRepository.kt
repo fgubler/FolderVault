@@ -26,6 +26,10 @@ class GoogleDriveRepository(private val drive: Drive) : ICloudStorageProvider {
     companion object {
         private const val ROOT_FOLDER_NAME_PREFIX = "FolderVault"
         private const val FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
+
+        // Drive q-syntax requires `\` and `'` in string literals to be backslash-escaped.
+        internal fun escapeDriveQueryLiteral(value: String): String =
+            value.replace("\\", "\\\\").replace("'", "\\'")
     }
 
     // Classify Drive API exceptions into typed CloudException subclasses.
@@ -87,7 +91,9 @@ class GoogleDriveRepository(private val drive: Drive) : ICloudStorageProvider {
         withContext(dispatchers.io) {
             runCatchingAsResult {
                 retryingDriveCall {
-                    val query = "'$parentId' in parents and name = '$name' " +
+                    val escapedParentId = escapeDriveQueryLiteral(parentId)
+                    val escapedName = escapeDriveQueryLiteral(name)
+                    val query = "'$escapedParentId' in parents and name = '$escapedName' " +
                         "and mimeType = '$FOLDER_MIME_TYPE' and trashed = false"
                     val allMatches = buildList {
                         var pageToken: String? = null

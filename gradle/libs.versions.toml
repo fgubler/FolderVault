@@ -7,7 +7,7 @@ agp = "9.1.1"
 kotlin = "2.2.10"
 ksp = "2.2.10-2.0.2"                    # MUST track the Kotlin version exactly
 coreKtx = "1.18.0"
-lifecycle = "2.9.0"
+lifecycle = "2.10.0"           # 2.10+ required for lifecycle-viewmodel-navigation3 (per-NavEntry VM scoping)
 activityCompose = "1.13.0"
 
 # ── Compose ───────────────────────────────────────────────────────────────────
@@ -74,6 +74,7 @@ androidx-compose-material-icons-extended = { group = "androidx.compose.material"
 # ── Navigation 3 ──────────────────────────────────────────────────────────────
 androidx-navigation3-runtime = { group = "androidx.navigation3", name = "navigation3-runtime", version.ref = "navigation3" }
 androidx-navigation3-ui = { group = "androidx.navigation3", name = "navigation3-ui", version.ref = "navigation3" }
+androidx-lifecycle-viewmodel-navigation3 = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-navigation3", version.ref = "lifecycle" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 
 # ── Room ──────────────────────────────────────────────────────────────────────

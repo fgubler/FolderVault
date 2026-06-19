@@ -6,8 +6,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.rememberNavBackStack
+import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
 import ch.abwesend.foldervault.view.screens.AddEditBackupScreen
@@ -39,6 +41,10 @@ fun AppNavGraph(
     NavDisplay(
         backStack = backStack,
         onBack = { backStack.removeLastOrNull() },
+        entryDecorators = listOf(
+            rememberSaveableStateHolderNavEntryDecorator(),
+            rememberViewModelStoreNavEntryDecorator(),
+        ),
         entryProvider = { key ->
             when (key) {
                 is AppDestination.Onboarding -> NavEntry(key) {

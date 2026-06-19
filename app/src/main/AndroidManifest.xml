@@ -4,10 +4,6 @@
 
     <!-- Drive API + Firebase -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- WorkManager foreground service (required API 28+; declare always for clarity) -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <!-- Android 14+: foreground service type for data sync workers -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- Android 13+: runtime notification permission; requested in onboarding -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Optional: observe network state changes for scheduling hints -->

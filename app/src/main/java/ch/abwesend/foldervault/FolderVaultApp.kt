@@ -5,6 +5,7 @@ import ch.abwesend.foldervault.di.appModule
 import ch.abwesend.foldervault.domain.logging.ITelemetryToggle
 import ch.abwesend.foldervault.domain.logging.LoggerProvider
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
+import ch.abwesend.foldervault.infrastructure.backup.BackupNotificationManager
 import ch.abwesend.foldervault.infrastructure.logging.CrashlyticsSink
 import ch.abwesend.foldervault.infrastructure.logging.LocalLogSink
 import ch.abwesend.foldervault.infrastructure.logging.PrivateLogger
@@ -27,6 +28,7 @@ class FolderVaultApp : Application() {
             androidContext(this@FolderVaultApp)
             modules(appModule)
         }
+        get<BackupNotificationManager>().createNotificationChannels()
         applyInitialTelemetrySettings()
     }
 

@@ -3,13 +3,8 @@
     <string name="app_name">Folder Vault</string>
 
     <!-- Backup notifications -->
-    <string name="notification_channel_status_name">Backup status</string>
-    <string name="notification_channel_status_description">Progress updates while a backup is running</string>
     <string name="notification_channel_problems_name">Backup problems</string>
     <string name="notification_channel_problems_description">Alerts when a backup stops working or needs your attention</string>
-    <string name="backup_notification_progress_title">FolderVault Backup</string>
-    <string name="backup_notification_progress_text">Uploading files…</string>
-    <string name="backup_notification_progress_text_with_count">Uploading %1$d / %2$d files</string>
     <string name="backup_notification_problems_title">Backup problem</string>
     <string name="backup_notification_problems_text">Backup \'%1$s\' had issues: %2$s — tap to review</string>
     <string name="notif_problem_auth_lost">auth lost</string>

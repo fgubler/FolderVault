@@ -5,11 +5,9 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ServiceInfo
 import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
-import androidx.work.ForegroundInfo
 import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.model.MessageType
@@ -35,9 +33,7 @@ class BackupNotificationManager(
     private val log get() = logger
 
     companion object {
-        const val STATUS_CHANNEL_ID = "foldervault_backup_status"
         const val PROBLEMS_CHANNEL_ID = "foldervault_backup_problems"
-        const val PROGRESS_NOTIFICATION_ID = 1001
         const val THROTTLE_WINDOW_MS = 24 * 60 * 60 * 1000L
         private const val DEEP_LINK_SCHEME = "foldervault"
         private const val DEEP_LINK_HOST = "backup"
@@ -60,42 +56,13 @@ class BackupNotificationManager(
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-        val statusChannel = NotificationChannel(
-            STATUS_CHANNEL_ID,
-            context.getString(R.string.notification_channel_status_name),
-            NotificationManager.IMPORTANCE_LOW,
-        ).apply { description = context.getString(R.string.notification_channel_status_description) }
-
         val problemsChannel = NotificationChannel(
             PROBLEMS_CHANNEL_ID,
             context.getString(R.string.notification_channel_problems_name),
             NotificationManager.IMPORTANCE_DEFAULT,
         ).apply { description = context.getString(R.string.notification_channel_problems_description) }
 
-        nm.createNotificationChannel(statusChannel)
         nm.createNotificationChannel(problemsChannel)
-    }
-
-    fun createForegroundInfo(filesUploaded: Int, totalDiscovered: Int): ForegroundInfo {
-        val text = if (totalDiscovered > 0) {
-            context.getString(R.string.backup_notification_progress_text_with_count, filesUploaded, totalDiscovered)
-        } else {
-            context.getString(R.string.backup_notification_progress_text)
-        }
-
-        val notification = NotificationCompat.Builder(context, STATUS_CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle(context.getString(R.string.backup_notification_progress_title))
-            .setContentText(text)
-            .setOngoing(true)
-            .setSilent(true)
-            .build()
-
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ForegroundInfo(PROGRESS_NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            ForegroundInfo(PROGRESS_NOTIFICATION_ID, notification)
-        }
     }
 
     suspend fun postProblemNotificationIfNeeded(

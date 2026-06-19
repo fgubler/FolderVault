@@ -2,12 +2,16 @@ package ch.abwesend.foldervault.infrastructure.backup
 
 import android.content.Context
 import androidx.work.CoroutineWorker
-import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import ch.abwesend.foldervault.domain.logging.logger
+import ch.abwesend.foldervault.domain.model.MessageSeverity
+import ch.abwesend.foldervault.domain.model.MessageType
 import ch.abwesend.foldervault.domain.util.injectAnywhere
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupConfigDao
+import ch.abwesend.foldervault.infrastructure.room.dao.BackupMessageDao
+import ch.abwesend.foldervault.infrastructure.room.entity.BackupMessageEntity
 import java.time.Instant
+import java.util.UUID
 
 class BackupWorker(
     context: Context,
@@ -15,6 +19,7 @@ class BackupWorker(
 ) : CoroutineWorker(context, workerParams) {
     private val backupRunner: BackupRunner by injectAnywhere()
     private val backupConfigDao: BackupConfigDao by injectAnywhere()
+    private val backupMessageDao: BackupMessageDao by injectAnywhere()
     private val notificationManager: BackupNotificationManager by injectAnywhere()
     private val errorHandler = WorkerErrorHandler()
 
@@ -33,20 +38,13 @@ class BackupWorker(
 
     override suspend fun doWork(): Result {
         val configId = inputData.getString(KEY_CONFIG_ID)
-        val initialConfig = configId?.let { backupConfigDao.getByIdOnce(it) }
-        setForeground(
-            notificationManager.createForegroundInfo(
-                initialConfig?.filesUploadedTotal ?: 0,
-                initialConfig?.totalFilesDiscovered ?: 0,
-            )
-        )
+        val fallbackRunId = UUID.randomUUID().toString()
 
         return errorHandler.doWorkWithErrorHandling(
             workDescription = "FolderVault backup",
-            onFatalError = { /* error is already logged by WorkerErrorHandler */ },
+            onFatalError = { surfaceFatalError(configId, fallbackRunId) },
         ) {
-            val id = inputData.getString(KEY_CONFIG_ID)
-                ?: return@doWorkWithErrorHandling Result.failure()
+            val id = configId ?: return@doWorkWithErrorHandling Result.failure()
 
             val config = backupConfigDao.getByIdOnce(id)
                 ?: return@doWorkWithErrorHandling Result.success() // config deleted, nothing to do
@@ -63,9 +61,9 @@ class BackupWorker(
             when (result) {
                 is RunResult.Success -> {
                     if (result.summary.hitTimeBudget) {
-                        // Made progress but ran out of time — re-schedule as expedited one-time
+                        // Made progress but ran out of time — re-enqueue for the next slot
                         logger.info("Run hit time budget with progress; re-enqueueing for config $id")
-                        BackupScheduler(applicationContext).scheduleExpedited(id)
+                        BackupScheduler(applicationContext).scheduleOneTime(id)
                         Result.success() // not retry() — we don't want backoff accumulation
                     } else {
                         notificationManager.clearResolvedThrottles(id)
@@ -84,13 +82,35 @@ class BackupWorker(
         }
     }
 
-    override suspend fun getForegroundInfo(): ForegroundInfo {
-        // Best-effort — may be called before any config is loaded
-        val configId = inputData.getString(KEY_CONFIG_ID)
-        val config = configId?.let { backupConfigDao.getByIdOnce(it) }
-        return notificationManager.createForegroundInfo(
-            config?.filesUploadedTotal ?: 0,
-            config?.totalFilesDiscovered ?: 0,
+    /**
+     * Surfaces a worker-level fatal error (an exception that escaped the run pipeline) to the
+     * user by inserting a coalesced GENERIC_ERROR message and triggering the throttled problem
+     * notification. The exception itself is already logged + recorded in Crashlytics by
+     * [WorkerErrorHandler]. With no configId we can only rely on that — there is no row to
+     * attach the message to.
+     */
+    private suspend fun surfaceFatalError(configId: String?, runId: String) {
+        if (configId == null) return
+        val config = backupConfigDao.getByIdOnce(configId) ?: return
+
+        backupMessageDao.coalesceInsert(
+            BackupMessageEntity(
+                backupConfigId = configId,
+                runId = runId,
+                timestamp = System.currentTimeMillis(),
+                severity = MessageSeverity.ERROR,
+                type = MessageType.GENERIC_ERROR,
+                messageText = null,
+                formatArgs = emptyList(),
+                relativePath = null,
+                readAt = null,
+            )
+        )
+
+        notificationManager.postProblemNotificationIfNeeded(
+            configId = configId,
+            configName = config.displayName,
+            runId = runId,
         )
     }
 }

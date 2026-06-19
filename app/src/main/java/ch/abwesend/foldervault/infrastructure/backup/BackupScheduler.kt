@@ -7,7 +7,6 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.OutOfQuotaPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
@@ -80,26 +79,6 @@ class BackupScheduler(private val context: Context) : IBackupScheduler {
             throw e
         } catch (e: Exception) {
             log.error("Failed to enqueue one-time backup for config $configId", e)
-        }
-    }
-
-    /** Enqueues an expedited one-time continuation for in-progress initial sync. */
-    fun scheduleExpedited(configId: String) {
-        try {
-            val request = OneTimeWorkRequestBuilder<BackupWorker>()
-                .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
-                .setInputData(workDataOf(BackupWorker.KEY_CONFIG_ID to configId))
-                .build()
-            workManager.enqueueUniqueWork(
-                BackupWorker.workName(configId),
-                ExistingWorkPolicy.KEEP, // don't interrupt an already-running one
-                request,
-            )
-            log.info("Enqueued expedited continuation backup for config $configId")
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            log.error("Failed to enqueue expedited backup for config $configId", e)
         }
     }
 

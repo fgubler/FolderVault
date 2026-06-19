@@ -389,12 +389,10 @@ private fun CheckPasswordDialog(
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Spacer(modifier = Modifier.height(12.dp))
-                OutlinedTextField(
+                PasswordTextField(
                     value = candidate,
                     onValueChange = { candidate = it },
-                    label = { Text(stringResource(R.string.label_password)) },
-                    visualTransformation = PasswordVisualTransformation(),
-                    singleLine = true,
+                    label = stringResource(R.string.label_password),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 result?.let { matches ->

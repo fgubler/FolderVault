@@ -27,6 +27,8 @@
     <string name="button_close">Close</string>
     <string name="button_got_it">Got it</string>
     <string name="info_cd_about">About %1$s</string>
+    <string name="password_cd_show">Show password</string>
+    <string name="password_cd_hide">Hide password</string>
 
     <!-- Backup schedule display names -->
     <string name="schedule_default">Default</string>

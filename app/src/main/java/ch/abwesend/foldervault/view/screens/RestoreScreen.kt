@@ -25,7 +25,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -39,7 +38,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import ch.abwesend.foldervault.R
@@ -48,6 +46,7 @@ import ch.abwesend.foldervault.domain.restore.RestoreProgress
 import ch.abwesend.foldervault.domain.restore.RestoreResult
 import ch.abwesend.foldervault.ui.theme.FolderVaultTheme
 import ch.abwesend.foldervault.view.components.EnumDropdown
+import ch.abwesend.foldervault.view.components.PasswordTextField
 import ch.abwesend.foldervault.view.viewmodel.RestoreState
 import ch.abwesend.foldervault.view.viewmodel.RestoreViewModel
 import org.koin.androidx.compose.koinViewModel
@@ -97,7 +96,10 @@ fun RestoreScreen(
                 title = { Text(stringResource(R.string.restore_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.button_back_cd))
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.button_back_cd),
+                        )
                     }
                 },
             )
@@ -238,8 +240,13 @@ private fun SourceFolderSection(
 @Composable
 private fun OutputFolderSection(outputUri: String?, onPickOutput: () -> Unit) {
     Text(stringResource(R.string.restore_step2_header), style = MaterialTheme.typography.labelLarge)
+    val outputButtonRes = if (outputUri != null) {
+        R.string.restore_output_selected
+    } else {
+        R.string.restore_pick_output_folder
+    }
     OutlinedButton(onClick = onPickOutput, modifier = Modifier.fillMaxWidth()) {
-        Text(stringResource(if (outputUri != null) R.string.restore_output_selected else R.string.restore_pick_output_folder))
+        Text(stringResource(outputButtonRes))
     }
     if (outputUri == null) {
         Text(
@@ -262,12 +269,10 @@ private fun PasswordAndStartSection(
 
     var password by remember { mutableStateOf("") }
 
-    OutlinedTextField(
+    PasswordTextField(
         value = password,
         onValueChange = { password = it },
-        label = { Text(stringResource(R.string.label_backup_password)) },
-        visualTransformation = PasswordVisualTransformation(),
-        singleLine = true,
+        label = stringResource(R.string.label_backup_password),
         modifier = Modifier.fillMaxWidth(),
     )
     Spacer(modifier = Modifier.height(8.dp))
@@ -333,7 +338,10 @@ private fun RestoreProgressDialog(progress: RestoreProgress?, onCancel: () -> Un
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (progress == null || progress.total == 0) {
-                    Text(stringResource(R.string.restore_verifying_password), style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        stringResource(R.string.restore_verifying_password),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 } else {
                     val fraction = progress.processed.toFloat() / progress.total.toFloat()

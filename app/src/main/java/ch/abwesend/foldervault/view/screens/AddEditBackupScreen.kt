@@ -42,7 +42,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import ch.abwesend.foldervault.R
@@ -53,6 +52,7 @@ import ch.abwesend.foldervault.domain.model.RetentionPolicy
 import ch.abwesend.foldervault.ui.theme.FolderVaultTheme
 import ch.abwesend.foldervault.view.components.EnumDropdown
 import ch.abwesend.foldervault.view.components.InfoIconButton
+import ch.abwesend.foldervault.view.components.PasswordTextField
 import ch.abwesend.foldervault.view.util.displayNameFromUri
 import ch.abwesend.foldervault.view.viewmodel.AddEditBackupViewModel
 import ch.abwesend.foldervault.view.viewmodel.AddEditEvent
@@ -111,13 +111,17 @@ fun AddEditBackupScreen(
         }
     }
 
+    val titleRes = if (configId == null) R.string.add_backup_title else R.string.edit_backup_title
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(if (configId == null) R.string.add_backup_title else R.string.edit_backup_title)) },
+                title = { Text(stringResource(titleRes)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.button_back_cd))
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.button_back_cd),
+                        )
                     }
                 },
             )
@@ -257,10 +261,18 @@ private fun CloudSection(
         CloudSetupState.Authorizing -> stringResource(R.string.cloud_status_authorizing)
         is CloudSetupState.ConsentRequired -> stringResource(R.string.cloud_status_awaiting_auth)
         CloudSetupState.CreatingFolder -> stringResource(R.string.cloud_status_creating_folder)
-        is CloudSetupState.Done -> stringResource(R.string.cloud_status_done, cloudSetup.accountId, cloudSetup.folderName)
+        is CloudSetupState.Done -> stringResource(
+            R.string.cloud_status_done,
+            cloudSetup.accountId,
+            cloudSetup.folderName,
+        )
         is CloudSetupState.Error -> stringResource(R.string.cloud_status_error, cloudSetup.message.asString())
     }
-    Text(statusText, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Text(
+        statusText,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
     if (cloudSetup !is CloudSetupState.Done) {
         Spacer(modifier = Modifier.height(8.dp))
         val busy = cloudSetup is CloudSetupState.Authorizing ||
@@ -442,21 +454,17 @@ private fun EncryptionSection(
             color = MaterialTheme.colorScheme.error,
         )
         Spacer(modifier = Modifier.height(8.dp))
-        OutlinedTextField(
+        PasswordTextField(
             value = password,
             onValueChange = onPasswordChange,
-            label = { Text(stringResource(R.string.label_password)) },
-            visualTransformation = PasswordVisualTransformation(),
-            singleLine = true,
+            label = stringResource(R.string.label_password),
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(modifier = Modifier.height(8.dp))
-        OutlinedTextField(
+        PasswordTextField(
             value = passwordConfirm,
             onValueChange = onPasswordConfirmChange,
-            label = { Text(stringResource(R.string.label_confirm_password)) },
-            visualTransformation = PasswordVisualTransformation(),
-            singleLine = true,
+            label = stringResource(R.string.label_confirm_password),
             modifier = Modifier.fillMaxWidth(),
         )
     }

@@ -2,6 +2,7 @@ package ch.abwesend.foldervault.infrastructure.cloud.googledrive
 
 import ch.abwesend.foldervault.domain.cloud.CloudRateLimitException
 import ch.abwesend.foldervault.domain.cloud.CloudTransientException
+import ch.abwesend.foldervault.domain.logging.logger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlin.random.Random
@@ -21,10 +22,15 @@ internal object DriveRetryPolicy {
      * if the first attempt actually succeeded server-side but the response was lost client-side,
      * the verify hook detects the artifact and reuses it instead of creating a duplicate.
      *
-     * Exceptions thrown by [verifyAlreadySucceeded] are swallowed (CancellationException aside) —
-     * a transient failure of the verify probe must not derail the retry of the real operation.
+     * Exceptions thrown by [verifyAlreadySucceeded] are logged at WARNING and otherwise ignored
+     * (CancellationException aside) — a transient failure of the verify probe must not derail the
+     * retry of the real operation.
+     *
+     * [label] is included in retry / exhaustion log lines to make the local log diagnosable when a
+     * user reports flaky uploads.
      */
     suspend fun <T> withRetry(
+        label: String = "Drive call",
         verifyAlreadySucceeded: (suspend () -> T?)? = null,
         block: suspend () -> T,
     ): T {
@@ -33,7 +39,7 @@ internal object DriveRetryPolicy {
         while (attempt <= MAX_RETRIES) {
             lastException = try {
                 if (attempt > 0 && verifyAlreadySucceeded != null) {
-                    val existing = runVerifySafely(verifyAlreadySucceeded)
+                    val existing = runVerifySafely(label, verifyAlreadySucceeded)
                     if (existing != null) return existing
                 }
                 return block()
@@ -47,18 +53,24 @@ internal object DriveRetryPolicy {
             attempt++
             if (attempt <= MAX_RETRIES) {
                 val backoff = minOf(BASE_DELAY_MS * (1L shl attempt), MAX_DELAY_MS)
+                logger.info(
+                    "$label failed (attempt $attempt/$MAX_RETRIES, ${lastException.javaClass.simpleName}), " +
+                        "retrying in ${backoff}ms",
+                )
                 delay(backoff + Random.nextLong(JITTER_MAX_MS))
             }
         }
+        logger.warning("$label exhausted $MAX_RETRIES retries", lastException)
         throw lastException!!
     }
 
     @Suppress("TooGenericExceptionCaught")
-    private suspend fun <T> runVerifySafely(probe: suspend () -> T?): T? = try {
+    private suspend fun <T> runVerifySafely(label: String, probe: suspend () -> T?): T? = try {
         probe()
     } catch (e: CancellationException) {
         throw e
-    } catch (_: Exception) {
+    } catch (e: Exception) {
+        logger.warning("Verify probe for $label threw — treating as not-yet-succeeded and retrying", e)
         null
     }
 }

@@ -47,6 +47,7 @@ import ch.abwesend.foldervault.domain.restore.RestoreResult
 import ch.abwesend.foldervault.ui.theme.FolderVaultTheme
 import ch.abwesend.foldervault.view.components.EnumDropdown
 import ch.abwesend.foldervault.view.components.PasswordTextField
+import ch.abwesend.foldervault.view.components.UnexpectedErrorDialog
 import ch.abwesend.foldervault.view.viewmodel.RestoreState
 import ch.abwesend.foldervault.view.viewmodel.RestoreViewModel
 import org.koin.androidx.compose.koinViewModel
@@ -59,7 +60,10 @@ fun RestoreScreen(
     viewModel: RestoreViewModel = koinViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val unexpectedError by viewModel.unexpectedError.collectAsState()
     val context = LocalContext.current
+
+    UnexpectedErrorDialog(error = unexpectedError, onDismiss = viewModel::dismissUnexpectedError)
 
     val sourceLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree(),

@@ -3,8 +3,6 @@ package ch.abwesend.foldervault.view.viewmodel
 import android.app.PendingIntent
 import android.content.Intent
 import android.net.Uri
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
 import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.backup.BackupConfig
 import ch.abwesend.foldervault.domain.backup.IBackupConfigRepository
@@ -15,6 +13,7 @@ import ch.abwesend.foldervault.domain.cloud.ICloudAuthorizer
 import ch.abwesend.foldervault.domain.cloud.ICloudStorageProvider
 import ch.abwesend.foldervault.domain.crypto.IEncryptionRepository
 import ch.abwesend.foldervault.domain.crypto.IFvc1Cipher
+import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.model.BackupRunStatus
 import ch.abwesend.foldervault.domain.model.BackupSchedule
 import ch.abwesend.foldervault.domain.model.ChangedFilePolicy
@@ -30,7 +29,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
 import java.util.Base64
 import java.util.UUID
 
@@ -77,7 +75,7 @@ class AddEditBackupViewModel(
     private val cipher: IFvc1Cipher,
     private val settingsRepo: IAppSettingsRepository,
     private val existingConfigId: String?,
-) : ViewModel() {
+) : BaseViewModel() {
 
     private val _form = MutableStateFlow(AddEditFormState())
     val form: StateFlow<AddEditFormState> = _form.asStateFlow()
@@ -88,7 +86,7 @@ class AddEditBackupViewModel(
     private var existingConfig: BackupConfig? = null
 
     init {
-        viewModelScope.launch {
+        safeLaunch {
             val settings = settingsRepo.settings.first()
             if (existingConfigId != null) {
                 loadExisting(existingConfigId, settings.defaultSchedule)
@@ -153,7 +151,7 @@ class AddEditBackupViewModel(
 
     fun startDriveSetup() {
         if (_form.value.cloudSetup is CloudSetupState.Done) return
-        viewModelScope.launch {
+        safeLaunch {
             updateForm { it.copy(cloudSetup = CloudSetupState.Authorizing, errorMessage = null) }
             when (val result = authorizer.authorize()) {
                 is CloudAuthResult.Authorized -> createCloudFolder(result.data)
@@ -166,7 +164,7 @@ class AddEditBackupViewModel(
     }
 
     fun handleDriveConsentResult(data: Intent?) {
-        viewModelScope.launch {
+        safeLaunch {
             val result = authorizer.authorizeFromIntent(data)
             if (result is SuccessResult) {
                 createCloudFolder(result.value)
@@ -233,16 +231,17 @@ class AddEditBackupViewModel(
     fun save() {
         val state = _form.value
         if (!validate(state)) return
-        viewModelScope.launch {
+        safeLaunch {
             updateForm { it.copy(isSaving = true, errorMessage = null) }
             try {
-                val subFolder = ensureSubFolder(state) ?: return@launch
-                val config = buildConfig(state, subFolder.first, subFolder.second) ?: return@launch
+                val subFolder = ensureSubFolder(state) ?: return@safeLaunch
+                val config = buildConfig(state, subFolder.first, subFolder.second) ?: return@safeLaunch
                 configRepo.save(config)
                 val globalDefault = settingsRepo.settings.first().defaultSchedule
                 scheduler.schedulePeriodicIfNeeded(config.id, config.schedule, config.networkPolicy, globalDefault)
                 _events.emit(AddEditEvent.Saved)
             } catch (e: Exception) {
+                logger.error("Failed to save backup config", e)
                 updateForm {
                     it.copy(
                         isSaving = false,

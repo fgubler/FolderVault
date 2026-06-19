@@ -35,6 +35,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,6 +47,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.ui.theme.FolderVaultTheme
+import ch.abwesend.foldervault.view.components.UnexpectedErrorDialog
 import ch.abwesend.foldervault.view.viewmodel.OnboardingViewModel
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
@@ -72,9 +75,12 @@ fun OnboardingScreen(
 ) {
     val pagerState = rememberPagerState { PAGES.size }
     val scope = rememberCoroutineScope()
+    val unexpectedError by viewModel.unexpectedError.collectAsState()
     val notificationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { _ -> }
+
+    UnexpectedErrorDialog(error = unexpectedError, onDismiss = viewModel::dismissUnexpectedError)
 
     Column(modifier = modifier.fillMaxSize().safeDrawingPadding()) {
         HorizontalPager(

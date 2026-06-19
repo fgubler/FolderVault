@@ -42,8 +42,8 @@ class GoogleDriveRepository(private val drive: Drive) : ICloudStorageProvider {
     }
 
     /** Classifies and applies exponential-backoff retry for transient / rate-limit errors. */
-    private suspend fun <T> retryingDriveCall(block: () -> T): T =
-        DriveRetryPolicy.withRetry { driveCall(block) }
+    private suspend fun <T> retryingDriveCall(label: String = "Drive call", block: () -> T): T =
+        DriveRetryPolicy.withRetry(label = label) { driveCall(block) }
 
     override suspend fun getAccountIdentifier(): BinaryResult<String, Exception> =
         withContext(dispatchers.io) {
@@ -63,6 +63,7 @@ class GoogleDriveRepository(private val drive: Drive) : ICloudStorageProvider {
                 // (apparently failed but actually successful) prior attempt.
                 val name = "${ROOT_FOLDER_NAME_PREFIX}_${UUID.randomUUID()}"
                 DriveRetryPolicy.withRetry(
+                    label = "createRootFolder",
                     verifyAlreadySucceeded = { findRootFolderByGeneratedName(name) },
                 ) {
                     driveCall {
@@ -96,7 +97,7 @@ class GoogleDriveRepository(private val drive: Drive) : ICloudStorageProvider {
     override suspend fun hasFolderAccess(folderId: String): BinaryResult<Boolean, Exception> =
         withContext(dispatchers.io) {
             runCatchingAsResult {
-                retryingDriveCall {
+                retryingDriveCall("hasFolderAccess") {
                     drive.files().get(folderId)
                         .setFields("id, trashed, capabilities")
                         .execute()
@@ -111,7 +112,7 @@ class GoogleDriveRepository(private val drive: Drive) : ICloudStorageProvider {
     ): BinaryResult<CloudFolder, Exception> =
         withContext(dispatchers.io) {
             runCatchingAsResult {
-                retryingDriveCall {
+                retryingDriveCall("getOrCreateChildFolder($name)") {
                     val escapedParentId = escapeDriveQueryLiteral(parentId)
                     val escapedName = escapeDriveQueryLiteral(name)
                     val query = "'$escapedParentId' in parents and name = '$escapedName' " +
@@ -155,7 +156,7 @@ class GoogleDriveRepository(private val drive: Drive) : ICloudStorageProvider {
     override suspend fun listChildren(folderId: String): BinaryResult<List<CloudEntry>, Exception> =
         withContext(dispatchers.io) {
             runCatchingAsResult {
-                retryingDriveCall {
+                retryingDriveCall("listChildren") {
                     val escapedFolderId = escapeDriveQueryLiteral(folderId)
                     val query = "'$escapedFolderId' in parents and trashed = false"
                     buildList {
@@ -192,6 +193,7 @@ class GoogleDriveRepository(private val drive: Drive) : ICloudStorageProvider {
     ): BinaryResult<CloudFile, Exception> = withContext(dispatchers.io) {
         runCatchingAsResult {
             DriveRetryPolicy.withRetry(
+                label = "uploadFile($remoteName)",
                 verifyAlreadySucceeded = { findUploadedFileByName(parentId, remoteName, excludeIds) },
             ) {
                 driveCall {
@@ -252,7 +254,7 @@ class GoogleDriveRepository(private val drive: Drive) : ICloudStorageProvider {
     ): BinaryResult<ByteArray?, Exception> =
         withContext(dispatchers.io) {
             runCatchingAsResult {
-                retryingDriveCall {
+                retryingDriveCall("readRootMetadata($name)") {
                     val escapedRootFolderId = escapeDriveQueryLiteral(rootFolderId)
                     val escapedName = escapeDriveQueryLiteral(name)
                     val query = "'$escapedRootFolderId' in parents and name = '$escapedName' and trashed = false"
@@ -272,7 +274,7 @@ class GoogleDriveRepository(private val drive: Drive) : ICloudStorageProvider {
     ): BinaryResult<Unit, Exception> =
         withContext(dispatchers.io) {
             runCatchingAsResult {
-                retryingDriveCall {
+                retryingDriveCall("writeRootMetadata($name)") {
                     val escapedRootFolderId = escapeDriveQueryLiteral(rootFolderId)
                     val escapedName = escapeDriveQueryLiteral(name)
                     val query = "'$escapedRootFolderId' in parents and name = '$escapedName' and trashed = false"
@@ -298,7 +300,7 @@ class GoogleDriveRepository(private val drive: Drive) : ICloudStorageProvider {
     override suspend fun deleteFile(fileId: String): BinaryResult<Unit, Exception> =
         withContext(dispatchers.io) {
             runCatchingAsResult {
-                retryingDriveCall {
+                retryingDriveCall("deleteFile") {
                     drive.files().delete(fileId).execute()
                     logger.info("Deleted Drive file: $fileId")
                 }

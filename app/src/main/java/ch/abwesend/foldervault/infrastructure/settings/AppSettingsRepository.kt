@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.model.AppSettings
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
 import kotlinx.coroutines.flow.Flow
@@ -16,14 +17,25 @@ import kotlinx.coroutines.flow.map
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "app_settings")
 
-private inline fun <reified E : Enum<E>> Preferences.enum(key: Preferences.Key<String>, default: E): E =
-    this[key]?.let { runCatching { enumValueOf<E>(it) }.getOrNull() } ?: default
-
 private fun <E : Enum<E>> MutablePreferences.setEnum(key: Preferences.Key<String>, value: E) {
     this[key] = value.name
 }
 
 class AppSettingsRepository(private val context: Context) : IAppSettingsRepository {
+
+    private inline fun <reified E : Enum<E>> Preferences.enum(key: Preferences.Key<String>, default: E): E {
+        val raw = this[key] ?: return default
+        return try {
+            enumValueOf<E>(raw)
+        } catch (e: IllegalArgumentException) {
+            val typeName = E::class.simpleName
+            this@AppSettingsRepository.logger.warning(
+                "Stored $typeName value '$raw' for key ${key.name} could not be parsed; falling back to $default",
+                e,
+            )
+            default
+        }
+    }
 
     override val settings: Flow<AppSettings> = context.dataStore.data.map { it.toAppSettings() }
 

@@ -1,7 +1,5 @@
 package ch.abwesend.foldervault.view.viewmodel
 
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
 import ch.abwesend.foldervault.domain.restore.IRestoreEngine
 import ch.abwesend.foldervault.domain.restore.RestoreCollisionPolicy
 import ch.abwesend.foldervault.domain.restore.RestoreProgress
@@ -11,7 +9,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
 
 sealed interface RestoreState {
     data object Idle : RestoreState
@@ -32,7 +29,7 @@ data class RestoreUiState(
     val progress: RestoreProgress? = null,
 )
 
-class RestoreViewModel(private val engine: IRestoreEngine) : ViewModel() {
+class RestoreViewModel(private val engine: IRestoreEngine) : BaseViewModel() {
 
     private val _uiState = MutableStateFlow(RestoreUiState())
     val uiState: StateFlow<RestoreUiState> = _uiState.asStateFlow()
@@ -41,14 +38,19 @@ class RestoreViewModel(private val engine: IRestoreEngine) : ViewModel() {
 
     fun setSourceFolder(uri: String) {
         _uiState.update { it.copy(sourceUri = uri, state = RestoreState.Scanning) }
-        viewModelScope.launch {
-            val result = engine.scanSourceFolder(uri)
-            _uiState.update { current ->
-                current.copy(
-                    cryptFileCount = result.cryptFileCount,
-                    otherFileCount = result.otherFileCount,
-                    state = if (current.outputUri != null) RestoreState.ReadyToStart else RestoreState.SourceReady,
-                )
+        safeLaunch {
+            try {
+                val result = engine.scanSourceFolder(uri)
+                _uiState.update { current ->
+                    current.copy(
+                        cryptFileCount = result.cryptFileCount,
+                        otherFileCount = result.otherFileCount,
+                        state = if (current.outputUri != null) RestoreState.ReadyToStart else RestoreState.SourceReady,
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(state = RestoreState.Idle, sourceUri = null) }
+                throw e
             }
         }
     }
@@ -76,7 +78,7 @@ class RestoreViewModel(private val engine: IRestoreEngine) : ViewModel() {
         val src = snapshot.sourceUri
         val out = snapshot.outputUri
         if (src != null && out != null) {
-            restoreJob = viewModelScope.launch {
+            restoreJob = safeLaunch {
                 _uiState.update { it.copy(state = RestoreState.Running, progress = null) }
                 try {
                     val result = engine.decryptAll(

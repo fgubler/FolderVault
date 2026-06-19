@@ -55,6 +55,7 @@ import ch.abwesend.foldervault.ui.theme.FolderVaultTheme
 import ch.abwesend.foldervault.view.components.EnumDropdown
 import ch.abwesend.foldervault.view.components.InfoIconButton
 import ch.abwesend.foldervault.view.components.PasswordTextField
+import ch.abwesend.foldervault.view.components.UnexpectedErrorDialog
 import ch.abwesend.foldervault.view.util.displayNameFromUri
 import ch.abwesend.foldervault.view.viewmodel.AddEditBackupViewModel
 import ch.abwesend.foldervault.view.viewmodel.AddEditEvent
@@ -77,8 +78,11 @@ fun AddEditBackupScreen(
     viewModel: AddEditBackupViewModel = koinViewModel(parameters = { parametersOf(configId) }),
 ) {
     val form by viewModel.form.collectAsState()
+    val unexpectedError by viewModel.unexpectedError.collectAsState()
     val context = LocalContext.current
     val currentOnSave by rememberUpdatedState(onSave)
+
+    UnexpectedErrorDialog(error = unexpectedError, onDismiss = viewModel::dismissUnexpectedError)
 
     val folderPickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree(),

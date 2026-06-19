@@ -18,6 +18,8 @@ import ch.abwesend.foldervault.domain.model.MessageType
 import ch.abwesend.foldervault.domain.result.BinaryResult
 import ch.abwesend.foldervault.domain.result.ErrorResult
 import ch.abwesend.foldervault.domain.result.SuccessResult
+import ch.abwesend.foldervault.domain.result.ifError
+import ch.abwesend.foldervault.domain.result.runCatchingAsResult
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupConfigDao
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupMessageDao
@@ -67,10 +69,12 @@ class BackupRunner(
 
         val summary = RunSummary()
 
-        // Clean up stale staging dirs from previous interrupted runs
+        // Clean up stale staging dirs from previous interrupted runs.
+        // Cleanup failures must not abort the run — they only mean cache disk fills up slowly.
         val stagingRoot = File(context.cacheDir, "encrypt-staging")
         val stagingManager = StagingDirManager(stagingRoot)
-        stagingManager.cleanupOldDirs()
+        runCatchingAsResult { stagingManager.cleanupOldDirs() }
+            .ifError { log.warning("Failed to clean up old staging dirs for run $runId", it) }
         val stagingDir = stagingManager.createRunDir(runId)
 
         // Authorize — silent only (no UI interaction from a worker)

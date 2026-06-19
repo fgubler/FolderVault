@@ -49,6 +49,7 @@ import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.ui.theme.FolderVaultTheme
 import ch.abwesend.foldervault.view.components.EnumDropdown
 import ch.abwesend.foldervault.view.components.InfoIconButton
+import ch.abwesend.foldervault.view.components.UnexpectedErrorDialog
 import ch.abwesend.foldervault.view.viewmodel.SettingsViewModel
 import org.koin.androidx.compose.koinViewModel
 
@@ -61,9 +62,12 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = koinViewModel(),
 ) {
     val settings by viewModel.settings.collectAsState()
+    val unexpectedError by viewModel.unexpectedError.collectAsState()
     val notificationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { _ -> }
+
+    UnexpectedErrorDialog(error = unexpectedError, onDismiss = viewModel::dismissUnexpectedError)
 
     Scaffold(
         modifier = modifier,

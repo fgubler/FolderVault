@@ -1,6 +1,5 @@
 package ch.abwesend.foldervault.view.viewmodel
 
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import ch.abwesend.foldervault.domain.logging.ITelemetryToggle
 import ch.abwesend.foldervault.domain.model.AppSettings
@@ -12,12 +11,11 @@ import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
 
 class SettingsViewModel(
     private val settingsRepo: IAppSettingsRepository,
     private val telemetryToggle: ITelemetryToggle,
-) : ViewModel() {
+) : BaseViewModel() {
 
     val settings: StateFlow<AppSettings> = settingsRepo.settings
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AppSettings())
@@ -43,6 +41,6 @@ class SettingsViewModel(
     fun setShowOnboarding(show: Boolean) = update { it.copy(showOnboarding = show) }
 
     private fun update(transform: (AppSettings) -> AppSettings) {
-        viewModelScope.launch { settingsRepo.update(transform) }
+        safeLaunch { settingsRepo.update(transform) }
     }
 }

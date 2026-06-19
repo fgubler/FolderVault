@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.backup.BackupConfig
 import ch.abwesend.foldervault.domain.backup.BackupMessage
+import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.model.BackupRunStatus
 import ch.abwesend.foldervault.domain.model.BackupSchedule
 import ch.abwesend.foldervault.domain.model.ChangedFilePolicy
@@ -66,6 +67,7 @@ import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.model.RetentionPolicy
 import ch.abwesend.foldervault.ui.theme.FolderVaultTheme
 import ch.abwesend.foldervault.view.components.PasswordTextField
+import ch.abwesend.foldervault.view.components.UnexpectedErrorDialog
 import ch.abwesend.foldervault.view.viewmodel.BackupDetailViewModel
 import ch.abwesend.foldervault.view.viewmodel.DetailEvent
 import org.koin.androidx.compose.koinViewModel
@@ -88,7 +90,10 @@ fun BackupDetailScreen(
     val messages by viewModel.messages.collectAsState()
     val passwordCheckResult by viewModel.passwordCheckResult.collectAsState()
     val isRunning by viewModel.isRunning.collectAsState()
+    val unexpectedError by viewModel.unexpectedError.collectAsState()
     val currentOnDelete by rememberUpdatedState(onDelete)
+
+    UnexpectedErrorDialog(error = unexpectedError, onDismiss = viewModel::dismissUnexpectedError)
 
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
@@ -317,6 +322,7 @@ private fun CloudFolderRow(folderName: String, folderId: String) {
                 try {
                     context.startActivity(intent)
                 } catch (_: ActivityNotFoundException) {
+                    logger.info("No activity found to open Drive folder link, showing fallback dialog")
                     showOpenDriveError = true
                 }
             },

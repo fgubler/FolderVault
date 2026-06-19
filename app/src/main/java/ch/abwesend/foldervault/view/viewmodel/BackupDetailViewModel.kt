@@ -1,6 +1,5 @@
 package ch.abwesend.foldervault.view.viewmodel
 
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import ch.abwesend.foldervault.domain.backup.BackupConfig
 import ch.abwesend.foldervault.domain.backup.BackupMessage
@@ -20,7 +19,6 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
 
 sealed interface DetailEvent {
     data object Deleted : DetailEvent
@@ -33,7 +31,7 @@ class BackupDetailViewModel(
     private val scheduler: IBackupScheduler,
     private val encryptionRepo: IEncryptionRepository,
     private val settingsRepo: IAppSettingsRepository,
-) : ViewModel() {
+) : BaseViewModel() {
 
     val config: StateFlow<BackupConfig?> = configRepo.getById(configId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
@@ -61,54 +59,42 @@ class BackupDetailViewModel(
         }
     }
 
-    fun togglePause() {
-        viewModelScope.launch {
-            val current = config.value ?: return@launch
-            val newPaused = !current.isPaused
-            if (newPaused) {
-                scheduler.cancel(configId)
-            } else {
-                val globalDefault = settingsRepo.settings.first().defaultSchedule
-                scheduler.schedulePeriodicIfNeeded(configId, current.schedule, current.networkPolicy, globalDefault)
-            }
-            configRepo.setPaused(configId, newPaused)
+    fun togglePause() = safeLaunch {
+        val current = config.value ?: return@safeLaunch
+        val newPaused = !current.isPaused
+        if (newPaused) {
+            scheduler.cancel(configId)
+        } else {
+            val globalDefault = settingsRepo.settings.first().defaultSchedule
+            scheduler.schedulePeriodicIfNeeded(configId, current.schedule, current.networkPolicy, globalDefault)
         }
+        configRepo.setPaused(configId, newPaused)
     }
 
-    fun checkPassword(candidate: String) {
-        viewModelScope.launch {
-            val blob = config.value?.encryptedPasswordBlob
-            if (blob == null) {
-                _passwordCheckResult.value = false
-                return@launch
-            }
-            val result = encryptionRepo.decryptPassword(blob)
-            _passwordCheckResult.value = (result as? SuccessResult)?.value == candidate
+    fun checkPassword(candidate: String) = safeLaunch {
+        val blob = config.value?.encryptedPasswordBlob
+        if (blob == null) {
+            _passwordCheckResult.value = false
+            return@safeLaunch
         }
+        val result = encryptionRepo.decryptPassword(blob)
+        _passwordCheckResult.value = (result as? SuccessResult)?.value == candidate
     }
 
     fun clearPasswordCheckResult() {
         _passwordCheckResult.value = null
     }
 
-    fun markRead(ids: List<Long>) {
-        viewModelScope.launch { messageRepo.markRead(ids) }
-    }
+    fun markRead(ids: List<Long>) = safeLaunch { messageRepo.markRead(ids) }
 
-    fun dismiss(ids: List<Long>) {
-        viewModelScope.launch { messageRepo.dismiss(ids) }
-    }
+    fun dismiss(ids: List<Long>) = safeLaunch { messageRepo.dismiss(ids) }
 
-    fun dismissAll() {
-        viewModelScope.launch { messageRepo.dismissAllForConfig(configId) }
-    }
+    fun dismissAll() = safeLaunch { messageRepo.dismissAllForConfig(configId) }
 
-    fun deleteBackup() {
-        viewModelScope.launch {
-            scheduler.cancel(configId)
-            messageRepo.deleteAllForConfig(configId)
-            configRepo.deleteById(configId)
-            _events.emit(DetailEvent.Deleted)
-        }
+    fun deleteBackup() = safeLaunch {
+        scheduler.cancel(configId)
+        messageRepo.deleteAllForConfig(configId)
+        configRepo.deleteById(configId)
+        _events.emit(DetailEvent.Deleted)
     }
 }

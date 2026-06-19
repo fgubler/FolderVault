@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.crypto.IFvc1Cipher
+import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.restore.IRestoreEngine
 import ch.abwesend.foldervault.domain.restore.RestoreCollisionPolicy
 import ch.abwesend.foldervault.domain.restore.RestoreProgress
@@ -105,15 +106,14 @@ class RestoreEngine(
         RestoreResult.Success(decrypted, copied, skipped, failed)
     }
 
-    @Suppress("SwallowedException")
     private fun withInputStream(source: DocumentFile, block: (InputStream) -> Boolean): Boolean =
         try {
             context.contentResolver.openInputStream(source.uri)?.use(block) ?: false
         } catch (e: Exception) {
+            logger.warning("Failed to open input stream for ${source.name}", e)
             false
         }
 
-    @Suppress("SwallowedException")
     private fun withStreams(
         source: DocumentFile,
         output: DocumentFile,
@@ -126,6 +126,7 @@ class RestoreEngine(
                 } ?: false
             } ?: false
         } catch (e: Exception) {
+            logger.warning("Failed to open streams while restoring ${source.name}", e)
             false
         }
 

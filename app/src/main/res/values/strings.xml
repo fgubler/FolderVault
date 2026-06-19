@@ -154,6 +154,8 @@
     <string name="error_save_failed">Save failed: %1$s</string>
     <string name="error_auth_failed">Authorization failed</string>
     <string name="error_create_folder_failed">Could not create backup folder</string>
+    <string name="error_unexpected">Something went wrong. Please try again.</string>
+    <string name="dialog_unexpected_error_title">Unexpected error</string>
 
     <!-- Backup detail screen -->
     <string name="detail_default_title">Backup detail</string>

@@ -1,5 +1,6 @@
 package ch.abwesend.foldervault.infrastructure.backup
 
+import ch.abwesend.foldervault.domain.logging.logger
 import java.io.File
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -34,7 +35,8 @@ class StagingDirManager(private val stagingRoot: File) {
         val dateStr = dirName.substringAfterLast('_', "")
         return try {
             LocalDate.parse(dateStr, dateFormatter)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            logger.warning("Malformed staging dir name '$dirName' — skipping cleanup", e)
             null
         }
     }

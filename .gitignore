@@ -31,6 +31,8 @@ misc.xml
 deploymentTargetDropDown.xml
 render.experimental.xml
 
+.kotlin/sessions/kotlin-compiler*
+
 # Keystore files
 *.jks
 *.keystore

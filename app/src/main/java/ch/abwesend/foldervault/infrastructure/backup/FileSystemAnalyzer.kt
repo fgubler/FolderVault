@@ -148,7 +148,7 @@ class FileSystemAnalyzer(
     ): Boolean {
         if (remoteName == null) return false
         val folderPath = relativePath.substringBeforeLast('/', "")
-        val folderResult = folderCache.ensurePath(config.cloudRootFolderId, folderPath)
+        val folderResult = folderCache.ensurePath(config.cloudSubFolderId, folderPath)
         if (folderResult is ErrorResult) return false
         val cloudFolderId = (folderResult as SuccessResult).value
         val children = cloudProvider.listChildren(cloudFolderId)

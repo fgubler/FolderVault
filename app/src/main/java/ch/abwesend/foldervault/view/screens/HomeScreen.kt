@@ -193,7 +193,7 @@ private fun BackupConfigCard(
 
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = config.cloudRootFolderName,
+                text = config.cloudSubFolderName,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -289,8 +289,8 @@ private fun BackupCardPreview() {
         displayName = "Documents",
         sourceTreeUri = "content://com.example/tree/docs",
         cloudProvider = "google_drive",
-        cloudRootFolderId = "abc",
-        cloudRootFolderName = "FolderVault_123",
+        cloudSubFolderId = "abc",
+        cloudSubFolderName = "Documents_a3f9c2",
         cloudAccountIdentifier = "user@gmail.com",
         schedule = BackupSchedule.DAILY,
         changedFilePolicy = ChangedFilePolicy.DUPLICATE_WITH_TIMESTAMP,

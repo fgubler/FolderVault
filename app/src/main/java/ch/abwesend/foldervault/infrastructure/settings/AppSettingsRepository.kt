@@ -44,6 +44,9 @@ class AppSettingsRepository(private val context: Context) : IAppSettingsReposito
             showOnboarding = this[Keys.SHOW_ONBOARDING] ?: d.showOnboarding,
             defaultNetworkPolicy = enum(Keys.DEFAULT_NETWORK_POLICY, d.defaultNetworkPolicy),
             anonymousErrorReports = this[Keys.ANONYMOUS_ERROR_REPORTS] ?: d.anonymousErrorReports,
+            cloudRootFolderId = this[Keys.CLOUD_ROOT_FOLDER_ID],
+            cloudRootFolderName = this[Keys.CLOUD_ROOT_FOLDER_NAME],
+            cloudRootAccountIdentifier = this[Keys.CLOUD_ROOT_ACCOUNT_IDENTIFIER],
         )
     }
 
@@ -55,6 +58,13 @@ class AppSettingsRepository(private val context: Context) : IAppSettingsReposito
         set(Keys.SHOW_ONBOARDING, s.showOnboarding)
         setEnum(Keys.DEFAULT_NETWORK_POLICY, s.defaultNetworkPolicy)
         set(Keys.ANONYMOUS_ERROR_REPORTS, s.anonymousErrorReports)
+        setOrRemove(Keys.CLOUD_ROOT_FOLDER_ID, s.cloudRootFolderId)
+        setOrRemove(Keys.CLOUD_ROOT_FOLDER_NAME, s.cloudRootFolderName)
+        setOrRemove(Keys.CLOUD_ROOT_ACCOUNT_IDENTIFIER, s.cloudRootAccountIdentifier)
+    }
+
+    private fun MutablePreferences.setOrRemove(key: Preferences.Key<String>, value: String?) {
+        if (value == null) remove(key) else set(key, value)
     }
 
     private object Keys {
@@ -65,5 +75,8 @@ class AppSettingsRepository(private val context: Context) : IAppSettingsReposito
         val SHOW_ONBOARDING = booleanPreferencesKey("show_onboarding")
         val DEFAULT_NETWORK_POLICY = stringPreferencesKey("default_network_policy")
         val ANONYMOUS_ERROR_REPORTS = booleanPreferencesKey("anonymous_error_reports")
+        val CLOUD_ROOT_FOLDER_ID = stringPreferencesKey("cloud_root_folder_id")
+        val CLOUD_ROOT_FOLDER_NAME = stringPreferencesKey("cloud_root_folder_name")
+        val CLOUD_ROOT_ACCOUNT_IDENTIFIER = stringPreferencesKey("cloud_root_account_identifier")
     }
 }

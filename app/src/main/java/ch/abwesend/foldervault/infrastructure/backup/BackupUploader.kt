@@ -94,7 +94,7 @@ class BackupUploader(
         val fileName = task.relativePath.substringAfterLast('/')
         val remoteName = RemoteNameBuilder.buildName(fileName, task.mode, config.encryptionEnabled)
 
-        val folderResult = folderCache.ensurePath(config.cloudRootFolderId, folderPath)
+        val folderResult = folderCache.ensurePath(config.cloudSubFolderId, folderPath)
         if (folderResult is ErrorResult) {
             log.warning("Could not ensure remote folder for ${task.relativePath}: ${folderResult.error}")
             summary.filesFailed++

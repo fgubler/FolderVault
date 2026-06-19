@@ -228,7 +228,7 @@ private fun DetailContent(
 @Composable
 private fun ConfigInfoSection(config: BackupConfig) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        CloudFolderRow(config.cloudRootFolderName, config.cloudRootFolderId)
+        CloudFolderRow(config.cloudSubFolderName, config.cloudSubFolderId)
         InfoRow(stringResource(R.string.label_account), config.cloudAccountIdentifier)
         InfoRow(stringResource(R.string.label_schedule), stringResource(config.schedule.labelResId()))
         val networkLabelRes = if (config.networkPolicy == NetworkPolicy.WIFI_ONLY) {
@@ -517,8 +517,8 @@ private fun BackupDetailPreview() {
         displayName = "Documents",
         sourceTreeUri = "content://com.example/tree/docs",
         cloudProvider = "google_drive",
-        cloudRootFolderId = "abc",
-        cloudRootFolderName = "FolderVault_123",
+        cloudSubFolderId = "abc",
+        cloudSubFolderName = "Documents_a3f9c2",
         cloudAccountIdentifier = "user@gmail.com",
         schedule = BackupSchedule.DAILY,
         changedFilePolicy = ChangedFilePolicy.DUPLICATE_WITH_TIMESTAMP,

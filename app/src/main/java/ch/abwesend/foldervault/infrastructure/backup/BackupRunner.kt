@@ -204,7 +204,7 @@ class BackupRunner(
         val bytes = json.toByteArray(Charsets.UTF_8)
         val writeResult = writeRootMetadataWithReAuth(
             cloudProvider,
-            config.cloudRootFolderId,
+            config.cloudSubFolderId,
             CloudManifest.CLOUD_FILE_NAME,
             bytes,
         )

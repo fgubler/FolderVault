@@ -9,6 +9,7 @@ import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.backup.BackupConfig
 import ch.abwesend.foldervault.domain.backup.IBackupConfigRepository
 import ch.abwesend.foldervault.domain.backup.IBackupScheduler
+import ch.abwesend.foldervault.domain.backup.SubFolderNameBuilder
 import ch.abwesend.foldervault.domain.cloud.CloudAuthResult
 import ch.abwesend.foldervault.domain.cloud.ICloudAuthorizer
 import ch.abwesend.foldervault.domain.cloud.ICloudStorageProvider
@@ -104,8 +105,11 @@ class AddEditBackupViewModel(
     private suspend fun loadExisting(id: String, globalDefaultSchedule: BackupSchedule) {
         val config = configRepo.getById(id).first() ?: return
         existingConfig = config
-        val cloudState = if (config.cloudRootFolderId.isNotEmpty()) {
-            CloudSetupState.Done(config.cloudRootFolderId, config.cloudRootFolderName, config.cloudAccountIdentifier)
+        val settings = settingsRepo.settings.first()
+        val rootId = settings.cloudRootFolderId
+        val rootName = settings.cloudRootFolderName
+        val cloudState = if (rootId != null && rootName != null) {
+            CloudSetupState.Done(rootId, rootName, config.cloudAccountIdentifier)
         } else {
             CloudSetupState.Idle
         }
@@ -176,19 +180,53 @@ class AddEditBackupViewModel(
         it.copy(cloudSetup = CloudSetupState.Error(UiText.Resource(R.string.error_auth_failed)))
     }
 
+    /**
+     * Sets up the install-level Drive root.
+     *
+     * Reuses a previously created `FolderVault_<UUID>` root from settings when the active Drive
+     * account still matches; otherwise creates a fresh root and persists `(id, name, account)`
+     * to settings. The per-config sub-folder is created later, at save time (see [ensureSubFolder]).
+     */
     private suspend fun createCloudFolder(provider: ICloudStorageProvider) {
         updateForm { it.copy(cloudSetup = CloudSetupState.CreatingFolder) }
-        val folderResult = provider.createRootFolder()
         val accountResult = provider.getAccountIdentifier()
-        if (folderResult is SuccessResult && accountResult is SuccessResult) {
-            val folder = folderResult.value
-            updateForm {
-                it.copy(cloudSetup = CloudSetupState.Done(folder.id, folder.name, accountResult.value))
-            }
-        } else {
+        if (accountResult !is SuccessResult) {
             updateForm {
                 it.copy(cloudSetup = CloudSetupState.Error(UiText.Resource(R.string.error_create_folder_failed)))
             }
+            return
+        }
+        val account = accountResult.value
+
+        val settings = settingsRepo.settings.first()
+        val savedId = settings.cloudRootFolderId
+        val savedName = settings.cloudRootFolderName
+        val savedAccount = settings.cloudRootAccountIdentifier
+        val reuseExistingRoot = savedId != null && savedName != null && savedAccount == account
+
+        val (rootId, rootName) = if (reuseExistingRoot) {
+            savedId!! to savedName!!
+        } else {
+            val createResult = provider.createRootFolder()
+            if (createResult !is SuccessResult) {
+                updateForm {
+                    it.copy(cloudSetup = CloudSetupState.Error(UiText.Resource(R.string.error_create_folder_failed)))
+                }
+                return
+            }
+            val newRoot = createResult.value
+            settingsRepo.update { s ->
+                s.copy(
+                    cloudRootFolderId = newRoot.id,
+                    cloudRootFolderName = newRoot.name,
+                    cloudRootAccountIdentifier = account,
+                )
+            }
+            newRoot.id to newRoot.name
+        }
+
+        updateForm {
+            it.copy(cloudSetup = CloudSetupState.Done(rootId, rootName, account))
         }
     }
 
@@ -198,7 +236,8 @@ class AddEditBackupViewModel(
         viewModelScope.launch {
             updateForm { it.copy(isSaving = true, errorMessage = null) }
             try {
-                val config = buildConfig(state) ?: return@launch
+                val subFolder = ensureSubFolder(state) ?: return@launch
+                val config = buildConfig(state, subFolder.first, subFolder.second) ?: return@launch
                 configRepo.save(config)
                 val globalDefault = settingsRepo.settings.first().defaultSchedule
                 scheduler.schedulePeriodicIfNeeded(config.id, config.schedule, config.networkPolicy, globalDefault)
@@ -212,6 +251,50 @@ class AddEditBackupViewModel(
                 }
             }
         }
+    }
+
+    /**
+     * Resolves the per-config Drive sub-folder.
+     *
+     * Edit-mode configs keep their original sub-folder so renaming the displayName doesn't move
+     * the existing Drive folder (v1 — the sub-folder name is immutable after first creation).
+     * New configs eagerly create the sub-folder under the shared root via [getOrCreateChildFolder]
+     * so that the persisted entity is always tied to a real Drive folder.
+     */
+    private suspend fun ensureSubFolder(state: AddEditFormState): Pair<String, String>? {
+        val existing = existingConfig
+        return if (existing != null && existing.cloudSubFolderId.isNotEmpty()) {
+            existing.cloudSubFolderId to existing.cloudSubFolderName
+        } else {
+            createNewSubFolder(state)
+        }
+    }
+
+    private suspend fun createNewSubFolder(state: AddEditFormState): Pair<String, String>? {
+        val cloudState = state.cloudSetup as? CloudSetupState.Done
+        val authResult = if (cloudState != null) authorizer.authorize() else null
+        val provider = (authResult as? CloudAuthResult.Authorized)?.data
+        val errorRes: Int? = when {
+            cloudState == null -> R.string.error_no_drive_connection
+            provider == null -> R.string.error_auth_failed
+            else -> null
+        }
+        if (errorRes != null) {
+            updateForm { it.copy(isSaving = false, errorMessage = UiText.Resource(errorRes)) }
+            return null
+        }
+        val subName = SubFolderNameBuilder.buildName(state.displayName, state.sourceTreeUri)
+        val folderResult = provider!!.getOrCreateChildFolder(cloudState!!.folderId, subName)
+        if (folderResult !is SuccessResult) {
+            updateForm {
+                it.copy(
+                    isSaving = false,
+                    errorMessage = UiText.Resource(R.string.error_create_folder_failed),
+                )
+            }
+            return null
+        }
+        return folderResult.value.id to folderResult.value.name
     }
 
     private fun validate(state: AddEditFormState): Boolean {
@@ -228,7 +311,11 @@ class AddEditBackupViewModel(
         return error == null
     }
 
-    private suspend fun buildConfig(state: AddEditFormState): BackupConfig? {
+    private fun buildConfig(
+        state: AddEditFormState,
+        subFolderId: String,
+        subFolderName: String,
+    ): BackupConfig? {
         val cloudState = state.cloudSetup as? CloudSetupState.Done ?: return null
         val id = existingConfig?.id ?: UUID.randomUUID().toString()
 
@@ -255,8 +342,8 @@ class AddEditBackupViewModel(
             displayName = state.displayName,
             sourceTreeUri = state.sourceTreeUri,
             cloudProvider = "google_drive",
-            cloudRootFolderId = cloudState.folderId,
-            cloudRootFolderName = cloudState.folderName,
+            cloudSubFolderId = subFolderId,
+            cloudSubFolderName = subFolderName,
             cloudAccountIdentifier = cloudState.accountId,
             schedule = state.schedule,
             changedFilePolicy = state.changedFilePolicy,

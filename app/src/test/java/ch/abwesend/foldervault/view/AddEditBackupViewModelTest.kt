@@ -20,8 +20,10 @@ import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.slot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
@@ -45,14 +47,22 @@ class AddEditBackupViewModelTest : StringSpec({
     fun makeProvider(): ICloudStorageProvider = mockk {
         coEvery { createRootFolder() } returns SuccessResult(CloudFolder("folder-id", "FolderVault_test"))
         coEvery { getAccountIdentifier() } returns SuccessResult("user@test.com")
+        coEvery { getOrCreateChildFolder(any(), any()) } answers {
+            SuccessResult(CloudFolder("sub-id", secondArg<String>()))
+        }
     }
 
-    fun makeVm(provider: ICloudStorageProvider): AddEditBackupViewModel {
+    fun makeSettingsRepo(initial: AppSettings = AppSettings()): IAppSettingsRepository =
+        mockk(relaxed = true) {
+            every { settings } returns flowOf(initial)
+        }
+
+    fun makeVm(
+        provider: ICloudStorageProvider,
+        settingsRepo: IAppSettingsRepository = makeSettingsRepo(),
+    ): AddEditBackupViewModel {
         val authorizer = mockk<ICloudAuthorizer> {
             coEvery { authorize() } returns CloudAuthResult.Authorized(provider)
-        }
-        val settingsRepo = mockk<IAppSettingsRepository> {
-            every { settings } returns flowOf(AppSettings())
         }
         return AddEditBackupViewModel(
             configRepo = mockk<IBackupConfigRepository>(relaxed = true),
@@ -65,9 +75,10 @@ class AddEditBackupViewModelTest : StringSpec({
         )
     }
 
-    "startDriveSetup transitions to Done after folder is created" {
+    "fresh install: startDriveSetup creates root and persists it to settings" {
         val provider = makeProvider()
-        val vm = makeVm(provider)
+        val settingsRepo = makeSettingsRepo()
+        val vm = makeVm(provider, settingsRepo)
 
         vm.startDriveSetup()
         testDispatcher.scheduler.advanceUntilIdle()
@@ -75,5 +86,49 @@ class AddEditBackupViewModelTest : StringSpec({
         val state = vm.form.value.cloudSetup
         state.shouldBeInstanceOf<CloudSetupState.Done>()
         state.folderId shouldBe "folder-id"
+
+        val transformSlot = slot<(AppSettings) -> AppSettings>()
+        coVerify { settingsRepo.update(capture(transformSlot)) }
+        val updated = transformSlot.captured(AppSettings())
+        updated.cloudRootFolderId shouldBe "folder-id"
+        updated.cloudRootFolderName shouldBe "FolderVault_test"
+        updated.cloudRootAccountIdentifier shouldBe "user@test.com"
+    }
+
+    "second config: startDriveSetup reuses the existing root and does NOT call createRootFolder" {
+        val provider = makeProvider()
+        val settingsWithRoot = AppSettings(
+            cloudRootFolderId = "existing-root",
+            cloudRootFolderName = "FolderVault_existing",
+            cloudRootAccountIdentifier = "user@test.com",
+        )
+        val vm = makeVm(provider, makeSettingsRepo(settingsWithRoot))
+
+        vm.startDriveSetup()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        val state = vm.form.value.cloudSetup
+        state.shouldBeInstanceOf<CloudSetupState.Done>()
+        state.folderId shouldBe "existing-root"
+        state.folderName shouldBe "FolderVault_existing"
+        coVerify(exactly = 0) { provider.createRootFolder() }
+    }
+
+    "account mismatch: startDriveSetup creates a new root even when settings have one" {
+        val provider = makeProvider()
+        val settingsWithDifferentAccount = AppSettings(
+            cloudRootFolderId = "stale-root",
+            cloudRootFolderName = "FolderVault_stale",
+            cloudRootAccountIdentifier = "other@example.com",
+        )
+        val vm = makeVm(provider, makeSettingsRepo(settingsWithDifferentAccount))
+
+        vm.startDriveSetup()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        val state = vm.form.value.cloudSetup
+        state.shouldBeInstanceOf<CloudSetupState.Done>()
+        state.folderId shouldBe "folder-id"
+        coVerify(exactly = 1) { provider.createRootFolder() }
     }
 })

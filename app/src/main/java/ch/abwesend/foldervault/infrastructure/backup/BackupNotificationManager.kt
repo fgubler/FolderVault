@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
@@ -90,7 +91,11 @@ class BackupNotificationManager(
             .setSilent(true)
             .build()
 
-        return ForegroundInfo(PROGRESS_NOTIFICATION_ID, notification)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ForegroundInfo(PROGRESS_NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            ForegroundInfo(PROGRESS_NOTIFICATION_ID, notification)
+        }
     }
 
     suspend fun postProblemNotificationIfNeeded(

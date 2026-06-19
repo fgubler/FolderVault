@@ -2,11 +2,11 @@
   "formatVersion": 1,
   "database": {
     "version": 1,
-    "identityHash": "d718f4dbb35ac7ffd38814a557d4f712",
+    "identityHash": "649442f3b3aea1721dcaf5562c80270c",
     "entities": [
       {
         "tableName": "BackupConfig",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `displayName` TEXT NOT NULL, `sourceTreeUri` TEXT NOT NULL, `cloudProvider` TEXT NOT NULL, `cloudRootFolderId` TEXT NOT NULL, `cloudRootFolderName` TEXT NOT NULL, `cloudAccountIdentifier` TEXT NOT NULL, `schedule` TEXT NOT NULL, `changedFilePolicy` TEXT NOT NULL, `encryptionEnabled` INTEGER NOT NULL, `encryptedPasswordBlob` TEXT, `retentionPolicy` TEXT NOT NULL, `networkPolicy` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `lastRunAt` INTEGER, `lastRunStatus` TEXT NOT NULL, `filesUploaded` INTEGER NOT NULL, `filesSkipped` INTEGER NOT NULL, `filesFailed` INTEGER NOT NULL, `bytesUploaded` INTEGER NOT NULL, `totalFilesDiscovered` INTEGER NOT NULL, `filesUploadedTotal` INTEGER NOT NULL, `lastRunCompletedNormally` INTEGER NOT NULL, `enc_kdfAlgorithm` TEXT, `enc_kdfIterations` INTEGER, `enc_salt` TEXT, `enc_cipherTransformation` TEXT, `enc_gcmTagBits` INTEGER, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `displayName` TEXT NOT NULL, `sourceTreeUri` TEXT NOT NULL, `cloudProvider` TEXT NOT NULL, `cloudSubFolderId` TEXT NOT NULL, `cloudSubFolderName` TEXT NOT NULL, `cloudAccountIdentifier` TEXT NOT NULL, `schedule` TEXT NOT NULL, `changedFilePolicy` TEXT NOT NULL, `encryptionEnabled` INTEGER NOT NULL, `encryptedPasswordBlob` TEXT, `retentionPolicy` TEXT NOT NULL, `networkPolicy` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `lastRunAt` INTEGER, `lastRunStatus` TEXT NOT NULL, `filesUploaded` INTEGER NOT NULL, `filesSkipped` INTEGER NOT NULL, `filesFailed` INTEGER NOT NULL, `bytesUploaded` INTEGER NOT NULL, `totalFilesDiscovered` INTEGER NOT NULL, `filesUploadedTotal` INTEGER NOT NULL, `lastRunCompletedNormally` INTEGER NOT NULL, `isPaused` INTEGER NOT NULL, `enc_kdfAlgorithm` TEXT, `enc_kdfIterations` INTEGER, `enc_salt` TEXT, `enc_cipherTransformation` TEXT, `enc_gcmTagBits` INTEGER, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -33,14 +33,14 @@
             "notNull": true
           },
           {
-            "fieldPath": "cloudRootFolderId",
-            "columnName": "cloudRootFolderId",
+            "fieldPath": "cloudSubFolderId",
+            "columnName": "cloudSubFolderId",
             "affinity": "TEXT",
             "notNull": true
           },
           {
-            "fieldPath": "cloudRootFolderName",
-            "columnName": "cloudRootFolderName",
+            "fieldPath": "cloudSubFolderName",
+            "columnName": "cloudSubFolderName",
             "affinity": "TEXT",
             "notNull": true
           },
@@ -145,6 +145,12 @@
             "notNull": true
           },
           {
+            "fieldPath": "isPaused",
+            "columnName": "isPaused",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
             "fieldPath": "encryptionParams.kdfAlgorithm",
             "columnName": "enc_kdfAlgorithm",
             "affinity": "TEXT"
@@ -179,7 +185,7 @@
       },
       {
         "tableName": "UploadedFileIndex",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `backupConfigId` TEXT NOT NULL, `relativePath` TEXT NOT NULL, `localLastModified` INTEGER NOT NULL, `localSize` INTEGER NOT NULL, `cloudFileId` TEXT NOT NULL, `remoteName` TEXT NOT NULL, `uploadedAt` INTEGER NOT NULL, `isCurrentVersion` INTEGER NOT NULL, FOREIGN KEY(`backupConfigId`) REFERENCES `BackupConfig`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `backupConfigId` TEXT NOT NULL, `relativePath` TEXT NOT NULL, `localLastModified` INTEGER NOT NULL, `localSize` INTEGER NOT NULL, `cloudFileId` TEXT NOT NULL, `remoteName` TEXT NOT NULL, `uploadedAt` INTEGER NOT NULL, `isCurrentVersion` INTEGER NOT NULL, `pendingDeletionCloudFileId` TEXT, FOREIGN KEY(`backupConfigId`) REFERENCES `BackupConfig`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
         "fields": [
           {
             "fieldPath": "id",
@@ -234,6 +240,11 @@
             "columnName": "isCurrentVersion",
             "affinity": "INTEGER",
             "notNull": true
+          },
+          {
+            "fieldPath": "pendingDeletionCloudFileId",
+            "columnName": "pendingDeletionCloudFileId",
+            "affinity": "TEXT"
           }
         ],
         "primaryKey": {
@@ -464,7 +475,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'd718f4dbb35ac7ffd38814a557d4f712')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '649442f3b3aea1721dcaf5562c80270c')"
     ]
   }
 }

@@ -177,7 +177,7 @@
     <string name="button_resume">Resume</string>
     <string name="button_pause">Pause</string>
     <string name="button_check_password">Check my password</string>
-    <string name="button_open_in_drive_cd">Open in Google Drive</string>
+    <string name="button_open_in_drive">Open in Google Drive</string>
     <string name="dialog_open_drive_error_title">Cannot open Google Drive</string>
     <string name="dialog_open_drive_error_body">No app is available to open the Drive folder. Install the Google Drive app or a browser to view it.</string>
     <string name="dialog_delete_title">Delete backup?</string>

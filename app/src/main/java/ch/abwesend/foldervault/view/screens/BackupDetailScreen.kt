@@ -19,7 +19,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Pause
@@ -73,6 +72,7 @@ import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
 
 private const val MS_PER_MINUTE = 60_000L
+private const val CLOUD_FOLDER_WIDTH_FRACTION = 0.75f
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -301,22 +301,17 @@ private fun CloudFolderRow(folderName: String, folderId: String) {
     val context = LocalContext.current
     var showOpenDriveError by remember { mutableStateOf(false) }
 
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.Top,
-    ) {
-        Text(
-            "${stringResource(R.string.label_cloud_folder)}: ",
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            folderName,
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.weight(1f),
-        )
-        IconButton(
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(CLOUD_FOLDER_WIDTH_FRACTION)) {
+            Text(
+                "${stringResource(R.string.label_cloud_folder)}: ",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(folderName, style = MaterialTheme.typography.bodySmall)
+        }
+        TextButton(
             onClick = {
                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://drive.google.com/drive/folders/$folderId"))
                 try {
@@ -325,12 +320,11 @@ private fun CloudFolderRow(folderName: String, folderId: String) {
                     showOpenDriveError = true
                 }
             },
-            modifier = Modifier.size(24.dp),
+            contentPadding = PaddingValues(0.dp),
         ) {
-            Icon(
-                Icons.AutoMirrored.Filled.OpenInNew,
-                contentDescription = stringResource(R.string.button_open_in_drive_cd),
-                tint = MaterialTheme.colorScheme.primary,
+            Text(
+                stringResource(R.string.button_open_in_drive),
+                style = MaterialTheme.typography.bodySmall,
             )
         }
     }

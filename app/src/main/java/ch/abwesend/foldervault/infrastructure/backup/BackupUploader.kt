@@ -118,12 +118,17 @@ class BackupUploader(
                 length = tempFile.length(),
             )
 
+            // Exclude the previous version (CHANGED_OVERWRITE) so the upload's retry-time
+            // idempotency probe in GoogleDriveRepository doesn't mistake it for the just-uploaded
+            // duplicate it's hunting for.
+            val excludeIds = setOfNotNull(task.previousCloudFileId)
             val uploadResult = tryUpload(
                 config = config,
                 parentFolderId = parentFolderId,
                 remoteName = remoteName,
                 mimeType = "application/octet-stream",
                 content = uploadContent,
+                excludeIds = excludeIds,
                 runId = runId,
                 summary = summary,
             ) ?: return // auth-lost or quota — summary flags set; caller will skip subsequent tasks
@@ -219,16 +224,18 @@ class BackupUploader(
      * Attempts an upload with silent re-auth on first [CloudAuthException].
      * Returns null to signal "stop the channel" (auth permanently lost or quota exceeded).
      */
+    @Suppress("LongParameterList")
     private suspend fun tryUpload(
         config: BackupConfigEntity,
         parentFolderId: String,
         remoteName: String,
         mimeType: String,
         content: UploadContent,
+        excludeIds: Set<String>,
         runId: String,
         summary: RunSummary,
     ): BinaryResult<CloudFile, Exception>? {
-        val result = cloudProvider.uploadFile(parentFolderId, remoteName, mimeType, content)
+        val result = cloudProvider.uploadFile(parentFolderId, remoteName, mimeType, content, excludeIds)
         if (result is SuccessResult) {
             summary.consecutiveQuotaCount = 0
             return result
@@ -242,6 +249,7 @@ class BackupUploader(
                 remoteName,
                 mimeType,
                 content,
+                excludeIds,
                 runId,
                 summary,
             )
@@ -260,12 +268,14 @@ class BackupUploader(
     }
 
     /** Re-auth once and retry the upload. Returns null if auth cannot be recovered. */
+    @Suppress("LongParameterList")
     private suspend fun handleAuthError(
         config: BackupConfigEntity,
         parentFolderId: String,
         remoteName: String,
         mimeType: String,
         content: UploadContent,
+        excludeIds: Set<String>,
         runId: String,
         summary: RunSummary,
     ): BinaryResult<CloudFile, Exception>? {
@@ -276,7 +286,7 @@ class BackupUploader(
             return null
         }
         cloudProvider = reAuthResult.data
-        val retryResult = reAuthResult.data.uploadFile(parentFolderId, remoteName, mimeType, content)
+        val retryResult = reAuthResult.data.uploadFile(parentFolderId, remoteName, mimeType, content, excludeIds)
         if (retryResult is ErrorResult && retryResult.error is CloudAuthException) {
             summary.authLost = true
             emitMessage(config, runId, MessageSeverity.ERROR, MessageType.AUTH_LOST)

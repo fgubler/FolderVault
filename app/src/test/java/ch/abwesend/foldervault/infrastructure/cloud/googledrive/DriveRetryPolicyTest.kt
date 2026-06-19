@@ -95,4 +95,65 @@ class DriveRetryPolicyTest : StringSpec({
             calls shouldBeExactly 1
         }
     }
+
+    "verifyAlreadySucceeded is NOT invoked on the first attempt" {
+        runTest {
+            var verifyCalls = 0
+            DriveRetryPolicy.withRetry(
+                verifyAlreadySucceeded = {
+                    verifyCalls++
+                    null
+                },
+            ) { "ok" }
+            verifyCalls shouldBeExactly 0
+        }
+    }
+
+    "verifyAlreadySucceeded returning non-null on retry short-circuits the block" {
+        runTest {
+            var blockCalls = 0
+            var verifyCalls = 0
+            val result = DriveRetryPolicy.withRetry(
+                verifyAlreadySucceeded = {
+                    verifyCalls++
+                    "from-verify"
+                },
+            ) {
+                blockCalls++
+                if (blockCalls == 1) throw CloudTransientException()
+                "from-block-unreached"
+            }
+            result shouldBe "from-verify"
+            blockCalls shouldBeExactly 1
+            verifyCalls shouldBeExactly 1
+        }
+    }
+
+    "verifyAlreadySucceeded returning null lets the retry proceed" {
+        runTest {
+            var blockCalls = 0
+            val result = DriveRetryPolicy.withRetry(verifyAlreadySucceeded = { null }) {
+                blockCalls++
+                if (blockCalls == 1) throw CloudTransientException()
+                "recovered"
+            }
+            result shouldBe "recovered"
+            blockCalls shouldBeExactly 2
+        }
+    }
+
+    "verifyAlreadySucceeded throwing does not derail the retry" {
+        runTest {
+            var blockCalls = 0
+            val result = DriveRetryPolicy.withRetry(
+                verifyAlreadySucceeded = { error("probe broke") },
+            ) {
+                blockCalls++
+                if (blockCalls == 1) throw CloudTransientException()
+                "recovered"
+            }
+            result shouldBe "recovered"
+            blockCalls shouldBeExactly 2
+        }
+    }
 })

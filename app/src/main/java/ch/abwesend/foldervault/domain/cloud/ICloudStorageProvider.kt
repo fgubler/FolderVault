@@ -17,11 +17,20 @@ interface ICloudStorageProvider {
      */
     suspend fun listChildren(folderId: String): BinaryResult<List<CloudEntry>, Exception>
 
+    /**
+     * Uploads a file to [parentId] as [remoteName].
+     *
+     * [excludeIds] is the set of cloud file IDs that already exist in the parent under the same
+     * [remoteName] and must be ignored when checking for "did a prior attempt succeed?" on retry.
+     * For CHANGED_OVERWRITE this is `setOf(previousCloudFileId)` so the prior version isn't
+     * mistaken for the just-uploaded duplicate. For first-time uploads pass `emptySet()`.
+     */
     suspend fun uploadFile(
         parentId: String,
         remoteName: String,
         mimeType: String,
         content: UploadContent,
+        excludeIds: Set<String> = emptySet(),
     ): BinaryResult<CloudFile, Exception>
 
     suspend fun readRootMetadata(rootFolderId: String, name: String): BinaryResult<ByteArray?, Exception>

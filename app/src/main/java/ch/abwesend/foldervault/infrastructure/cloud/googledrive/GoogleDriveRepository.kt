@@ -57,18 +57,41 @@ class GoogleDriveRepository(private val drive: Drive) : ICloudStorageProvider {
     override suspend fun createRootFolder(): BinaryResult<CloudFolder, Exception> =
         withContext(dispatchers.io) {
             runCatchingAsResult {
-                retryingDriveCall {
-                    val name = "${ROOT_FOLDER_NAME_PREFIX}_${UUID.randomUUID()}"
-                    val metadata = DriveFile().apply {
-                        this.name = name
-                        mimeType = FOLDER_MIME_TYPE
+                // Generate the name ONCE, outside the retry block: if a retry happens we want
+                // the verify probe to look for the same name the first attempt used. Generating
+                // a fresh UUID per attempt would orphan the server-side folder created by the
+                // (apparently failed but actually successful) prior attempt.
+                val name = "${ROOT_FOLDER_NAME_PREFIX}_${UUID.randomUUID()}"
+                DriveRetryPolicy.withRetry(
+                    verifyAlreadySucceeded = { findRootFolderByGeneratedName(name) },
+                ) {
+                    driveCall {
+                        val metadata = DriveFile().apply {
+                            this.name = name
+                            mimeType = FOLDER_MIME_TYPE
+                        }
+                        val folder = drive.files().create(metadata).setFields("id, name").execute()
+                        logger.info("Created Drive root folder: ${folder.name} (${folder.id})")
+                        CloudFolder(id = folder.id, name = folder.name)
                     }
-                    val folder = drive.files().create(metadata).setFields("id, name").execute()
-                    logger.info("Created Drive root folder: ${folder.name} (${folder.id})")
-                    CloudFolder(id = folder.id, name = folder.name)
                 }
             }
         }
+
+    /** Idempotency probe for [createRootFolder] — finds a folder created by a prior retry attempt. */
+    private fun findRootFolderByGeneratedName(name: String): CloudFolder? {
+        val escapedName = escapeDriveQueryLiteral(name)
+        val query = "name = '$escapedName' and mimeType = '$FOLDER_MIME_TYPE' and trashed = false"
+        val match = drive.files().list()
+            .setQ(query)
+            .setFields("files(id, name)")
+            .setSpaces("drive")
+            .execute()
+            .files
+            .orEmpty()
+            .firstOrNull() ?: return null
+        return CloudFolder(id = match.id, name = match.name ?: name)
+    }
 
     override suspend fun hasFolderAccess(folderId: String): BinaryResult<Boolean, Exception> =
         withContext(dispatchers.io) {
@@ -165,24 +188,62 @@ class GoogleDriveRepository(private val drive: Drive) : ICloudStorageProvider {
         remoteName: String,
         mimeType: String,
         content: UploadContent,
+        excludeIds: Set<String>,
     ): BinaryResult<CloudFile, Exception> = withContext(dispatchers.io) {
         runCatchingAsResult {
-            retryingDriveCall {
-                val metadata = DriveFile().apply {
-                    name = remoteName
-                    parents = listOf(parentId)
+            DriveRetryPolicy.withRetry(
+                verifyAlreadySucceeded = { findUploadedFileByName(parentId, remoteName, excludeIds) },
+            ) {
+                driveCall {
+                    val metadata = DriveFile().apply {
+                        name = remoteName
+                        parents = listOf(parentId)
+                    }
+                    val streamContent = InputStreamContent(mimeType, content.inputStreamProvider())
+                    content.length?.let { streamContent.length = it }
+                    val uploaded = drive.files().create(metadata, streamContent)
+                        .setFields("id, name").execute()
+                    logger.info("Uploaded file to Drive: ${uploaded.name} (${uploaded.id})")
+                    CloudFile(
+                        id = uploaded.id ?: error("Drive did not return file id"),
+                        name = uploaded.name ?: remoteName,
+                    )
                 }
-                val streamContent = InputStreamContent(mimeType, content.inputStreamProvider())
-                content.length?.let { streamContent.length = it }
-                val uploaded = drive.files().create(metadata, streamContent)
-                    .setFields("id, name").execute()
-                logger.info("Uploaded file to Drive: ${uploaded.name} (${uploaded.id})")
-                CloudFile(
-                    id = uploaded.id ?: error("Drive did not return file id"),
-                    name = uploaded.name ?: remoteName,
-                )
             }
         }
+    }
+
+    /**
+     * Idempotency probe for [uploadFile]: returns a non-null [CloudFile] when a non-folder child
+     * of [parentId] already exists with name [remoteName] (after excluding [excludeIds]).
+     * Used to reuse a server-side artifact when a transient error fired AFTER Drive committed
+     * the first upload — otherwise the retry would create a duplicate.
+     */
+    private fun findUploadedFileByName(
+        parentId: String,
+        remoteName: String,
+        excludeIds: Set<String>,
+    ): CloudFile? {
+        val escapedParentId = escapeDriveQueryLiteral(parentId)
+        val escapedName = escapeDriveQueryLiteral(remoteName)
+        val query = "'$escapedParentId' in parents and name = '$escapedName' " +
+            "and mimeType != '$FOLDER_MIME_TYPE' and trashed = false"
+        val candidates = drive.files().list()
+            .setQ(query)
+            .setFields("files(id, name, createdTime)")
+            .setSpaces("drive")
+            .execute()
+            .files
+            .orEmpty()
+            .filter { it.id !in excludeIds }
+        val winner = candidates.maxByOrNull { it.createdTime?.value ?: 0L } ?: return null
+        if (candidates.size > 1) {
+            logger.warning(
+                "uploadFile retry found ${candidates.size} candidate files for '$remoteName' in " +
+                    "parent $parentId — picking newest (${winner.id}); older entries left in place."
+            )
+        }
+        return CloudFile(id = winner.id, name = winner.name ?: remoteName)
     }
 
     override suspend fun readRootMetadata(

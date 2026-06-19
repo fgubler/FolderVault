@@ -7,6 +7,32 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-06-19 — Idempotent Drive uploads (fix retry-induced duplicates)
+
+### Bug
+Encrypted backups occasionally produced a duplicate of one file (different Drive file IDs, different timestamps) when the source folder contained multiple files. Reproducible intermittently; only on encrypted runs.
+
+### Root cause
+`Drive.files().create()` is not idempotent. `DriveRetryPolicy.withRetry` retried on `CloudTransientException` (IOException → classified as transient), so a network failure on the **response** path — after Drive already committed the upload — produced a second create call and a second file with the same name. Small files (single-round-trip direct multipart upload) are the most exposed because there's no chunk-level recovery; the user's 8 KB PDF surfacing as the duplicated one matches this.
+
+### Fix
+- **`DriveRetryPolicy.withRetry`** gains an optional `verifyAlreadySucceeded: suspend () -> T?` callback. It runs at the start of every *retry* attempt (never the first); a non-null return short-circuits the retry. Exceptions inside the probe are swallowed so a transient verify failure can't derail the actual retry.
+- **`GoogleDriveRepository.uploadFile`** uses the hook to find a file in the parent by name (mime ≠ folder, excluding caller-supplied `excludeIds`) and reuses it if present, instead of creating a second copy.
+- **`GoogleDriveRepository.createRootFolder`** had a parallel bug — `UUID.randomUUID()` was generated *inside* the retry block, so a retry produced a fresh name and a second orphan folder. UUID hoisted outside the retry; verify hook added so the just-created folder is reused.
+- **`ICloudStorageProvider.uploadFile`** signature: added `excludeIds: Set<String> = emptySet()`. CHANGED_OVERWRITE must exclude `previousCloudFileId` so the prior version isn't mistaken for the just-uploaded duplicate the probe is hunting for.
+- **`BackupUploader`** passes `setOfNotNull(task.previousCloudFileId)` through `tryUpload` and `handleAuthError`.
+
+### Tests
+- `DriveRetryPolicyTest`: `verifyAlreadySucceeded` not invoked on first attempt; non-null return short-circuits the block; null lets retry proceed; throwing probe doesn't derail the retry.
+- `BackupUploaderTest`: NEW upload passes `emptySet()`; CHANGED_OVERWRITE passes `setOf(previousCloudFileId)`; recovery via short-circuit path completes with a single uploadFile call, `filesUploaded = 1`, `filesFailed = 0`.
+
+### Decisions carried forward
+- The find-by-name probe filters out folders (`mimeType != FOLDER_MIME_TYPE`) so a folder accidentally sharing the name can't be picked as a file.
+- When the probe finds multiple candidates after exclusion, the newest by `createdTime` wins; older entries are logged but **not** deleted automatically — they're left for a future orphan-reaper pass to avoid silently destroying user data on a probe false positive.
+- `assembleDebug` currently fails on this working tree because of an unrelated in-progress lifecycle/Nav3 bump (lifecycle 2.10→2.11 needs compileSdk 37). Not introduced by this change; `./gradlew test` and `./gradlew detekt` both pass.
+
+---
+
 ## 2026-06-19 — Remove unused `.foldervault-meta.json` write
 
 ### What was done

@@ -105,7 +105,7 @@ class BackupUploaderTest : StringSpec({
 
     "first CloudQuotaExceededException does not set quotaExceeded" {
         val cloudProvider = mockk<ICloudStorageProvider> {
-            coEvery { uploadFile(any(), any(), any(), any()) } returns ErrorResult(CloudQuotaExceededException())
+            coEvery { uploadFile(any(), any(), any(), any(), any()) } returns ErrorResult(CloudQuotaExceededException())
         }
         val (uploader, folderCache) = makeUploader(makeContext(), cloudProvider)
         val stagingDir = Files.createTempDirectory("fv-uploader-test").toFile()
@@ -126,7 +126,9 @@ class BackupUploaderTest : StringSpec({
 
     "OVERSIZED task is uploaded and increments oversizedUploaded" {
         val cloudProvider = mockk<ICloudStorageProvider>(relaxed = true) {
-            coEvery { uploadFile(any(), any(), any(), any()) } returns SuccessResult(CloudFile("cf-1", "big.iso"))
+            coEvery {
+                uploadFile(any(), any(), any(), any(), any())
+            } returns SuccessResult(CloudFile("cf-1", "big.iso"))
         }
         val (uploader, folderCache) = makeUploader(makeContext(), cloudProvider)
         val stagingDir = Files.createTempDirectory("fv-uploader-test").toFile()
@@ -288,9 +290,116 @@ class BackupUploaderTest : StringSpec({
         }
     }
 
+    "NEW upload passes an empty excludeIds set to the cloud provider" {
+        val cloudProvider = mockk<ICloudStorageProvider>(relaxed = true) {
+            coEvery { uploadFile(any(), any(), any(), any(), any()) } returns SuccessResult(CloudFile("c-1", "a.txt"))
+        }
+        val (uploader, folderCache) = makeUploader(makeContext(), cloudProvider)
+        val stagingDir = Files.createTempDirectory("fv-uploader-test").toFile()
+        try {
+            val channel = Channel<UploadTask>(1)
+            channel.send(UploadTask("a.txt", mockk<Uri>(), 100L, 0L, UploadMode.NEW, UploadTier.NORMAL))
+            channel.close()
+
+            uploader.processChannel(
+                makeConfig("cfg-new"),
+                channel,
+                "run-new",
+                stagingDir,
+                folderCache,
+                null,
+                null,
+                RunSummary(),
+            )
+
+            coVerify(exactly = 1) {
+                cloudProvider.uploadFile(any(), any(), any(), any(), eq(emptySet()))
+            }
+        } finally {
+            stagingDir.deleteRecursively()
+        }
+    }
+
+    "CHANGED_OVERWRITE upload passes previousCloudFileId as excludeIds" {
+        val cloudProvider = mockk<ICloudStorageProvider>(relaxed = true) {
+            coEvery { uploadFile(any(), any(), any(), any(), any()) } returns SuccessResult(CloudFile("c-new", "a.txt"))
+        }
+        val (uploader, folderCache) = makeUploader(makeContext(), cloudProvider)
+        val stagingDir = Files.createTempDirectory("fv-uploader-test").toFile()
+        try {
+            val channel = Channel<UploadTask>(1)
+            channel.send(
+                UploadTask(
+                    relativePath = "a.txt",
+                    documentUri = mockk<Uri>(),
+                    localSize = 100L,
+                    localMtime = 0L,
+                    mode = UploadMode.CHANGED_OVERWRITE,
+                    tier = UploadTier.NORMAL,
+                    previousCloudFileId = "prev-cloud-id",
+                ),
+            )
+            channel.close()
+
+            uploader.processChannel(
+                makeConfig("cfg-ovw"),
+                channel,
+                "run-ovw",
+                stagingDir,
+                folderCache,
+                null,
+                null,
+                RunSummary(),
+            )
+
+            coVerify(exactly = 1) {
+                cloudProvider.uploadFile(any(), any(), any(), any(), eq(setOf("prev-cloud-id")))
+            }
+        } finally {
+            stagingDir.deleteRecursively()
+        }
+    }
+
+    "retry-induced duplicate is reused, not re-uploaded — second attempt is short-circuited by the provider" {
+        // Models the GoogleDriveRepository contract: when a transient error fires AFTER Drive
+        // accepted the upload, the next attempt finds the just-created file by name and returns
+        // it. From the BackupUploader's perspective: a single uploadFile call succeeds, no
+        // duplicate, no filesFailed.
+        val cloudProvider = mockk<ICloudStorageProvider>(relaxed = true) {
+            coEvery {
+                uploadFile(any(), any(), any(), any(), any())
+            } returns SuccessResult(CloudFile("recovered-cloud-id", "a.txt"))
+        }
+        val (uploader, folderCache) = makeUploader(makeContext(), cloudProvider)
+        val stagingDir = Files.createTempDirectory("fv-uploader-test").toFile()
+        try {
+            val channel = Channel<UploadTask>(1)
+            channel.send(UploadTask("a.txt", mockk<Uri>(), 100L, 0L, UploadMode.NEW, UploadTier.NORMAL))
+            channel.close()
+
+            val summary = RunSummary()
+            uploader.processChannel(
+                makeConfig("cfg-recover"),
+                channel,
+                "run-recover",
+                stagingDir,
+                folderCache,
+                null,
+                null,
+                summary,
+            )
+
+            summary.filesUploaded shouldBe 1
+            summary.filesFailed shouldBe 0
+            coVerify(exactly = 1) { cloudProvider.uploadFile(any(), any(), any(), any(), any()) }
+        } finally {
+            stagingDir.deleteRecursively()
+        }
+    }
+
     "second consecutive CloudQuotaExceededException sets quotaExceeded = true" {
         val cloudProvider = mockk<ICloudStorageProvider> {
-            coEvery { uploadFile(any(), any(), any(), any()) } returns ErrorResult(CloudQuotaExceededException())
+            coEvery { uploadFile(any(), any(), any(), any(), any()) } returns ErrorResult(CloudQuotaExceededException())
         }
         val (uploader, folderCache) = makeUploader(makeContext(), cloudProvider)
         val stagingDir = Files.createTempDirectory("fv-uploader-test").toFile()

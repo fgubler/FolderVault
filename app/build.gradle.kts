@@ -86,6 +86,12 @@ kotlin {
     }
 }
 
+// Route unit tests through the JUnit5 platform so Kotest specs (StringSpec, FunSpec)
+// are discovered; JUnit4/Robolectric tests run via junit-vintage-engine on the same platform.
+tasks.withType<Test>().configureEach {
+    useJUnitPlatform()
+}
+
 // Detekt configuration
 detekt {
     buildUponDefaultConfig = true

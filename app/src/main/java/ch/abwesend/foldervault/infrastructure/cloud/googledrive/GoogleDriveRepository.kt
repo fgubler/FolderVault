@@ -27,23 +27,21 @@ class GoogleDriveRepository(private val drive: Drive) : ICloudStorageProvider {
         private const val ROOT_FOLDER_NAME_PREFIX = "FolderVault"
         private const val FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
 
-        // Drive q-syntax requires `\` and `'` in string literals to be backslash-escaped.
+        /** Drive q-syntax requires `\` and `'` in string literals to be backslash-escaped. */
         internal fun escapeDriveQueryLiteral(value: String): String =
             value.replace("\\", "\\\\").replace("'", "\\'")
     }
 
-    // Classify Drive API exceptions into typed CloudException subclasses.
-    private fun <T> driveCall(block: () -> T): T {
-        return try {
-            block()
-        } catch (e: GoogleJsonResponseException) {
-            throw DriveErrorClassifier.classify(e)
-        } catch (e: IOException) {
-            throw CloudTransientException(cause = e)
-        }
+    /** Classifies Drive API exceptions into typed [CloudTransientException] / [DriveErrorClassifier] subclasses. */
+    private fun <T> driveCall(block: () -> T): T = try {
+        block()
+    } catch (e: GoogleJsonResponseException) {
+        throw DriveErrorClassifier.classify(e)
+    } catch (e: IOException) {
+        throw CloudTransientException(cause = e)
     }
 
-    // Classify + apply exponential-backoff retry for transient / rate-limit errors.
+    /** Classifies and applies exponential-backoff retry for transient / rate-limit errors. */
     private suspend fun <T> retryingDriveCall(block: () -> T): T =
         DriveRetryPolicy.withRetry { driveCall(block) }
 
@@ -149,8 +147,11 @@ class GoogleDriveRepository(private val drive: Drive) : ICloudStorageProvider {
                             result.files.orEmpty().forEach { file ->
                                 val id = file.id ?: return@forEach
                                 val name = file.name ?: return@forEach
-                                if (file.mimeType == FOLDER_MIME_TYPE) add(CloudFolder(id, name))
-                                else add(CloudFile(id, name))
+                                if (file.mimeType == FOLDER_MIME_TYPE) {
+                                    add(CloudFolder(id, name))
+                                } else {
+                                    add(CloudFile(id, name))
+                                }
                             }
                             pageToken = result.nextPageToken
                         } while (pageToken != null)

@@ -15,10 +15,10 @@ class AndroidKeyStoreRepository : IKeyStoreRepository {
         private const val AES_KEY_SIZE_BITS = 256
     }
 
-    override fun getOrCreateKey(): SecretKey {
-        val existing = withKeyStore { it.getKey(KEYSTORE_KEY_ALIAS, null) as? SecretKey }
-        if (existing != null) return existing
+    override fun getOrCreateKey(): SecretKey =
+        withKeyStore { it.getKey(KEYSTORE_KEY_ALIAS, null) as? SecretKey } ?: generateKey()
 
+    private fun generateKey(): SecretKey {
         val keyGenerator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE_PROVIDER)
         val spec = KeyGenParameterSpec.Builder(
             KEYSTORE_KEY_ALIAS,

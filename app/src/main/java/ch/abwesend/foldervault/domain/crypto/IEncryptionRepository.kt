@@ -7,7 +7,7 @@ interface IEncryptionRepository {
     fun decryptPassword(encryptedPassword: String): BinaryResult<String, Exception>
     fun deleteKeyStoreKey(): Boolean
 
-    // Implemented in §14.6 alongside the FVC1 streaming container.
+    /** Implemented in §14.6 alongside the FVC1 streaming container. */
     fun verifyPassword(
         headerBytes: ByteArray,
         firstCiphertextBlock: ByteArray,

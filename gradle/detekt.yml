@@ -70,7 +70,11 @@ potential-bugs:
 style:
   active: true
   ForbiddenComment:
-    values: ['FIXME:', 'STOPSHIP:']
+    comments:
+      - reason: 'FIXME marker'
+        value: 'FIXME:'
+      - reason: 'STOPSHIP marker — must not ship'
+        value: 'STOPSHIP:'
   MagicNumber:
     active: true
     ignoreNumbers: ['-1', '0', '1', '2', '100', '1000', '1024']

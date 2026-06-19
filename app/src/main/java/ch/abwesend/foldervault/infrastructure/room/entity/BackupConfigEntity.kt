@@ -22,8 +22,10 @@ data class BackupConfigEntity(
     val changedFilePolicy: ChangedFilePolicy,
     val encryptionEnabled: Boolean,
     val encryptedPasswordBlob: String?,
-    // Fast-path cache of per-backup encryption params (authoritative source is the FVC1 file header).
-    // Non-null iff encryptionEnabled == true.
+    /**
+     * Fast-path cache of per-backup encryption params (authoritative source is the FVC1 file header).
+     * Non-null iff [encryptionEnabled] is true.
+     */
     @Embedded(prefix = "enc_") val encryptionParams: EncryptionParams?,
     val retentionPolicy: RetentionPolicy,
     val networkPolicy: NetworkPolicy,

@@ -66,12 +66,14 @@ fun HomeScreen(
     onAddBackup: () -> Unit,
     onOpenDetail: (String) -> Unit,
     onOpenRestore: () -> Unit,
+    modifier: Modifier = Modifier,
     viewModel: HomeViewModel = koinViewModel(),
 ) {
     val configs by viewModel.configs.collectAsState()
     val errorBadgeCounts by viewModel.errorBadgeCounts.collectAsState()
 
     Scaffold(
+        modifier = modifier,
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.home_title)) },

@@ -67,17 +67,16 @@ private val PAGES = listOf(
 @Composable
 fun OnboardingScreen(
     onComplete: () -> Unit,
+    modifier: Modifier = Modifier,
     viewModel: OnboardingViewModel = koinViewModel(),
 ) {
     val pagerState = rememberPagerState { PAGES.size }
     val scope = rememberCoroutineScope()
     val notificationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { _ ->
-        // graceful regardless of outcome
-    }
+    ) { _ -> }
 
-    Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
+    Column(modifier = modifier.fillMaxSize().safeDrawingPadding()) {
         HorizontalPager(
             state = pagerState,
             modifier = Modifier
@@ -193,9 +192,8 @@ private fun OnboardingNavButtons(
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         OutlinedButton(onClick = onSkip) { Text(stringResource(R.string.onboarding_skip)) }
-        Button(onClick = onNext) {
-            Text(stringResource(if (isLastPage) R.string.onboarding_get_started else R.string.onboarding_next))
-        }
+        val nextLabelRes = if (isLastPage) R.string.onboarding_get_started else R.string.onboarding_next
+        Button(onClick = onNext) { Text(stringResource(nextLabelRes)) }
     }
 }
 

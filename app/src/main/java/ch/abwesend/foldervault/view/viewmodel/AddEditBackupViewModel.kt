@@ -158,10 +158,10 @@ class AddEditBackupViewModel(
             updateForm { it.copy(cloudSetup = CloudSetupState.Authorizing, errorMessage = null) }
             when (val result = authorizer.authorize()) {
                 is CloudAuthResult.Authorized -> createCloudFolder(result.data)
-                is CloudAuthResult.ConsentRequired ->
-                    updateForm { it.copy(cloudSetup = CloudSetupState.ConsentRequired(result.pendingIntent)) }
-                CloudAuthResult.Error ->
-                    updateForm { it.copy(cloudSetup = CloudSetupState.Error(UiText.Resource(R.string.error_auth_failed))) }
+                is CloudAuthResult.ConsentRequired -> updateForm {
+                    it.copy(cloudSetup = CloudSetupState.ConsentRequired(result.pendingIntent))
+                }
+                CloudAuthResult.Error -> setAuthFailedError()
             }
         }
     }
@@ -172,9 +172,13 @@ class AddEditBackupViewModel(
             if (result is SuccessResult) {
                 createCloudFolder(result.value)
             } else {
-                updateForm { it.copy(cloudSetup = CloudSetupState.Error(UiText.Resource(R.string.error_auth_failed))) }
+                setAuthFailedError()
             }
         }
+    }
+
+    private fun setAuthFailedError() = updateForm {
+        it.copy(cloudSetup = CloudSetupState.Error(UiText.Resource(R.string.error_auth_failed)))
     }
 
     private suspend fun createCloudFolder(provider: ICloudStorageProvider) {
@@ -188,7 +192,9 @@ class AddEditBackupViewModel(
             }
             writeMetaFile(provider, folder.id)
         } else {
-            updateForm { it.copy(cloudSetup = CloudSetupState.Error(UiText.Resource(R.string.error_create_folder_failed))) }
+            updateForm {
+                it.copy(cloudSetup = CloudSetupState.Error(UiText.Resource(R.string.error_create_folder_failed)))
+            }
         }
     }
 
@@ -237,7 +243,8 @@ class AddEditBackupViewModel(
             state.sourceTreeUri.isBlank() -> UiText.Resource(R.string.error_no_source_folder)
             state.cloudSetup !is CloudSetupState.Done -> UiText.Resource(R.string.error_no_drive_connection)
             state.encryptionEnabled && state.password.isBlank() -> UiText.Resource(R.string.error_password_required)
-            state.encryptionEnabled && state.password != state.passwordConfirm -> UiText.Resource(R.string.error_passwords_dont_match)
+            state.encryptionEnabled && state.password != state.passwordConfirm ->
+                UiText.Resource(R.string.error_passwords_dont_match)
             else -> null
         }
         if (error != null) updateForm { it.copy(errorMessage = error) }
@@ -251,7 +258,12 @@ class AddEditBackupViewModel(
         val (encryptedBlob, saltBase64) = if (state.encryptionEnabled) {
             val result = encryptionRepo.encryptPassword(state.password)
             if (result !is SuccessResult) {
-                updateForm { it.copy(isSaving = false, errorMessage = UiText.Resource(R.string.error_encryption_setup_failed)) }
+                updateForm {
+                    it.copy(
+                        isSaving = false,
+                        errorMessage = UiText.Resource(R.string.error_encryption_setup_failed),
+                    )
+                }
                 return null
             }
             val salt = existingConfig?.encryptionSaltBase64

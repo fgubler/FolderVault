@@ -29,7 +29,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -45,7 +44,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import ch.abwesend.foldervault.R
@@ -59,6 +57,7 @@ import ch.abwesend.foldervault.domain.model.MessageType
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.model.RetentionPolicy
 import ch.abwesend.foldervault.ui.theme.FolderVaultTheme
+import ch.abwesend.foldervault.view.components.PasswordTextField
 import ch.abwesend.foldervault.view.viewmodel.BackupDetailViewModel
 import ch.abwesend.foldervault.view.viewmodel.DetailEvent
 import org.koin.androidx.compose.koinViewModel
@@ -118,7 +117,10 @@ fun BackupDetailScreen(
                 title = { Text(config?.displayName ?: stringResource(R.string.detail_default_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.button_back_cd))
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.button_back_cd),
+                        )
                     }
                 },
                 actions = {
@@ -217,10 +219,12 @@ private fun ConfigInfoSection(config: BackupConfig) {
         InfoRow(stringResource(R.string.label_cloud_folder), config.cloudRootFolderName)
         InfoRow(stringResource(R.string.label_account), config.cloudAccountIdentifier)
         InfoRow(stringResource(R.string.label_schedule), stringResource(config.schedule.labelResId()))
-        InfoRow(
-            stringResource(R.string.label_network),
-            stringResource(if (config.networkPolicy == NetworkPolicy.WIFI_ONLY) R.string.network_wifi_only else R.string.network_any_short),
-        )
+        val networkLabelRes = if (config.networkPolicy == NetworkPolicy.WIFI_ONLY) {
+            R.string.network_wifi_only
+        } else {
+            R.string.network_any_short
+        }
+        InfoRow(stringResource(R.string.label_network), stringResource(networkLabelRes))
         InfoRow(
             stringResource(R.string.label_encryption),
             stringResource(if (config.encryptionEnabled) R.string.encryption_enabled else R.string.encryption_disabled),
@@ -239,7 +243,11 @@ private fun StatusSection(config: BackupConfig) {
         else -> MaterialTheme.colorScheme.onSurface
     }
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(stringResource(R.string.status_section_header), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+        Text(
+            stringResource(R.string.status_section_header),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+        )
         Text(
             stringResource(config.lastRunStatus.labelResId),
             style = MaterialTheme.typography.bodyMedium,

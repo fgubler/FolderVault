@@ -57,6 +57,7 @@ import org.koin.androidx.compose.koinViewModel
 fun SettingsScreen(
     onBack: () -> Unit,
     onShowOnboarding: () -> Unit,
+    modifier: Modifier = Modifier,
     viewModel: SettingsViewModel = koinViewModel(),
 ) {
     val settings by viewModel.settings.collectAsState()
@@ -65,12 +66,16 @@ fun SettingsScreen(
     ) { _ -> }
 
     Scaffold(
+        modifier = modifier,
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.settings_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.button_back_cd))
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.button_back_cd),
+                        )
                     }
                 },
             )

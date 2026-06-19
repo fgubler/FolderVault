@@ -56,8 +56,7 @@ class EncryptionRepository : IEncryptionRepository {
     }.ifError { logger.error("Password encryption failed", it) }
 
     override fun decryptPassword(encryptedPassword: String): BinaryResult<String, Exception> = runCatchingAsResult {
-        val key = keyStoreRepository.getKey()
-            ?: throw IllegalStateException("No KeyStore key available")
+        val key = keyStoreRepository.getKey() ?: error("No KeyStore key available")
         val payload = Json.decodeFromString<EncryptedPasswordPayload>(encryptedPassword)
         val decoder = Base64.getDecoder()
         val cipher = Cipher.getInstance(payload.algorithm).apply {

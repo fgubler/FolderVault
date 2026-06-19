@@ -3,9 +3,12 @@ package ch.abwesend.foldervault.infrastructure.logging
 import ch.abwesend.foldervault.domain.logging.FileNameRedactor
 import com.google.firebase.crashlytics.FirebaseCrashlytics
 
-// Only file in the project allowed to reference FirebaseCrashlytics (see LoggingArchitectureTest).
-// All messages are routed through FileNameRedactor before reaching Firebase so file names/paths
-// never appear in crash telemetry.
+/**
+ * Only file in the project allowed to reference [FirebaseCrashlytics] (see `LoggingArchitectureTest`).
+ *
+ * All messages are routed through [FileNameRedactor] before reaching Firebase so file names/paths
+ * never appear in crash telemetry.
+ */
 internal class CrashlyticsSink : LogSink {
     private val crashlytics: FirebaseCrashlytics get() = FirebaseCrashlytics.getInstance()
 
@@ -23,7 +26,7 @@ internal class CrashlyticsSink : LogSink {
         error?.let { crashlytics.recordException(sanitize(it)) }
     }
 
-    // Strip the exception message (may contain absolute paths) and keep only type + redacted form.
+    /** Strips the exception message (may contain absolute paths) and keeps only type + redacted form. */
     private fun sanitize(error: Throwable): Throwable {
         val safeMessage = error.message?.let { FileNameRedactor.redactPath(it) } ?: ""
         return Exception("${error::class.simpleName}: $safeMessage").also {

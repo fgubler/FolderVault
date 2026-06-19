@@ -40,6 +40,10 @@ Crashlytics confinement: ONLY `infrastructure/logging/CrashlyticsSink.kt` may im
 - **Robolectric** / Compose UI tests use JUnit4 (`@RunWith(RobolectricTestRunner::class)`) —
   they run on the JUnit5 platform via the Vintage engine.
 
+### Style
+- Prefer KDoc style comments over normal comments on methods, classes and properties
+- Avoid early returns unless they bring a lot of benefit
+
 ## v1 / v1.1 scope split
 - **v1 always creates a fresh `FolderVault_<UUID>` cloud root.** No "use existing folder", no
   Google Picker, no §5.9 reconciliation. Reinstalling means re-uploading from scratch.

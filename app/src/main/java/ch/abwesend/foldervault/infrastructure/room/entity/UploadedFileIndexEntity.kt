@@ -5,8 +5,10 @@ import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
-// Partial unique index on (backupConfigId, relativePath) WHERE isCurrentVersion = 1
-// is created via RoomDatabase.Callback.onCreate — Room does not support partial indexes natively.
+/**
+ * Partial unique index on `(backupConfigId, relativePath) WHERE isCurrentVersion = 1`
+ * is created via `RoomDatabase.Callback.onCreate` — Room does not support partial indexes natively.
+ */
 @Entity(
     tableName = "UploadedFileIndex",
     foreignKeys = [

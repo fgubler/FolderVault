@@ -1,24 +1,17 @@
 package ch.abwesend.foldervault.domain.logging
 
 object FileNameRedactor {
-    fun redact(name: String): String {
-        if (name.isEmpty()) return name
-        if (name.startsWith('.')) {
-            val afterDot = name.drop(1)
-            return if (afterDot.isEmpty()) name else ".***"
-        }
-        val lastDot = name.lastIndexOf('.')
-        return if (lastDot <= 0) {
-            "${name.first()}***"
-        } else {
-            "${name.first()}***${name.substring(lastDot)}"
+    fun redact(name: String): String = when {
+        name.isEmpty() -> name
+        name.startsWith('.') -> if (name.length == 1) name else ".***"
+        else -> {
+            val lastDot = name.lastIndexOf('.')
+            if (lastDot <= 0) "${name.first()}***" else "${name.first()}***${name.substring(lastDot)}"
         }
     }
 
-    fun redactPath(relativePath: String): String {
-        if (relativePath.isEmpty()) return relativePath
-        return relativePath.split('/').joinToString("/") { segment ->
+    fun redactPath(relativePath: String): String =
+        relativePath.split('/').joinToString("/") { segment ->
             if (segment.isEmpty()) segment else redact(segment)
         }
-    }
 }

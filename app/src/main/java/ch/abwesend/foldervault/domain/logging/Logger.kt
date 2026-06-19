@@ -4,7 +4,7 @@ import android.util.Log
 
 val Any.logger: ILogger get() = LoggerProvider.forTag(this::class.java.simpleName ?: "FolderVault")
 
-// Fallback used before LoggerProvider.configure() is called (e.g. early startup or tests).
+/** Fallback used before [LoggerProvider.configure] is called (e.g. early startup or tests). */
 internal class SimpleAndroidLogger(private val tag: String) : ILogger {
     override fun debug(message: String) { Log.d(tag, message) }
     override fun info(message: String) { Log.i(tag, message) }

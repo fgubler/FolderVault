@@ -47,8 +47,9 @@ Crashlytics confinement: ONLY `infrastructure/logging/CrashlyticsSink.kt` may im
 ## v1 / v1.1 scope split
 - **v1 always creates a fresh `FolderVault_<UUID>` cloud root.** No "use existing folder", no
   Google Picker, no §5.9 reconciliation. Reinstalling means re-uploading from scratch.
-- **v1 writes** the per-run manifest (`.foldervault-manifest.json`) and the identity meta file
-  (`.foldervault-meta.json`) so v1.1 can add Picker + reconciliation without restructuring.
+- **v1 writes** the per-run manifest (`.foldervault-manifest.json`). The identity meta file
+  (`.foldervault-meta.json` from spec §6.1) is **not** written in v1 — re-add it together with
+  the Picker / re-attach flow in v1.1, where it will actually be read.
 - Mark anything touching the Picker or reconciliation clearly as `// v1.1`.
 
 ## Definition of Done (run before each checkpoint hand-off)

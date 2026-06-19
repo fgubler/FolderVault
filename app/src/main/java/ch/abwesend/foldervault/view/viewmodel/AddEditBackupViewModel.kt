@@ -7,10 +7,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.backup.BackupConfig
-import ch.abwesend.foldervault.domain.backup.BackupMeta
 import ch.abwesend.foldervault.domain.backup.IBackupConfigRepository
 import ch.abwesend.foldervault.domain.backup.IBackupScheduler
-import ch.abwesend.foldervault.domain.cloud.CloudAuthException
 import ch.abwesend.foldervault.domain.cloud.CloudAuthResult
 import ch.abwesend.foldervault.domain.cloud.ICloudAuthorizer
 import ch.abwesend.foldervault.domain.cloud.ICloudStorageProvider
@@ -21,7 +19,6 @@ import ch.abwesend.foldervault.domain.model.BackupSchedule
 import ch.abwesend.foldervault.domain.model.ChangedFilePolicy
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.model.RetentionPolicy
-import ch.abwesend.foldervault.domain.result.ErrorResult
 import ch.abwesend.foldervault.domain.result.SuccessResult
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
 import ch.abwesend.foldervault.view.util.displayNameFromUri
@@ -33,8 +30,6 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.Json
-import java.time.Instant
 import java.util.Base64
 import java.util.UUID
 
@@ -190,27 +185,9 @@ class AddEditBackupViewModel(
             updateForm {
                 it.copy(cloudSetup = CloudSetupState.Done(folder.id, folder.name, accountResult.value))
             }
-            writeMetaFile(provider, folder.id)
         } else {
             updateForm {
                 it.copy(cloudSetup = CloudSetupState.Error(UiText.Resource(R.string.error_create_folder_failed)))
-            }
-        }
-    }
-
-    private suspend fun writeMetaFile(provider: ICloudStorageProvider, folderId: String) {
-        val form = _form.value
-        val meta = BackupMeta(
-            displayName = form.displayName,
-            createdAt = Instant.now().toString(),
-            encrypted = form.encryptionEnabled,
-        )
-        val bytes = Json.encodeToString(meta).toByteArray(Charsets.UTF_8)
-        val first = provider.writeRootMetadata(folderId, BackupMeta.CLOUD_FILE_NAME, bytes)
-        if (first is ErrorResult && first.error is CloudAuthException) {
-            val reAuth = authorizer.authorize()
-            if (reAuth is CloudAuthResult.Authorized) {
-                reAuth.data.writeRootMetadata(folderId, BackupMeta.CLOUD_FILE_NAME, bytes)
             }
         }
     }

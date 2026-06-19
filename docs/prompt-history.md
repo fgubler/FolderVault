@@ -7,6 +7,24 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-06-19 — Remove unused `.foldervault-meta.json` write
+
+### What was done
+- **Identified that the meta file is write-only in v1.** `BackupMeta.CLOUD_FILE_NAME` was written by `AddEditBackupViewModel.writeMetaFile()` after `createRootFolder()` but never read anywhere — `readRootMetadata` is only called for the per-run manifest (`BackupRunner`). The meta file is part of the v1.1 Picker / re-attach flow (spec §6.1, §7.3) that doesn't exist yet.
+- **`AddEditBackupViewModel`**: dropped `writeMetaFile()` and its call from `createCloudFolder()`. Removed now-dead imports: `BackupMeta`, `CloudAuthException`, `ErrorResult`, `kotlinx.serialization.json.Json`, `java.time.Instant`.
+- **Deleted both `BackupMeta` data classes**: `domain/backup/BackupMeta.kt` (the wired-up one) and `domain/cloud/BackupMeta.kt` (a duplicate that was never referenced — leftover from an earlier package layout).
+- **`AddEditBackupViewModelTest`**: replaced the "writes meta file with CLOUD_FILE_NAME" test with "transitions to Done after folder is created" — asserts the cloud-setup state machine reaches `CloudSetupState.Done` with the expected `folderId`. The mocked `writeRootMetadata` expectation was removed.
+- **`ICloudStorageProvider.writeRootMetadata` / `readRootMetadata` kept** — still used by `BackupRunner` for the per-run manifest.
+- **`CLAUDE.md`**: updated the v1 / v1.1 scope-split bullet to record that the meta file is *not* written in v1 and should be re-added together with the Picker / re-attach flow in v1.1.
+
+### Rationale
+v1 always creates a fresh `FolderVault_<UUID>` root, so there is no flow that consults the meta file — the marker / display-name / created-at / encrypted-flag are only useful for re-attach UI. Writing a file that no code reads adds maintenance surface (two duplicate data classes, a test that only asserted the side-effect existed) for no v1 behaviour. v1.1 re-add will be straightforward: restore the data class, the `writeMetaFile` call site, and pair it with the read path.
+
+### Checks
+`./gradlew :app:compileDebugKotlin :app:compileDebugUnitTestKotlin :app:testDebugUnitTest` ✓ — the new test passes. The pre-existing detekt failure on `BackupDetailScreen.kt:79` (`withWrapHints` unused, from an uncommitted UX change at session start) is unrelated to this slice.
+
+---
+
 ## 2026-06-11 — review-plan: Tier 6 (oversized files — switch to deferral semantics)
 
 ### What was done

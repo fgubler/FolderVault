@@ -42,6 +42,30 @@ jobs:
       - name: Change wrapper permissions
         run: chmod +x ./gradlew
 
+      - name: Create dummy google-services.json
+        run: |
+          cat > app/google-services.json << 'EOF'
+          {
+            "project_info": {
+              "project_number": "000000000000",
+              "project_id": "foldervault-ci-dummy",
+              "storage_bucket": "foldervault-ci-dummy.appspot.com"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:000000000000:android:0000000000000000000000",
+                  "android_client_info": { "package_name": "ch.abwesend.foldervault" }
+                },
+                "oauth_client": [],
+                "api_key": [{ "current_key": "AIzaSyDUMMY_CI_KEY_0000000000000000000000" }],
+                "services": { "appinvite_service": { "other_platform_oauth_client": [] } }
+              }
+            ],
+            "configuration_version": "1"
+          }
+          EOF
+
       - name: Run Static Analysis
         run: ./gradlew detekt --continue
 

@@ -102,7 +102,6 @@ class GoogleDriveRepository(private val drive: Drive) : ICloudStorageProvider {
                                 .setQ(query)
                                 .setFields("nextPageToken, files(id, name, createdTime)")
                                 .setSpaces("drive")
-                                .setPageSize(1000)
                                 .apply { if (pageToken != null) this.pageToken = pageToken }
                                 .execute()
                             addAll(page.files.orEmpty())

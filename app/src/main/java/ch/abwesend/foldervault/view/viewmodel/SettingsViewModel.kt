@@ -1,6 +1,9 @@
 package ch.abwesend.foldervault.view.viewmodel
 
+import android.net.Uri
 import androidx.lifecycle.viewModelScope
+import ch.abwesend.foldervault.R
+import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.logging.ITelemetryToggle
 import ch.abwesend.foldervault.domain.model.AppSettings
 import ch.abwesend.foldervault.domain.model.AppTheme
@@ -8,17 +11,26 @@ import ch.abwesend.foldervault.domain.model.BackupSchedule
 import ch.abwesend.foldervault.domain.model.ChangedFilePolicy
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
+import ch.abwesend.foldervault.infrastructure.logging.LocalLogFiles
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.withContext
 
-class SettingsViewModel(
+internal class SettingsViewModel(
     private val settingsRepo: IAppSettingsRepository,
     private val telemetryToggle: ITelemetryToggle,
+    private val logFiles: LocalLogFiles,
+    private val dispatchers: IDispatchers,
 ) : BaseViewModel() {
 
     val settings: StateFlow<AppSettings> = settingsRepo.settings
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AppSettings())
+
+    private val _exportResult = MutableStateFlow<UiText?>(null)
+    val exportResult: StateFlow<UiText?> = _exportResult.asStateFlow()
 
     fun setDefaultSchedule(schedule: BackupSchedule) = update { it.copy(defaultSchedule = schedule) }
 
@@ -39,6 +51,19 @@ class SettingsViewModel(
     }
 
     fun setShowOnboarding(show: Boolean) = update { it.copy(showOnboarding = show) }
+
+    fun dismissExportResult() {
+        _exportResult.value = null
+    }
+
+    fun exportTodayLogFile(uri: Uri) {
+        safeLaunch {
+            val exported = withContext(dispatchers.io) { logFiles.exportTodayLog(uri) }
+            _exportResult.value = UiText.Resource(
+                if (exported) R.string.export_log_success else R.string.export_log_failed,
+            )
+        }
+    }
 
     private fun update(transform: (AppSettings) -> AppSettings) {
         safeLaunch { settingsRepo.update(transform) }

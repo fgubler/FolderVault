@@ -1,10 +1,12 @@
 package ch.abwesend.foldervault.view
 
+import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.logging.ILogger
 import ch.abwesend.foldervault.domain.logging.ITelemetryToggle
 import ch.abwesend.foldervault.domain.logging.LoggerProvider
 import ch.abwesend.foldervault.domain.model.AppSettings
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
+import ch.abwesend.foldervault.infrastructure.logging.LocalLogFiles
 import ch.abwesend.foldervault.view.viewmodel.SettingsViewModel
 import io.kotest.core.spec.IsolationMode
 import io.kotest.core.spec.style.StringSpec
@@ -48,11 +50,18 @@ class SettingsViewModelTest : StringSpec({
             settings.value = firstArg<(AppSettings) -> AppSettings>()(settings.value)
         }
     }
+    val dispatchers = object : IDispatchers {
+        override val default = testDispatcher
+        override val io = testDispatcher
+        override val main = testDispatcher
+        override val mainImmediate = testDispatcher
+    }
+    val logFiles = mockk<LocalLogFiles>(relaxed = true)
 
     "setAnonymousErrorReports(true) calls telemetry toggle with true before persisting" {
         val toggle = FakeTelemetryToggle()
         val settings = makeSettings()
-        val vm = SettingsViewModel(makeRepo(settings), toggle)
+        val vm = SettingsViewModel(makeRepo(settings), toggle, logFiles, dispatchers)
 
         vm.setAnonymousErrorReports(true)
         testDispatcher.scheduler.advanceUntilIdle()
@@ -65,7 +74,7 @@ class SettingsViewModelTest : StringSpec({
     "setAnonymousErrorReports(false) calls telemetry toggle with false" {
         val toggle = FakeTelemetryToggle()
         val settings = makeSettings()
-        val vm = SettingsViewModel(makeRepo(settings), toggle)
+        val vm = SettingsViewModel(makeRepo(settings), toggle, logFiles, dispatchers)
 
         vm.setAnonymousErrorReports(false)
         testDispatcher.scheduler.advanceUntilIdle()

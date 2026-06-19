@@ -208,6 +208,9 @@
     <string name="desc_anonymous_error_reports">Help improve the app by sending anonymous crash reports</string>
     <string name="button_request_notification_permission">Re-request notification permission</string>
     <string name="button_show_onboarding">Show onboarding again</string>
+    <string name="button_export_today_log">Export today\'s logfile</string>
+    <string name="export_log_success">Logfile exported</string>
+    <string name="export_log_failed">Could not export logfile</string>
 
     <!-- Onboarding screen -->
     <string name="onboarding_skip">Skip</string>

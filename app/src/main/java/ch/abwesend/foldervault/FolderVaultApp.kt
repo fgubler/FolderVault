@@ -33,7 +33,7 @@ class FolderVaultApp : Application() {
     }
 
     private fun configureLogging() {
-        val local = LocalLogSink()
+        val local = LocalLogSink(this)
         val remote = CrashlyticsSink()
         LoggerProvider.configure { tag -> PrivateLogger(tag, local, remote) }
     }

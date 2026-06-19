@@ -55,7 +55,7 @@ import org.koin.androidx.compose.koinViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(
+internal fun SettingsScreen(
     onBack: () -> Unit,
     onShowOnboarding: () -> Unit,
     modifier: Modifier = Modifier,
@@ -63,11 +63,21 @@ fun SettingsScreen(
 ) {
     val settings by viewModel.settings.collectAsState()
     val unexpectedError by viewModel.unexpectedError.collectAsState()
+    val exportResult by viewModel.exportResult.collectAsState()
     val notificationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { _ -> }
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain"),
+    ) { uri -> if (uri != null) viewModel.exportTodayLogFile(uri) }
 
     UnexpectedErrorDialog(error = unexpectedError, onDismiss = viewModel::dismissUnexpectedError)
+    exportResult?.let { message ->
+        UnexpectedErrorDialog(
+            error = message,
+            onDismiss = viewModel::dismissExportResult,
+        )
+    }
 
     Scaffold(
         modifier = modifier,
@@ -103,6 +113,9 @@ fun SettingsScreen(
                     notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                 }
             },
+            onExportTodayLog = {
+                exportLauncher.launch("foldervault-log-${System.currentTimeMillis()}.log")
+            },
         )
     }
 }
@@ -119,6 +132,7 @@ private fun SettingsContent(
     onErrorReportsChange: (Boolean) -> Unit,
     onShowOnboarding: () -> Unit,
     onRequestNotificationPermission: () -> Unit,
+    onExportTodayLog: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -200,6 +214,14 @@ private fun SettingsContent(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(stringResource(R.string.button_show_onboarding))
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+        OutlinedButton(
+            onClick = onExportTodayLog,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(stringResource(R.string.button_export_today_log))
         }
     }
 }
@@ -291,6 +313,7 @@ private fun SettingsScreenPreview() {
             onErrorReportsChange = {},
             onShowOnboarding = {},
             onRequestNotificationPermission = {},
+            onExportTodayLog = {},
         )
     }
 }

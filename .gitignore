@@ -26,6 +26,7 @@ output-metadata.json
 /.idea/assetWizardSettings.xml
 /.idea/deviceManager.xml
 /.idea/studiobot.xml
+/.idea/deploymentTargetSelector.xml
 misc.xml
 deploymentTargetDropDown.xml
 render.experimental.xml

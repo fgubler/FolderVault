@@ -22,6 +22,7 @@ import ch.abwesend.foldervault.infrastructure.crypto.AndroidKeyStoreRepository
 import ch.abwesend.foldervault.infrastructure.crypto.EncryptionRepository
 import ch.abwesend.foldervault.infrastructure.crypto.Fvc1Cipher
 import ch.abwesend.foldervault.infrastructure.logging.FirebaseTelemetryToggle
+import ch.abwesend.foldervault.infrastructure.logging.LocalLogFiles
 import ch.abwesend.foldervault.infrastructure.restore.RestoreEngine
 import ch.abwesend.foldervault.infrastructure.room.FolderVaultDatabase
 import ch.abwesend.foldervault.infrastructure.settings.AppSettingsRepository
@@ -57,6 +58,7 @@ val appModule = module {
     // Settings
     single<IAppSettingsRepository> { AppSettingsRepository(androidContext()) }
     single<ITelemetryToggle> { FirebaseTelemetryToggle(androidContext()) }
+    single { LocalLogFiles(androidContext()) }
 
     // Backup notifications and scheduling
     single { BackupNotificationManager(androidContext(), get(), get()) }
@@ -81,7 +83,7 @@ val appModule = module {
     viewModel { RestoreViewModel(get()) }
     viewModel { HomeViewModel(get(), get()) }
     viewModel { OnboardingViewModel(get()) }
-    viewModel { SettingsViewModel(get(), get()) }
+    viewModel { SettingsViewModel(get(), get(), get(), get()) }
     viewModel { params ->
         AddEditBackupViewModel(
             configRepo = get(),

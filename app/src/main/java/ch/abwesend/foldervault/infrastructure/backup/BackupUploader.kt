@@ -148,7 +148,11 @@ class BackupUploader(
         remoteName: String,
         summary: RunSummary,
     ) {
-        uploadedFileIndexDao.upsertCurrentVersion(
+        val pendingDeletion = if (task.mode == UploadMode.CHANGED_OVERWRITE) task.previousCloudFileId else null
+        // Persist the pending deletion *on the new row* before attempting the cloud delete, so
+        // the cleanup obligation survives a transient delete failure. The end-of-run reaper
+        // retries any row still marked pending.
+        val rowId = uploadedFileIndexDao.upsertCurrentVersion(
             UploadedFileIndexEntity(
                 backupConfigId = config.id,
                 relativePath = task.relativePath,
@@ -158,16 +162,21 @@ class BackupUploader(
                 remoteName = remoteName,
                 uploadedAt = System.currentTimeMillis(),
                 isCurrentVersion = true,
+                pendingDeletionCloudFileId = pendingDeletion,
             )
         )
         summary.filesUploaded++
         summary.bytesUploaded += task.localSize
         if (task.tier == UploadTier.OVERSIZED) summary.oversizedUploaded++
-        // For CHANGED_OVERWRITE: delete the now-superseded cloud file after indexing success
-        if (task.mode == UploadMode.CHANGED_OVERWRITE && task.previousCloudFileId != null) {
-            val deleteResult = cloudProvider.deleteFile(task.previousCloudFileId)
-            if (deleteResult is ErrorResult) {
-                log.warning("Failed to delete old cloud file ${task.previousCloudFileId}: ${deleteResult.error}")
+        if (pendingDeletion != null) {
+            val deleteResult = cloudProvider.deleteFile(pendingDeletion)
+            if (deleteResult is SuccessResult) {
+                uploadedFileIndexDao.clearPendingDeletion(rowId)
+            } else {
+                log.warning(
+                    "Failed to delete old cloud file $pendingDeletion — marked for end-of-run reap: " +
+                        "${(deleteResult as ErrorResult).error}"
+                )
             }
         }
     }

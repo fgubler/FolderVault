@@ -9,6 +9,7 @@ import ch.abwesend.foldervault.infrastructure.room.entity.UploadedFileIndexEntit
 import kotlinx.coroutines.flow.Flow
 
 @Dao
+@Suppress("TooManyFunctions")
 interface UploadedFileIndexDao {
 
     @Query(
@@ -34,13 +35,22 @@ interface UploadedFileIndexDao {
     suspend fun getVersionHistory(backupConfigId: String, relativePath: String): List<UploadedFileIndexEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(entity: UploadedFileIndexEntity)
+    suspend fun insert(entity: UploadedFileIndexEntity): Long
 
     @Transaction
-    suspend fun upsertCurrentVersion(entity: UploadedFileIndexEntity) {
+    suspend fun upsertCurrentVersion(entity: UploadedFileIndexEntity): Long {
         clearCurrentFlag(entity.backupConfigId, entity.relativePath)
-        insert(entity.copy(isCurrentVersion = true))
+        return insert(entity.copy(isCurrentVersion = true))
     }
+
+    @Query("UPDATE UploadedFileIndex SET pendingDeletionCloudFileId = NULL WHERE id = :id")
+    suspend fun clearPendingDeletion(id: Long)
+
+    @Query(
+        """SELECT * FROM UploadedFileIndex
+           WHERE backupConfigId = :configId AND pendingDeletionCloudFileId IS NOT NULL"""
+    )
+    suspend fun getPendingDeletions(configId: String): List<UploadedFileIndexEntity>
 
     @Query(
         """UPDATE UploadedFileIndex SET isCurrentVersion = 0

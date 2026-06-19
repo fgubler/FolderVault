@@ -32,4 +32,11 @@ data class UploadedFileIndexEntity(
     val remoteName: String,
     val uploadedAt: Long,
     val isCurrentVersion: Boolean,
+
+    /**
+     * Non-null when this row "owns" the deletion of a superseded cloud file
+     * (CHANGED_OVERWRITE). Cleared once the cloud delete confirms; an end-of-run
+     * reaper retries any rows still marked pending.
+     */
+    val pendingDeletionCloudFileId: String? = null,
 )

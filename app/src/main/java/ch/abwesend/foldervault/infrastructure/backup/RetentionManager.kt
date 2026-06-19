@@ -4,6 +4,7 @@ import ch.abwesend.foldervault.domain.cloud.ICloudStorageProvider
 import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.model.RetentionPolicy
 import ch.abwesend.foldervault.domain.result.ErrorResult
+import ch.abwesend.foldervault.domain.result.SuccessResult
 import ch.abwesend.foldervault.infrastructure.room.dao.UploadedFileIndexDao
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupConfigEntity
 
@@ -44,6 +45,29 @@ class RetentionManager(
         val oldVersions = uploadedFileIndexDao.getOldVersionsOlderThan(configId, cutoff)
         for (entry in oldVersions) {
             deleteCloudAndIndex(entry.cloudFileId, entry.id)
+        }
+    }
+
+    /**
+     * Retries the cloud-delete for any row that committed a CHANGED_OVERWRITE upload but
+     * failed to delete the predecessor object. Idempotent: Drive returning 404 for an
+     * already-gone file is treated as a success and the marker is cleared.
+     */
+    suspend fun reapPendingDeletions(configId: String) {
+        val pending = uploadedFileIndexDao.getPendingDeletions(configId)
+        if (pending.isEmpty()) return
+        log.debug("Reaping ${pending.size} pending cloud deletion(s) for config $configId")
+        for (entry in pending) {
+            val cloudFileId = entry.pendingDeletionCloudFileId ?: continue
+            val deleteResult = cloudProvider.deleteFile(cloudFileId)
+            if (deleteResult is SuccessResult) {
+                uploadedFileIndexDao.clearPendingDeletion(entry.id)
+            } else {
+                log.warning(
+                    "Reap: failed to delete $cloudFileId (row ${entry.id}) — will retry next run: " +
+                        "${(deleteResult as ErrorResult).error}"
+                )
+            }
         }
     }
 

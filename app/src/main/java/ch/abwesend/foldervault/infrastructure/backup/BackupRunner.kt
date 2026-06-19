@@ -126,9 +126,14 @@ class BackupRunner(
                 config, analyzer, uploader, fileSizeLimitBytes,
                 runId, stagingDir, folderCache, derivedKey, backupSalt, summary, deadline,
             )
+            val retention = RetentionManager(uploadedFileIndexDao, cloudProvider)
             if (!summary.authLost && !summary.quotaExceeded && !summary.hitTimeBudget) {
-                RetentionManager(uploadedFileIndexDao, cloudProvider).applyRetention(config)
+                retention.applyRetention(config)
             }
+            // Reap orphaned cloud files left behind by transient deleteFile failures during
+            // CHANGED_OVERWRITE uploads. Independent of retention policy — runs whenever the
+            // cloud connection is still usable.
+            if (!summary.authLost) retention.reapPendingDeletions(config.id)
             if (!summary.authLost) writeManifest(configId, cloudProvider)
         } catch (e: Exception) {
             log.error("BackupRunner encountered a fatal error for config $configId", e)

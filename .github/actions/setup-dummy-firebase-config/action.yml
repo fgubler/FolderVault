@@ -1,0 +1,30 @@
+name: 'Create dummy google-services.json'
+description: 'Creates a dummy google-services.json for CI builds where the real file is not available'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Create dummy google-services.json
+      shell: bash
+      run: |
+        cat > app/google-services.json << 'EOF'
+        {
+          "project_info": {
+            "project_number": "000000000000",
+            "project_id": "foldervault-ci-dummy",
+            "storage_bucket": "foldervault-ci-dummy.appspot.com"
+          },
+          "client": [
+            {
+              "client_info": {
+                "mobilesdk_app_id": "1:000000000000:android:0000000000000000000000",
+                "android_client_info": { "package_name": "ch.abwesend.foldervault" }
+              },
+              "oauth_client": [],
+              "api_key": [{ "current_key": "AIzaSyDUMMY_CI_KEY_0000000000000000000000" }],
+              "services": { "appinvite_service": { "other_platform_oauth_client": [] } }
+            }
+          ],
+          "configuration_version": "1"
+        }
+        EOF

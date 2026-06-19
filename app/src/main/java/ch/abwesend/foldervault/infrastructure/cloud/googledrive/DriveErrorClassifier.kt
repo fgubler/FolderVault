@@ -14,7 +14,7 @@ internal object DriveErrorClassifier {
     fun classify(e: Throwable): CloudException {
         if (e is CloudException) return e
         if (e is GoogleJsonResponseException) {
-            val reason = e.details?.errors?.firstOrNull()?.reason?.lowercase() ?: ""
+            val reason = e.details?.errors?.firstOrNull()?.reason.orEmpty()
             return classifyByCodeAndReason(e.statusCode, reason, e)
         }
         if (e is IOException) return CloudTransientException(cause = e)
@@ -26,9 +26,9 @@ internal object DriveErrorClassifier {
             statusCode == HTTP_UNAUTHORIZED -> CloudAuthException(cause)
             statusCode == HTTP_NOT_FOUND -> CloudNotFoundException(cause = cause)
             statusCode == HTTP_TOO_MANY_REQUESTS ||
-                reason.contains("ratelimitexceeded") ||
-                reason.contains("userratelimitexceeded") -> CloudRateLimitException(cause)
-            reason.contains("storagequotaexceeded") -> CloudQuotaExceededException(cause)
+                reason.contains("rateLimitExceeded", ignoreCase = true) ||
+                reason.contains("userRateLimitExceeded", ignoreCase = true) -> CloudRateLimitException(cause)
+            reason.contains("storageQuotaExceeded", ignoreCase = true) -> CloudQuotaExceededException(cause)
             statusCode in HTTP_SERVER_ERROR_RANGE -> CloudTransientException(cause = cause)
             else -> CloudTransientException(cause = cause)
         }

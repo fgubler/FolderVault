@@ -4,6 +4,7 @@ import android.content.Context
 import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.backup.CloudManifest
 import ch.abwesend.foldervault.domain.backup.ManifestEntry
+import ch.abwesend.foldervault.domain.cloud.CloudAuthException
 import ch.abwesend.foldervault.domain.cloud.CloudAuthResult
 import ch.abwesend.foldervault.domain.cloud.ICloudAuthorizer
 import ch.abwesend.foldervault.domain.cloud.ICloudStorageProvider
@@ -14,6 +15,8 @@ import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.model.BackupRunStatus
 import ch.abwesend.foldervault.domain.model.MessageSeverity
 import ch.abwesend.foldervault.domain.model.MessageType
+import ch.abwesend.foldervault.domain.result.BinaryResult
+import ch.abwesend.foldervault.domain.result.ErrorResult
 import ch.abwesend.foldervault.domain.result.SuccessResult
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupConfigDao
@@ -198,13 +201,43 @@ class BackupRunner(
             files = entries,
         )
         val json = Json.encodeToString(manifest)
-        val writeResult = cloudProvider.writeRootMetadata(
+        val bytes = json.toByteArray(Charsets.UTF_8)
+        val writeResult = writeRootMetadataWithReAuth(
+            cloudProvider,
             config.cloudRootFolderId,
             CloudManifest.CLOUD_FILE_NAME,
-            json.toByteArray(Charsets.UTF_8),
+            bytes,
         )
         if (writeResult !is SuccessResult) {
             log.warning("Failed to write cloud manifest for config $configId")
+        }
+    }
+
+    /**
+     * Writes root metadata, silently re-authorizing once on [CloudAuthException].
+     *
+     * Long-running pipelines can outlive the access token. The provider's retry policy only
+     * covers transient/rate-limit errors, not auth — so on auth failure we re-authorize via
+     * [authorizer] and re-issue the write through the refreshed provider, matching the
+     * pattern in `BackupUploader.handleAuthError`.
+     */
+    private suspend fun writeRootMetadataWithReAuth(
+        cloudProvider: ICloudStorageProvider,
+        rootFolderId: String,
+        name: String,
+        bytes: ByteArray,
+    ): BinaryResult<Unit, Exception> {
+        val first = cloudProvider.writeRootMetadata(rootFolderId, name, bytes)
+        val authExpired = first is ErrorResult && first.error is CloudAuthException
+        return if (authExpired) {
+            val reAuth = authorizer.authorize()
+            if (reAuth is CloudAuthResult.Authorized) {
+                reAuth.data.writeRootMetadata(rootFolderId, name, bytes)
+            } else {
+                first
+            }
+        } else {
+            first
         }
     }
 

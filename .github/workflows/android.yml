@@ -42,8 +42,8 @@ jobs:
       - name: Change wrapper permissions
         run: chmod +x ./gradlew
 
-      - name: Run Linting
-        run: ./gradlew ktlintCheck --continue
+      - name: Run Static Analysis
+        run: ./gradlew detekt --continue
 
       - name: Run gradle tests
         run: ./gradlew test

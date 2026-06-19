@@ -32,7 +32,7 @@ googleHttpClientGson = "1.45.0"         # HTTP transport (pin to avoid version d
 credentials = "1.5.0"                   # CredentialManager
 
 # ── Firebase ─────────────────────────────────────────────────────────────────
-firebaseBom = "33.9.0"                  # governs crashlytics + analytics versions
+firebaseBom = "34.15.0"                  # governs crashlytics + analytics versions
 
 # ── Quality / analysis ───────────────────────────────────────────────────────
 detekt = "1.23.8"
@@ -109,8 +109,8 @@ androidx-credentials-play-services-auth = { group = "androidx.credentials", name
 
 # ── Firebase ──────────────────────────────────────────────────────────────────
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
-firebase-crashlytics-ktx = { group = "com.google.firebase", name = "firebase-crashlytics-ktx" }
-firebase-analytics-ktx = { group = "com.google.firebase", name = "firebase-analytics-ktx" }
+firebase-crashlytics = { group = "com.google.firebase", name = "firebase-crashlytics" }
+firebase-analytics = { group = "com.google.firebase", name = "firebase-analytics" }
 
 # ── Quality ───────────────────────────────────────────────────────────────────
 detekt-formatting = { group = "io.gitlab.arturbosch.detekt", name = "detekt-formatting", version.ref = "detekt" }

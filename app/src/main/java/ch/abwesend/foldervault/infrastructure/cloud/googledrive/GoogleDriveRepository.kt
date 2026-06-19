@@ -135,25 +135,27 @@ class GoogleDriveRepository(private val drive: Drive) : ICloudStorageProvider {
     override suspend fun listChildren(folderId: String): BinaryResult<List<CloudEntry>, Exception> =
         withContext(dispatchers.io) {
             runCatchingAsResult {
-                buildList {
-                    var pageToken: String? = null
-                    do {
-                        val result = retryingDriveCall {
-                            drive.files().list()
-                                .setQ("'$folderId' in parents and trashed = false")
+                retryingDriveCall {
+                    val escapedFolderId = escapeDriveQueryLiteral(folderId)
+                    val query = "'$escapedFolderId' in parents and trashed = false"
+                    buildList {
+                        var pageToken: String? = null
+                        do {
+                            val result = drive.files().list()
+                                .setQ(query)
                                 .setFields("nextPageToken, files(id, name, mimeType)")
                                 .setSpaces("drive")
                                 .apply { if (pageToken != null) this.pageToken = pageToken }
                                 .execute()
-                        }
-                        result.files.orEmpty().forEach { file ->
-                            val id = file.id ?: return@forEach
-                            val name = file.name ?: return@forEach
-                            if (file.mimeType == FOLDER_MIME_TYPE) add(CloudFolder(id, name))
-                            else add(CloudFile(id, name))
-                        }
-                        pageToken = result.nextPageToken
-                    } while (pageToken != null)
+                            result.files.orEmpty().forEach { file ->
+                                val id = file.id ?: return@forEach
+                                val name = file.name ?: return@forEach
+                                if (file.mimeType == FOLDER_MIME_TYPE) add(CloudFolder(id, name))
+                                else add(CloudFile(id, name))
+                            }
+                            pageToken = result.nextPageToken
+                        } while (pageToken != null)
+                    }
                 }
             }
         }
@@ -190,7 +192,9 @@ class GoogleDriveRepository(private val drive: Drive) : ICloudStorageProvider {
         withContext(dispatchers.io) {
             runCatchingAsResult {
                 retryingDriveCall {
-                    val query = "'$rootFolderId' in parents and name = '$name' and trashed = false"
+                    val escapedRootFolderId = escapeDriveQueryLiteral(rootFolderId)
+                    val escapedName = escapeDriveQueryLiteral(name)
+                    val query = "'$escapedRootFolderId' in parents and name = '$escapedName' and trashed = false"
                     val file = drive.files().list()
                         .setQ(query).setFields("files(id)").setSpaces("drive")
                         .execute().files.orEmpty().firstOrNull()
@@ -208,7 +212,9 @@ class GoogleDriveRepository(private val drive: Drive) : ICloudStorageProvider {
         withContext(dispatchers.io) {
             runCatchingAsResult {
                 retryingDriveCall {
-                    val query = "'$rootFolderId' in parents and name = '$name' and trashed = false"
+                    val escapedRootFolderId = escapeDriveQueryLiteral(rootFolderId)
+                    val escapedName = escapeDriveQueryLiteral(name)
+                    val query = "'$escapedRootFolderId' in parents and name = '$escapedName' and trashed = false"
                     val existing = drive.files().list()
                         .setQ(query).setFields("files(id)").setSpaces("drive")
                         .execute().files.orEmpty().firstOrNull()

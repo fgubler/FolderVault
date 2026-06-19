@@ -1,4 +1,4 @@
-package ch.abwesend.folderVault.infrastructure.backup
+package ch.abwesend.foldervault.infrastructure.backup
 
 import android.app.Application
 import androidx.room.Room

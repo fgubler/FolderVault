@@ -1,4 +1,4 @@
-package ch.abwesend.folderVault.infrastructure.backup
+package ch.abwesend.foldervault.infrastructure.backup
 
 import android.content.ContentResolver
 import android.content.Context
@@ -20,12 +20,6 @@ import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.model.RetentionPolicy
 import ch.abwesend.foldervault.domain.result.ErrorResult
 import ch.abwesend.foldervault.domain.result.SuccessResult
-import ch.abwesend.foldervault.infrastructure.backup.BackupUploader
-import ch.abwesend.foldervault.infrastructure.backup.FolderPathCache
-import ch.abwesend.foldervault.infrastructure.backup.RunSummary
-import ch.abwesend.foldervault.infrastructure.backup.UploadMode
-import ch.abwesend.foldervault.infrastructure.backup.UploadTask
-import ch.abwesend.foldervault.infrastructure.backup.UploadTier
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupMessageDao
 import ch.abwesend.foldervault.infrastructure.room.dao.UploadedFileIndexDao
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupConfigEntity

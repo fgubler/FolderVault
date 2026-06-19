@@ -1,6 +1,5 @@
-package ch.abwesend.folderVault.infrastructure.backup
+package ch.abwesend.foldervault.infrastructure.backup
 
-import ch.abwesend.foldervault.infrastructure.backup.ChangeDetector
 import ch.abwesend.foldervault.infrastructure.backup.ChangeDetector.Decision
 import ch.abwesend.foldervault.infrastructure.room.entity.UploadedFileIndexEntity
 import io.kotest.core.spec.IsolationMode

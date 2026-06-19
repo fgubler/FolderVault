@@ -1,4 +1,4 @@
-package ch.abwesend.folderVault.infrastructure.backup
+package ch.abwesend.foldervault.infrastructure.backup
 
 import android.app.Application
 import androidx.test.platform.app.InstrumentationRegistry
@@ -12,9 +12,6 @@ import ch.abwesend.foldervault.domain.model.MessageSeverity
 import ch.abwesend.foldervault.domain.model.MessageType
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.model.RetentionPolicy
-import ch.abwesend.foldervault.infrastructure.backup.BackupNotificationManager
-import ch.abwesend.foldervault.infrastructure.backup.BackupRunner
-import ch.abwesend.foldervault.infrastructure.backup.BackupWorker
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupConfigDao
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupMessageDao
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupConfigEntity

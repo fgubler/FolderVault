@@ -541,7 +541,7 @@ The setting was labelled as a hard cap. Re-word it so the user understands the n
 
 ### 6.5 Update tests
 **Files**:
-- `app/src/test/java/ch/abwesend/folderVault/infrastructure/backup/...` — the Tier 1.5 test that asserted `FILE_TOO_LARGE` is emitted when a single oversized task is enqueued must be replaced.
+- `app/src/test/java/ch/abwesend/foldervault/infrastructure/backup/...` — the Tier 1.5 test that asserted `FILE_TOO_LARGE` is emitted when a single oversized task is enqueued must be replaced.
 
 New test cases:
 - "Oversized task enqueued, time budget not hit → `uploadOne` is called for it and the file is uploaded; `summary.oversizedUploaded` incremented; no `FILE_TOO_LARGE` message emitted."

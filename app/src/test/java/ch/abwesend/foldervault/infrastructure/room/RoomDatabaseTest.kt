@@ -1,4 +1,4 @@
-package ch.abwesend.folderVault.infrastructure.room
+package ch.abwesend.foldervault.infrastructure.room
 
 import android.app.Application
 import androidx.room.Room
@@ -10,7 +10,6 @@ import ch.abwesend.foldervault.domain.model.MessageSeverity
 import ch.abwesend.foldervault.domain.model.MessageType
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.model.RetentionPolicy
-import ch.abwesend.foldervault.infrastructure.room.FolderVaultDatabase
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupConfigEntity
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupMessageEntity
 import ch.abwesend.foldervault.infrastructure.room.entity.UploadedFileIndexEntity

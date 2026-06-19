@@ -1,6 +1,5 @@
-package ch.abwesend.folderVault.domain.logging
+package ch.abwesend.foldervault.domain.logging
 
-import ch.abwesend.foldervault.domain.logging.FileNameRedactor
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.shouldBe
 

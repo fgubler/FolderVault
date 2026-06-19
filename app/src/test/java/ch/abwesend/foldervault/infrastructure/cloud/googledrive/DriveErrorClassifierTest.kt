@@ -1,11 +1,10 @@
-package ch.abwesend.folderVault.infrastructure.cloud.googledrive
+package ch.abwesend.foldervault.infrastructure.cloud.googledrive
 
 import ch.abwesend.foldervault.domain.cloud.CloudAuthException
 import ch.abwesend.foldervault.domain.cloud.CloudNotFoundException
 import ch.abwesend.foldervault.domain.cloud.CloudQuotaExceededException
 import ch.abwesend.foldervault.domain.cloud.CloudRateLimitException
 import ch.abwesend.foldervault.domain.cloud.CloudTransientException
-import ch.abwesend.foldervault.infrastructure.cloud.googledrive.DriveErrorClassifier
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.types.shouldBeInstanceOf
 import java.io.IOException

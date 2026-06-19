@@ -1,4 +1,4 @@
-package ch.abwesend.folderVault.infrastructure.crypto
+package ch.abwesend.foldervault.infrastructure.crypto
 
 import ch.abwesend.foldervault.domain.crypto.DecryptionError
 import ch.abwesend.foldervault.domain.crypto.Fvc1Header
@@ -6,7 +6,6 @@ import ch.abwesend.foldervault.domain.result.BinaryResult
 import ch.abwesend.foldervault.domain.result.ErrorResult
 import ch.abwesend.foldervault.domain.result.SuccessResult
 import ch.abwesend.foldervault.domain.result.mapValue
-import ch.abwesend.foldervault.infrastructure.crypto.Fvc1Cipher
 import io.kotest.core.spec.IsolationMode
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.shouldBe

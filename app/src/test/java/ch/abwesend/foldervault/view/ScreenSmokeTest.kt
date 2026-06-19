@@ -1,4 +1,4 @@
-package ch.abwesend.folderVault.view
+package ch.abwesend.foldervault.view
 
 import android.app.Application
 import androidx.compose.ui.test.assertIsDisplayed

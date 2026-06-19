@@ -1,4 +1,4 @@
-package ch.abwesend.folderVault.architecture
+package ch.abwesend.foldervault.architecture
 
 import com.lemonappdev.konsist.api.Konsist
 import io.kotest.core.spec.style.FunSpec

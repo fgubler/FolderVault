@@ -1,6 +1,5 @@
-package ch.abwesend.folderVault.infrastructure.cloud.googledrive
+package ch.abwesend.foldervault.infrastructure.cloud.googledrive
 
-import ch.abwesend.foldervault.infrastructure.cloud.googledrive.GoogleDriveRepository
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.shouldBe
 

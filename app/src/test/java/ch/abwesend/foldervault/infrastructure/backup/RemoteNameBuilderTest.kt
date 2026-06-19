@@ -1,7 +1,5 @@
-package ch.abwesend.folderVault.infrastructure.backup
+package ch.abwesend.foldervault.infrastructure.backup
 
-import ch.abwesend.foldervault.infrastructure.backup.RemoteNameBuilder
-import ch.abwesend.foldervault.infrastructure.backup.UploadMode
 import io.kotest.core.spec.IsolationMode
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.shouldBe

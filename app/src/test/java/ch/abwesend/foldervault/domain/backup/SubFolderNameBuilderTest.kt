@@ -1,6 +1,5 @@
-package ch.abwesend.folderVault.domain.backup
+package ch.abwesend.foldervault.domain.backup
 
-import ch.abwesend.foldervault.domain.backup.SubFolderNameBuilder
 import io.kotest.core.spec.IsolationMode
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.shouldBe

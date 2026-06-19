@@ -1,4 +1,4 @@
-package ch.abwesend.folderVault.domain
+package ch.abwesend.foldervault.domain
 
 import ch.abwesend.foldervault.domain.model.RetentionPolicy
 import io.kotest.assertions.throwables.shouldThrow

@@ -1,4 +1,4 @@
-package ch.abwesend.folderVault.architecture
+package ch.abwesend.foldervault.architecture
 
 import com.lemonappdev.konsist.api.Konsist
 import com.lemonappdev.konsist.api.verify.assertTrue

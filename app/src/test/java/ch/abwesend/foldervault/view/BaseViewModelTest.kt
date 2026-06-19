@@ -1,4 +1,4 @@
-package ch.abwesend.folderVault.view
+package ch.abwesend.foldervault.view
 
 import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.logging.ILogger

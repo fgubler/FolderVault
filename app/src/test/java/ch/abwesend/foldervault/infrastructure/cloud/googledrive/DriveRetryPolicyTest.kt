@@ -1,6 +1,6 @@
 @file:Suppress("NoUnusedImports") // runTest is needed: DriveRetryPolicy.withRetry uses delay()
 
-package ch.abwesend.folderVault.infrastructure.cloud.googledrive
+package ch.abwesend.foldervault.infrastructure.cloud.googledrive
 
 import ch.abwesend.foldervault.domain.cloud.CloudAuthException
 import ch.abwesend.foldervault.domain.cloud.CloudRateLimitException

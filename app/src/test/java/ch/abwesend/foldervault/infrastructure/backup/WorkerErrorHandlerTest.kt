@@ -1,7 +1,6 @@
-package ch.abwesend.folderVault.infrastructure.backup
+package ch.abwesend.foldervault.infrastructure.backup
 
 import androidx.work.ListenableWorker.Result
-import ch.abwesend.foldervault.infrastructure.backup.WorkerErrorHandler
 import io.kotest.core.spec.IsolationMode
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.shouldBe

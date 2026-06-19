@@ -1,7 +1,6 @@
-package ch.abwesend.folderVault.infrastructure.backup
+package ch.abwesend.foldervault.infrastructure.backup
 
 import ch.abwesend.foldervault.domain.model.MessageType
-import ch.abwesend.foldervault.infrastructure.backup.BackupNotificationManager
 import ch.abwesend.foldervault.infrastructure.room.entity.NotificationThrottleStateEntity
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.shouldBe

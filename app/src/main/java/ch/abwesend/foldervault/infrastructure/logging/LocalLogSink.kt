@@ -8,13 +8,19 @@ import java.time.Clock
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 internal class LocalLogSink(
     context: Context,
     private val clock: Clock = Clock.systemDefaultZone(),
+    private val appendAsync: ((String) -> Unit)? = null,
 ) : LogSink {
     private val logFiles = LocalLogFiles(context, clock)
     private val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS")
+    private val asyncScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun debug(tag: String, message: String) {
         Log.d(tag, message)
@@ -51,7 +57,15 @@ internal class LocalLogSink(
                 append(error.asStackTrace())
             }
         }
-        logFiles.append(entry)
+        runCatching { (appendAsync ?: ::appendToFileAsync)(entry) }
+            .onFailure { Log.e("LocalLogSink", "Failed to dispatch local logfile append", it) }
+    }
+
+    private fun appendToFileAsync(entry: String) {
+        asyncScope.launch {
+            runCatching { logFiles.append(entry) }
+                .onFailure { Log.e("LocalLogSink", "Failed to append local logfile entry asynchronously", it) }
+        }
     }
 
     private fun Throwable.asStackTrace(): String {

@@ -26,6 +26,7 @@ import ch.abwesend.foldervault.infrastructure.room.dao.BackupMessageDao
 import ch.abwesend.foldervault.infrastructure.room.dao.UploadedFileIndexDao
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupConfigEntity
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupMessageEntity
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
@@ -142,6 +143,11 @@ class BackupRunner(
             // cloud connection is still usable.
             if (!summary.authLost) retention.reapPendingDeletions(config.id)
             if (!summary.authLost) writeManifest(configId, cloudProvider)
+        } catch (e: CancellationException) {
+            // Worker cancellation (timeout, constraints lost, user action) is expected — honor
+            // structured concurrency and propagate, so it isn't recorded as a Crashlytics fatal.
+            log.warning("BackupRunner cancelled for config $configId")
+            throw e
         } catch (e: Exception) {
             log.error("BackupRunner encountered a fatal error for config $configId", e)
             commitRunStats(

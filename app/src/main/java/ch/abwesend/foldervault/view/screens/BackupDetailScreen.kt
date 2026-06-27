@@ -91,6 +91,7 @@ fun BackupDetailScreen(
     val passwordCheckResult by viewModel.passwordCheckResult.collectAsState()
     val isRunning by viewModel.isRunning.collectAsState()
     val unexpectedError by viewModel.unexpectedError.collectAsState()
+    val showMeteredOverridePrompt by viewModel.showMeteredOverridePrompt.collectAsState()
     val currentOnDelete by rememberUpdatedState(onDelete)
 
     UnexpectedErrorDialog(error = unexpectedError, onDismiss = viewModel::dismissUnexpectedError)
@@ -104,26 +105,24 @@ fun BackupDetailScreen(
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showPasswordDialog by remember { mutableStateOf(false) }
 
-    if (showDeleteDialog) {
-        DeleteConfirmDialog(
-            onConfirm = {
-                showDeleteDialog = false
-                viewModel.deleteBackup()
-            },
-            onDismiss = { showDeleteDialog = false },
-        )
-    }
-
-    if (showPasswordDialog) {
-        CheckPasswordDialog(
-            result = passwordCheckResult,
-            onCheck = viewModel::checkPassword,
-            onDismiss = {
-                showPasswordDialog = false
-                viewModel.clearPasswordCheckResult()
-            },
-        )
-    }
+    BackupDetailDialogs(
+        showDeleteDialog = showDeleteDialog,
+        showPasswordDialog = showPasswordDialog,
+        showMeteredOverridePrompt = showMeteredOverridePrompt,
+        passwordCheckResult = passwordCheckResult,
+        onDeleteConfirm = {
+            showDeleteDialog = false
+            viewModel.deleteBackup()
+        },
+        onDeleteDismiss = { showDeleteDialog = false },
+        onCheckPassword = viewModel::checkPassword,
+        onPasswordDismiss = {
+            showPasswordDialog = false
+            viewModel.clearPasswordCheckResult()
+        },
+        onMeteredOverrideConfirm = viewModel::confirmMeteredOverride,
+        onMeteredOverrideDismiss = viewModel::dismissMeteredOverride,
+    )
 
     Scaffold(
         modifier = modifier,
@@ -447,6 +446,55 @@ private fun MessageItem(
             }
         }
     }
+}
+
+@Suppress("LongParameterList")
+@Composable
+private fun BackupDetailDialogs(
+    showDeleteDialog: Boolean,
+    showPasswordDialog: Boolean,
+    showMeteredOverridePrompt: Boolean,
+    passwordCheckResult: Boolean?,
+    onDeleteConfirm: () -> Unit,
+    onDeleteDismiss: () -> Unit,
+    onCheckPassword: (String) -> Unit,
+    onPasswordDismiss: () -> Unit,
+    onMeteredOverrideConfirm: () -> Unit,
+    onMeteredOverrideDismiss: () -> Unit,
+) {
+    if (showDeleteDialog) {
+        DeleteConfirmDialog(onConfirm = onDeleteConfirm, onDismiss = onDeleteDismiss)
+    }
+    if (showPasswordDialog) {
+        CheckPasswordDialog(
+            result = passwordCheckResult,
+            onCheck = onCheckPassword,
+            onDismiss = onPasswordDismiss,
+        )
+    }
+    if (showMeteredOverridePrompt) {
+        MeteredOverrideDialog(
+            onConfirm = onMeteredOverrideConfirm,
+            onDismiss = onMeteredOverrideDismiss,
+        )
+    }
+}
+
+@Composable
+private fun MeteredOverrideDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.dialog_metered_override_title)) },
+        text = { Text(stringResource(R.string.dialog_metered_override_body)) },
+        confirmButton = {
+            Button(onClick = onConfirm) {
+                Text(stringResource(R.string.button_back_up_anyway))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.button_cancel)) }
+        },
+    )
 }
 
 @Composable

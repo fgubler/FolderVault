@@ -8,6 +8,8 @@ import ch.abwesend.foldervault.domain.backup.IBackupMessageRepository
 import ch.abwesend.foldervault.domain.backup.IBackupScheduler
 import ch.abwesend.foldervault.domain.crypto.IEncryptionRepository
 import ch.abwesend.foldervault.domain.model.MessageSeverity
+import ch.abwesend.foldervault.domain.model.NetworkPolicy
+import ch.abwesend.foldervault.domain.network.INetworkConnectivityChecker
 import ch.abwesend.foldervault.domain.result.SuccessResult
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -31,6 +33,7 @@ class BackupDetailViewModel(
     private val scheduler: IBackupScheduler,
     private val encryptionRepo: IEncryptionRepository,
     private val settingsRepo: IAppSettingsRepository,
+    private val connectivityChecker: INetworkConnectivityChecker,
 ) : BaseViewModel() {
 
     val config: StateFlow<BackupConfig?> = configRepo.getById(configId)
@@ -53,10 +56,43 @@ class BackupDetailViewModel(
     private val _events = MutableSharedFlow<DetailEvent>()
     val events: SharedFlow<DetailEvent> = _events.asSharedFlow()
 
+    /**
+     * Emits `true` when the user tapped "Back up now" on a Wi-Fi-only config while the device
+     * is on a metered network — the screen shows a confirmation dialog so the user can either
+     * cancel or allow this single run on mobile data.
+     */
+    private val _showMeteredOverridePrompt = MutableStateFlow(false)
+    val showMeteredOverridePrompt: StateFlow<Boolean> = _showMeteredOverridePrompt.asStateFlow()
+
+    /**
+     * Triggered by the "Back up now" button. If the config is Wi-Fi-only and the device is
+     * currently on a metered (non-Wi-Fi) network, exposes a confirmation prompt instead of
+     * scheduling immediately — otherwise enqueues a one-time run constrained to the configured
+     * network policy.
+     */
     fun backUpNow() {
-        if (config.value?.isPaused != true && !isRunning.value) {
-            scheduler.scheduleOneTime(configId)
+        val current = config.value
+        if (current != null && !current.isPaused && !isRunning.value) {
+            val needsWifi = current.networkPolicy == NetworkPolicy.WIFI_ONLY
+            if (needsWifi && !connectivityChecker.isOnUnmeteredNetwork()) {
+                _showMeteredOverridePrompt.value = true
+            } else {
+                scheduler.scheduleOneTime(configId, current.networkPolicy)
+            }
         }
+    }
+
+    /** Confirms the warning — schedules the run with no Wi-Fi requirement for this one time. */
+    fun confirmMeteredOverride() {
+        _showMeteredOverridePrompt.value = false
+        if (config.value?.isPaused != true && !isRunning.value) {
+            scheduler.scheduleOneTime(configId, NetworkPolicy.ANY)
+        }
+    }
+
+    /** Dismisses the warning without starting a backup. */
+    fun dismissMeteredOverride() {
+        _showMeteredOverridePrompt.value = false
     }
 
     fun togglePause() = safeLaunch {

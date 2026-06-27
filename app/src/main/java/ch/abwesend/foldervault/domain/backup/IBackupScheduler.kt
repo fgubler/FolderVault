@@ -5,7 +5,12 @@ import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import kotlinx.coroutines.flow.Flow
 
 interface IBackupScheduler {
-    fun scheduleOneTime(configId: String)
+    /**
+     * Enqueues a one-time backup run for [configId]. [networkPolicy] is applied as a
+     * WorkManager constraint for this run only — pass [NetworkPolicy.ANY] to allow the
+     * user to override a config's Wi-Fi-only setting for a single manual run.
+     */
+    fun scheduleOneTime(configId: String, networkPolicy: NetworkPolicy)
     fun schedulePeriodicIfNeeded(
         configId: String,
         schedule: BackupSchedule,

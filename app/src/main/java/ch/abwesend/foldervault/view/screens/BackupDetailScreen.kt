@@ -49,6 +49,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -72,9 +73,21 @@ import ch.abwesend.foldervault.view.viewmodel.BackupDetailViewModel
 import ch.abwesend.foldervault.view.viewmodel.DetailEvent
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
+import java.util.Locale
 
 private const val MS_PER_MINUTE = 60_000L
 private const val CLOUD_FOLDER_WIDTH_FRACTION = 0.75f
+
+private fun formatMessageTimestamp(epochMillis: Long, locale: Locale): String {
+    val formatter = DateTimeFormatter
+        .ofLocalizedDateTime(FormatStyle.MEDIUM)
+        .withLocale(locale)
+    return formatter.format(Instant.ofEpochMilli(epochMillis).atZone(ZoneId.systemDefault()))
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -417,13 +430,19 @@ private fun MessageItem(
         ),
         border = BorderStroke(1.dp, borderColor),
     ) {
+        val locale = LocalConfiguration.current.locales[0]
         Column(modifier = Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = stringResource(message.severity.labelResId),
                     style = MaterialTheme.typography.labelSmall,
                     color = borderColor,
-                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    text = formatMessageTimestamp(message.timestamp, locale),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f).padding(start = 8.dp),
                 )
                 if (message.count > 1) {
                     Text(

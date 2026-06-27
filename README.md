@@ -35,6 +35,21 @@ app/google-services.json
 This file is excluded from version control because it contains project-specific Firebase keys.
 Obtain it from the Firebase console under **Project settings → Your apps → google-services.json**.
 
+### macOS: Gradle JVM args
+
+On macOS, add the following line to `local.properties` so Gradle has enough heap and a writable SQLite temp directory:
+
+```
+org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8 -Djava.io.tmpdir=/Users/[username]/.gradle/tmp/java -Dorg.sqlite.tmpdir=/Users/[username]/.gradle/tmp/sqlite
+```
+
+Replace `[username]` with your macOS user name, and create the directory if it does not exist:
+
+```bash
+mkdir -p ~/.gradle/tmp/sqlite
+```
+That equivalent line in `~/.gradle/gradle.properties` needs to be adapted with these two tmpdir-paths as well.
+
 ### Build commands
 
 ```bash

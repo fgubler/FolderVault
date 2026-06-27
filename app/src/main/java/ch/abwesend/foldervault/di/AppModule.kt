@@ -9,6 +9,7 @@ import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.crypto.IEncryptionRepository
 import ch.abwesend.foldervault.domain.crypto.IFvc1Cipher
 import ch.abwesend.foldervault.domain.crypto.IKeyStoreRepository
+import ch.abwesend.foldervault.domain.logging.ILogExporter
 import ch.abwesend.foldervault.domain.logging.ITelemetryToggle
 import ch.abwesend.foldervault.domain.network.INetworkConnectivityChecker
 import ch.abwesend.foldervault.domain.restore.IRestoreEngine
@@ -61,6 +62,7 @@ val appModule = module {
     single<IAppSettingsRepository> { AppSettingsRepository(androidContext()) }
     single<ITelemetryToggle> { FirebaseTelemetryToggle(androidContext()) }
     single { LocalLogFiles(androidContext()) }
+    single<ILogExporter> { get<LocalLogFiles>() }
 
     // Backup notifications and scheduling
     single { BackupNotificationManager(androidContext(), get(), get()) }

@@ -33,6 +33,9 @@ Crashlytics confinement: ONLY `infrastructure/logging/CrashlyticsSink.kt` may im
 ## Key conventions
 - **`BinaryResult<TValue, TError>`** for any fallible operation. Use `runCatchingAsResult { }`.
 - **`IDispatchers`** injected — never hard-code `Dispatchers.IO` etc.
+- **`catch (e: Exception)`** must honor coroutine cancellation: call `e.rethrowCancellation()` first,
+  unconditionally `throw e`, or pair it with a preceding `catch (X: CancellationException)`.
+  Enforced by `CancellationRethrowArchitectureTest`.
 - **Serial uploads**: one file fully encrypted + uploaded + indexed before the next. No parallelism.
 - **Kotest** spec DSL for unit tests (e.g. `StringSpec`, `FunSpec`). Set
   `isolationMode = IsolationMode.InstancePerTest` when using MockK to get a fresh mock per test.

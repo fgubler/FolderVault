@@ -2,6 +2,21 @@ package ch.abwesend.foldervault.domain.result
 
 import kotlinx.coroutines.CancellationException
 
+/**
+ * Re-throws [this] if it is a [CancellationException], otherwise returns normally.
+ *
+ * Use as the first line of a generic `catch (e: Exception)` so worker / coroutine cancellation
+ * propagates instead of being treated as an error and (via [logger.error]) recorded in Crashlytics.
+ *
+ *     } catch (e: Exception) {
+ *         e.rethrowCancellation()
+ *         logger.warning("…", e)
+ *     }
+ */
+inline fun Exception.rethrowCancellation() {
+    if (this is CancellationException) throw this
+}
+
 inline fun <T> runCatchingAsResult(block: () -> T): BinaryResult<T, Exception> =
     try {
         SuccessResult(block())

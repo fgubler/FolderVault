@@ -16,6 +16,7 @@ import ch.abwesend.foldervault.domain.model.MessageType
 import ch.abwesend.foldervault.domain.result.BinaryResult
 import ch.abwesend.foldervault.domain.result.ErrorResult
 import ch.abwesend.foldervault.domain.result.SuccessResult
+import ch.abwesend.foldervault.domain.result.rethrowCancellation
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupMessageDao
 import ch.abwesend.foldervault.infrastructure.room.dao.UploadedFileIndexDao
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupConfigEntity
@@ -215,6 +216,7 @@ class BackupUploader(
             }
             true
         } catch (e: Exception) {
+            e.rethrowCancellation()
             log.warning("Failed to prepare local file for ${task.relativePath}", e)
             false
         }

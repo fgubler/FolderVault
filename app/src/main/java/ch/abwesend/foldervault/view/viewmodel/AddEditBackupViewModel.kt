@@ -20,6 +20,7 @@ import ch.abwesend.foldervault.domain.model.ChangedFilePolicy
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.model.RetentionPolicy
 import ch.abwesend.foldervault.domain.result.SuccessResult
+import ch.abwesend.foldervault.domain.result.rethrowCancellation
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
 import ch.abwesend.foldervault.view.util.displayNameFromUri
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -241,6 +242,7 @@ class AddEditBackupViewModel(
                 scheduler.schedulePeriodicIfNeeded(config.id, config.schedule, config.networkPolicy, globalDefault)
                 _events.emit(AddEditEvent.Saved)
             } catch (e: Exception) {
+                e.rethrowCancellation()
                 logger.error("Failed to save backup config", e)
                 updateForm {
                     it.copy(

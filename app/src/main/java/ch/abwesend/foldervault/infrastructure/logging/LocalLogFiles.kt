@@ -3,6 +3,7 @@ package ch.abwesend.foldervault.infrastructure.logging
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import ch.abwesend.foldervault.domain.result.rethrowCancellation
 import java.io.File
 import java.time.Clock
 import java.time.LocalDate
@@ -26,6 +27,7 @@ internal class LocalLogFiles(
                 cleanupExpiredLogs(LocalDate.now(clock))
                 todayLogFile().appendText("$entry\n")
             } catch (e: Exception) {
+                e.rethrowCancellation()
                 Log.e("LocalLogFiles", "Failed to append local logfile entry", e)
             }
         }
@@ -42,6 +44,7 @@ internal class LocalLogFiles(
                 }
             } != null
         } catch (e: Exception) {
+            e.rethrowCancellation()
             Log.e("LocalLogFiles", "Failed to export today's logfile", e)
             false
         }

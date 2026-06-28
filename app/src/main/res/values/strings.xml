@@ -189,6 +189,9 @@
     <string name="password_correct">✓ Password is correct</string>
     <string name="password_incorrect">✗ Password is incorrect</string>
     <string name="button_check">Check</string>
+    <string name="button_back_up_anyway">Back up anyway</string>
+    <string name="dialog_metered_override_title">You\'re not on Wi-Fi</string>
+    <string name="dialog_metered_override_body">This backup is set to run on Wi-Fi only, but your phone isn\'t currently connected to Wi-Fi. Backing up now will use mobile data.</string>
 
     <!-- Settings screen -->
     <string name="settings_title">Settings</string>

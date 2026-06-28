@@ -4,6 +4,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import ch.abwesend.foldervault.domain.crypto.IKeyStoreRepository
 import ch.abwesend.foldervault.domain.logging.logger
+import ch.abwesend.foldervault.domain.result.rethrowCancellation
 import java.security.KeyStore
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -43,6 +44,7 @@ class AndroidKeyStoreRepository : IKeyStoreRepository {
         }
         true
     } catch (e: Exception) {
+        e.rethrowCancellation()
         logger.warning("Failed to delete KeyStore key", e)
         false
     }

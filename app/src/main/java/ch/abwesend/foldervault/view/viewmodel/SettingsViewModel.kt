@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.lifecycle.viewModelScope
 import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
+import ch.abwesend.foldervault.domain.logging.ILogExporter
 import ch.abwesend.foldervault.domain.logging.ITelemetryToggle
 import ch.abwesend.foldervault.domain.model.AppSettings
 import ch.abwesend.foldervault.domain.model.AppTheme
@@ -11,7 +12,6 @@ import ch.abwesend.foldervault.domain.model.BackupSchedule
 import ch.abwesend.foldervault.domain.model.ChangedFilePolicy
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
-import ch.abwesend.foldervault.infrastructure.logging.LocalLogFiles
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -22,7 +22,7 @@ import kotlinx.coroutines.withContext
 internal class SettingsViewModel(
     private val settingsRepo: IAppSettingsRepository,
     private val telemetryToggle: ITelemetryToggle,
-    private val logFiles: LocalLogFiles,
+    private val logExporter: ILogExporter,
     private val dispatchers: IDispatchers,
 ) : BaseViewModel() {
 
@@ -58,7 +58,7 @@ internal class SettingsViewModel(
 
     fun exportTodayLogFile(uri: Uri) {
         safeLaunch {
-            val exported = withContext(dispatchers.io) { logFiles.exportTodayLog(uri) }
+            val exported = withContext(dispatchers.io) { logExporter.exportTodayLog(uri.toString()) }
             _exportResult.value = UiText.Resource(
                 if (exported) R.string.export_log_success else R.string.export_log_failed,
             )

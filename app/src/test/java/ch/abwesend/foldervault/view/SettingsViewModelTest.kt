@@ -1,12 +1,12 @@
 package ch.abwesend.foldervault.view
 
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
+import ch.abwesend.foldervault.domain.logging.ILogExporter
 import ch.abwesend.foldervault.domain.logging.ILogger
 import ch.abwesend.foldervault.domain.logging.ITelemetryToggle
 import ch.abwesend.foldervault.domain.logging.LoggerProvider
 import ch.abwesend.foldervault.domain.model.AppSettings
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
-import ch.abwesend.foldervault.infrastructure.logging.LocalLogFiles
 import ch.abwesend.foldervault.view.viewmodel.SettingsViewModel
 import io.kotest.core.spec.IsolationMode
 import io.kotest.core.spec.style.StringSpec
@@ -56,7 +56,7 @@ class SettingsViewModelTest : StringSpec({
         override val main = testDispatcher
         override val mainImmediate = testDispatcher
     }
-    val logFiles = mockk<LocalLogFiles>(relaxed = true)
+    val logFiles = mockk<ILogExporter>(relaxed = true)
 
     "setAnonymousErrorReports(true) calls telemetry toggle with true before persisting" {
         val toggle = FakeTelemetryToggle()

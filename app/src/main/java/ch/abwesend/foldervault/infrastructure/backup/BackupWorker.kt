@@ -61,9 +61,11 @@ class BackupWorker(
             when (result) {
                 is RunResult.Success -> {
                     if (result.summary.hitTimeBudget) {
-                        // Made progress but ran out of time — re-enqueue for the next slot
+                        // Made progress but ran out of time — re-enqueue for the next slot.
+                        // Reuse the config's network policy so a Wi-Fi-only backup never spills
+                        // over onto mobile data on the continuation run.
                         logger.info("Run hit time budget with progress; re-enqueueing for config $id")
-                        BackupScheduler(applicationContext).scheduleOneTime(id)
+                        BackupScheduler(applicationContext).scheduleOneTime(id, config.networkPolicy)
                         Result.success() // not retry() — we don't want backoff accumulation
                     } else {
                         notificationManager.clearResolvedThrottles(id)

@@ -12,6 +12,7 @@ import ch.abwesend.foldervault.domain.restore.RestoreProgress
 import ch.abwesend.foldervault.domain.restore.RestoreResult
 import ch.abwesend.foldervault.domain.restore.RestoreScanResult
 import ch.abwesend.foldervault.domain.result.SuccessResult
+import ch.abwesend.foldervault.domain.result.rethrowCancellation
 import ch.abwesend.foldervault.infrastructure.storage.ScopedStorageHelper
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
@@ -110,6 +111,7 @@ class RestoreEngine(
         try {
             context.contentResolver.openInputStream(source.uri)?.use(block) ?: false
         } catch (e: Exception) {
+            e.rethrowCancellation()
             logger.warning("Failed to open input stream for ${source.name}", e)
             false
         }
@@ -126,6 +128,7 @@ class RestoreEngine(
                 } ?: false
             } ?: false
         } catch (e: Exception) {
+            e.rethrowCancellation()
             logger.warning("Failed to open streams while restoring ${source.name}", e)
             false
         }

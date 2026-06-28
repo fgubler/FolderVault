@@ -68,9 +68,10 @@ class BackupScheduler(private val context: Context) : IBackupScheduler {
     }
 
     /** Enqueues a one-time "back up now" run; replaces any already-queued one-time run. */
-    override fun scheduleOneTime(configId: String) {
+    override fun scheduleOneTime(configId: String, networkPolicy: NetworkPolicy) {
         try {
             val request = OneTimeWorkRequestBuilder<BackupWorker>()
+                .setConstraints(buildConstraints(networkPolicy))
                 .setInputData(workDataOf(BackupWorker.KEY_CONFIG_ID to configId))
                 .build()
             workManager.enqueueUniqueWork(

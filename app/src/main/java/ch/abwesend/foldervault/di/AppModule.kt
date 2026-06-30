@@ -2,6 +2,7 @@ package ch.abwesend.foldervault.di
 
 import ch.abwesend.foldervault.domain.backup.IBackupConfigRepository
 import ch.abwesend.foldervault.domain.backup.IBackupMessageRepository
+import ch.abwesend.foldervault.domain.backup.IBackupRunRepository
 import ch.abwesend.foldervault.domain.backup.IBackupScheduler
 import ch.abwesend.foldervault.domain.cloud.ICloudAuthorizer
 import ch.abwesend.foldervault.domain.coroutine.AppDispatchers
@@ -17,6 +18,7 @@ import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
 import ch.abwesend.foldervault.infrastructure.backup.BackupConfigRepository
 import ch.abwesend.foldervault.infrastructure.backup.BackupMessageRepository
 import ch.abwesend.foldervault.infrastructure.backup.BackupNotificationManager
+import ch.abwesend.foldervault.infrastructure.backup.BackupRunRepository
 import ch.abwesend.foldervault.infrastructure.backup.BackupRunner
 import ch.abwesend.foldervault.infrastructure.backup.BackupScheduler
 import ch.abwesend.foldervault.infrastructure.cloud.googledrive.GoogleDriveAuthorizationRepository
@@ -31,6 +33,7 @@ import ch.abwesend.foldervault.infrastructure.room.FolderVaultDatabase
 import ch.abwesend.foldervault.infrastructure.settings.AppSettingsRepository
 import ch.abwesend.foldervault.view.viewmodel.AddEditBackupViewModel
 import ch.abwesend.foldervault.view.viewmodel.BackupDetailViewModel
+import ch.abwesend.foldervault.view.viewmodel.BackupRunHistoryViewModel
 import ch.abwesend.foldervault.view.viewmodel.HomeViewModel
 import ch.abwesend.foldervault.view.viewmodel.OnboardingViewModel
 import ch.abwesend.foldervault.view.viewmodel.RestoreViewModel
@@ -51,11 +54,13 @@ val appModule = module {
     single { get<FolderVaultDatabase>().backupConfigDao() }
     single { get<FolderVaultDatabase>().uploadedFileIndexDao() }
     single { get<FolderVaultDatabase>().backupMessageDao() }
+    single { get<FolderVaultDatabase>().backupRunDao() }
     single { get<FolderVaultDatabase>().notificationThrottleStateDao() }
 
     // Repositories
     single<IBackupConfigRepository> { BackupConfigRepository(get()) }
     single<IBackupMessageRepository> { BackupMessageRepository(get()) }
+    single<IBackupRunRepository> { BackupRunRepository(get()) }
     single<IRestoreEngine> { RestoreEngine(androidContext(), get(), get()) }
 
     // Settings
@@ -79,6 +84,7 @@ val appModule = module {
             backupConfigDao = get(),
             uploadedFileIndexDao = get(),
             backupMessageDao = get(),
+            backupRunDao = get(),
             settingsRepository = get(),
             dispatchers = get(),
         )
@@ -109,6 +115,12 @@ val appModule = module {
             encryptionRepo = get(),
             settingsRepo = get(),
             connectivityChecker = get(),
+        )
+    }
+    viewModel { params ->
+        BackupRunHistoryViewModel(
+            configId = params.get(),
+            runRepo = get(),
         )
     }
 }

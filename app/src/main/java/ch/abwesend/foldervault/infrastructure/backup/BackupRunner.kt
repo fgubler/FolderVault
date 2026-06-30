@@ -23,9 +23,11 @@ import ch.abwesend.foldervault.domain.result.runCatchingAsResult
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupConfigDao
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupMessageDao
+import ch.abwesend.foldervault.infrastructure.room.dao.BackupRunDao
 import ch.abwesend.foldervault.infrastructure.room.dao.UploadedFileIndexDao
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupConfigEntity
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupMessageEntity
+import ch.abwesend.foldervault.infrastructure.room.entity.BackupRunEntity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
@@ -53,6 +55,7 @@ class BackupRunner(
     private val backupConfigDao: BackupConfigDao,
     private val uploadedFileIndexDao: UploadedFileIndexDao,
     private val backupMessageDao: BackupMessageDao,
+    private val backupRunDao: BackupRunDao,
     private val settingsRepository: IAppSettingsRepository,
     private val dispatchers: IDispatchers,
 ) {
@@ -69,6 +72,20 @@ class BackupRunner(
             )
 
         val summary = RunSummary()
+        val startedAt = System.currentTimeMillis()
+        backupRunDao.insert(
+            BackupRunEntity(
+                backupConfigId = config.id,
+                runId = runId,
+                startedAt = startedAt,
+                completedAt = null,
+                status = BackupRunStatus.RUNNING,
+                filesUploaded = 0,
+                filesSkipped = 0,
+                filesFailed = 0,
+                bytesUploaded = 0L,
+            )
+        )
 
         // Clean up stale staging dirs from previous interrupted runs.
         // Cleanup failures must not abort the run — they only mean cache disk fills up slowly.
@@ -125,7 +142,7 @@ class BackupRunner(
                         readAt = null,
                     )
                 )
-                commitRunStats(config.id, BackupRunStatus.FAILED, summary, false)
+                commitRunStats(config.id, runId, BackupRunStatus.FAILED, summary, false)
                 return RunResult.FatalError(IllegalStateException("Failed to decrypt backup password"), summary, runId)
             }
             val (derivedKey, backupSalt) = encryptionKey
@@ -152,6 +169,7 @@ class BackupRunner(
             log.error("BackupRunner encountered a fatal error for config $configId", e)
             commitRunStats(
                 configId = config.id,
+                runId = runId,
                 status = BackupRunStatus.FAILED,
                 summary = summary,
                 completedNormally = false,
@@ -186,6 +204,7 @@ class BackupRunner(
         }
         commitRunStats(
             configId = config.id,
+            runId = runId,
             status = status,
             summary = summary,
             completedNormally = !summary.authLost && !summary.quotaExceeded && !summary.hitTimeBudget,
@@ -320,13 +339,15 @@ class BackupRunner(
 
     private suspend fun commitRunStats(
         configId: String,
+        runId: String,
         status: BackupRunStatus,
         summary: RunSummary,
         completedNormally: Boolean,
     ) {
+        val now = System.currentTimeMillis()
         backupConfigDao.updateRunStats(
             id = configId,
-            lastRunAt = System.currentTimeMillis(),
+            lastRunAt = now,
             lastRunStatus = status,
             filesUploaded = summary.filesUploaded,
             filesSkipped = summary.filesSkipped,
@@ -334,6 +355,16 @@ class BackupRunner(
             bytesUploaded = summary.bytesUploaded,
             lastRunCompletedNormally = completedNormally,
         )
+        backupRunDao.markComplete(
+            runId = runId,
+            completedAt = now,
+            status = status,
+            filesUploaded = summary.filesUploaded,
+            filesSkipped = summary.filesSkipped,
+            filesFailed = summary.filesFailed,
+            bytesUploaded = summary.bytesUploaded,
+        )
+        backupRunDao.pruneOld(configId)
         when {
             summary.hitTimeBudget -> {
                 val prev = backupConfigDao.getByIdOnce(configId)

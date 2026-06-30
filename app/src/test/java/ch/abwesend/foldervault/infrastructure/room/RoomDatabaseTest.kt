@@ -51,6 +51,7 @@ class RoomDatabaseTest {
         assertNotNull(db.backupConfigDao())
         assertNotNull(db.uploadedFileIndexDao())
         assertNotNull(db.backupMessageDao())
+        assertNotNull(db.backupRunDao())
         assertNotNull(db.notificationThrottleStateDao())
     }
 

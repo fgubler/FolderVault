@@ -96,6 +96,7 @@ fun BackupDetailScreen(
     onBack: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
+    onShowRunHistory: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: BackupDetailViewModel = koinViewModel(parameters = { parametersOf(configId) }),
 ) {
@@ -172,6 +173,7 @@ fun BackupDetailScreen(
                 onBackUpNow = viewModel::backUpNow,
                 onTogglePause = viewModel::togglePause,
                 onCheckPassword = { showPasswordDialog = true },
+                onShowRunHistory = onShowRunHistory,
                 onDismissMessage = { viewModel.dismiss(listOf(it)) },
                 onDismissAll = viewModel::dismissAll,
                 modifier = Modifier.padding(innerPadding),
@@ -190,6 +192,7 @@ private fun DetailContent(
     onBackUpNow: () -> Unit,
     onTogglePause: () -> Unit,
     onCheckPassword: () -> Unit,
+    onShowRunHistory: () -> Unit,
     onDismissMessage: (Long) -> Unit,
     onDismissAll: () -> Unit,
     modifier: Modifier = Modifier,
@@ -202,7 +205,7 @@ private fun DetailContent(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item { ConfigInfoSection(config = config) }
-        item { ActionButtonRow(config, isRunning, onBackUpNow, onTogglePause, onCheckPassword) }
+        item { ActionButtonRow(config, isRunning, onBackUpNow, onTogglePause, onCheckPassword, onShowRunHistory) }
         item { HorizontalDivider() }
         item {
             Row(
@@ -361,6 +364,7 @@ private fun CloudFolderRow(folderName: String, folderId: String) {
     }
 }
 
+@Suppress("LongParameterList")
 @Composable
 private fun ActionButtonRow(
     config: BackupConfig,
@@ -368,6 +372,7 @@ private fun ActionButtonRow(
     onBackUpNow: () -> Unit,
     onTogglePause: () -> Unit,
     onCheckPassword: () -> Unit,
+    onShowRunHistory: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
@@ -398,6 +403,9 @@ private fun ActionButtonRow(
                 )
                 Text(stringResource(if (config.isPaused) R.string.button_resume else R.string.button_pause))
             }
+        }
+        OutlinedButton(onClick = onShowRunHistory, modifier = Modifier.fillMaxWidth()) {
+            Text(stringResource(R.string.backup_run_history_button))
         }
         if (config.encryptionEnabled) {
             OutlinedButton(onClick = onCheckPassword, modifier = Modifier.fillMaxWidth()) {
@@ -636,6 +644,7 @@ private fun BackupDetailPreview() {
             onBackUpNow = {},
             onTogglePause = {},
             onCheckPassword = {},
+            onShowRunHistory = {},
             onDismissMessage = {},
             onDismissAll = {},
             onMarkRead = {},

@@ -7,6 +7,38 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-06-30 — Backup run history sub-screen
+
+### What was done
+Persistent run history for backups, surfaced as a dedicated sub-screen reached from the backup detail screen.
+
+- **Storage**: new Room entity `BackupRun` with a 1→2 migration. Per-config cap of 100 runs, pruned after each completed run. Schema v2 JSON exported under `app/schemas/`.
+- **Lifecycle hooks**: `BackupRunner` writes a `RUNNING` row at run start and updates it with `completedAt` + final status/counts via `commitRunStats(runId, …)`. Cancellation / process-death paths leave the row with `completedAt = null`, status `RUNNING` — surfaces in the UI as "in progress".
+- **UI**: new `BackupRunHistoryScreen` reached via a full-width `OutlinedButton` ("Run history") on `BackupDetailScreen`. List items mirror `MessageItem` — status-coloured border, timestamp header, file counts + duration.
+- **Per-entry fields**: startedAt, completedAt, status, filesUploaded, filesSkipped, filesFailed, bytesUploaded.
+
+### Files created
+`BackupRunEntity`, `BackupRunDao`, `BackupRun` (domain), `IBackupRunRepository`, `BackupRunRepository`, `BackupRunHistoryViewModel`, `BackupRunHistoryScreen`, `BackupRunDaoTest`.
+
+### Files modified
+`FolderVaultDatabase` (v2 + new DAO), `DatabaseMigrations` (`MIGRATION_1_2`), `BackupRunner` (insert RUNNING row + `commitRunStats(runId, …)` updates + `pruneOld`), `AppModule` (DAO + repository + VM + threaded into `BackupRunner` factory), `AppDestination` (`BackupRunHistory(configId)`), `AppNavGraph`, `BackupDetailScreen` (`onShowRunHistory` plumbed through), `strings.xml`, `RoomDatabaseTest` (smoke-asserts new DAO).
+
+### Issues resolved this session
+- macOS APFS case-flip: the test directory had drifted to `app/src/test/java/ch/abwesend/folderVault/` (capital V) while git tracks `foldervault/` (lowercase). Detekt's `InvalidPackageDeclaration` rule reads the actual on-disk casing and flagged every file under `test/`. Fixed via the two-step rename (`folderVault` → `folderVault_tmp_rename` → `foldervault`) — the same workaround used in §14.1.
+- Dropped an unused `BackupRunEntity` import from `RoomDatabaseTest.kt` (only `db.backupRunDao()` is referenced; the entity class itself is not).
+
+### Checks
+`./gradlew assembleDebug` ✓ — `./gradlew test` ✓ — `./gradlew detekt` ✓.
+Manual smoke (run history list, RUNNING vs final status, CASCADE-on-config-delete) is still pending — needs the app on a device.
+
+### Decisions carried forward
+- The early-exit fatal path in `BackupRunner` (config-not-found) is intentionally **not** logged to history — there is no row to attach it to.
+- Pruning uses the same SQL pattern as `BackupMessageDao.pruneOldestOverLimit` (DELETE … WHERE id NOT IN (SELECT id … ORDER BY startedAt DESC LIMIT 100)).
+- `BackupRunStatus.RUNNING` was already in the domain enum; reused as the in-progress sentinel rather than adding a new state.
+- `displayName` of a config is the user-visible label only; the cloud sub-folder name remains immutable (per §14.x v1 scope) and history rows are pinned to `configId`, so renames do not affect history.
+
+---
+
 ## 2026-06-19 — Idempotent Drive uploads (fix retry-induced duplicates)
 
 ### Bug

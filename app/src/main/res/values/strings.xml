@@ -172,6 +172,17 @@
     <string name="messages_header">Messages</string>
     <string name="button_clear_all">Clear all</string>
     <string name="no_messages">No messages</string>
+    <string name="backup_run_history_title">Run history</string>
+    <string name="backup_run_history_button">Run history</string>
+    <string name="backup_run_history_empty">No previous backup runs yet.</string>
+    <string name="backup_run_duration">Duration: %1$s</string>
+    <string name="backup_run_duration_in_progress">in progress</string>
+    <string name="backup_run_duration_hms">%1$dh %2$dm %3$ds</string>
+    <string name="backup_run_duration_ms">%1$dm %2$ds</string>
+    <string name="backup_run_duration_s">%1$ds</string>
+    <string name="backup_run_files_uploaded">Files uploaded: %1$d</string>
+    <string name="backup_run_files_skipped">Files skipped: %1$d</string>
+    <string name="backup_run_files_failed">Files failed: %1$d</string>
     <string name="button_mark_read">Mark read</string>
     <string name="button_dismiss">Dismiss</string>
     <string name="button_back_up_now">Back up now</string>

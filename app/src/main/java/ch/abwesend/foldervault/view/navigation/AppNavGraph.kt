@@ -14,6 +14,7 @@ import androidx.navigation3.ui.NavDisplay
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
 import ch.abwesend.foldervault.view.screens.AddEditBackupScreen
 import ch.abwesend.foldervault.view.screens.BackupDetailScreen
+import ch.abwesend.foldervault.view.screens.BackupRunHistoryScreen
 import ch.abwesend.foldervault.view.screens.HomeScreen
 import ch.abwesend.foldervault.view.screens.OnboardingScreen
 import ch.abwesend.foldervault.view.screens.RestoreScreen
@@ -75,6 +76,13 @@ fun AppNavGraph(
                         onBack = { backStack.removeLastOrNull() },
                         onEdit = { backStack.add(AppDestination.AddEditBackup(key.configId)) },
                         onDelete = { backStack.removeLastOrNull() },
+                        onShowRunHistory = { backStack.add(AppDestination.BackupRunHistory(key.configId)) },
+                    )
+                }
+                is AppDestination.BackupRunHistory -> NavEntry(key) {
+                    BackupRunHistoryScreen(
+                        configId = key.configId,
+                        onBack = { backStack.removeLastOrNull() },
                     )
                 }
                 is AppDestination.AddEditBackup -> NavEntry(key) {

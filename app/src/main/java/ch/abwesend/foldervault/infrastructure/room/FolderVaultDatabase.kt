@@ -9,10 +9,12 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import ch.abwesend.foldervault.infrastructure.room.converter.RoomTypeConverters
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupConfigDao
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupMessageDao
+import ch.abwesend.foldervault.infrastructure.room.dao.BackupRunDao
 import ch.abwesend.foldervault.infrastructure.room.dao.NotificationThrottleStateDao
 import ch.abwesend.foldervault.infrastructure.room.dao.UploadedFileIndexDao
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupConfigEntity
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupMessageEntity
+import ch.abwesend.foldervault.infrastructure.room.entity.BackupRunEntity
 import ch.abwesend.foldervault.infrastructure.room.entity.NotificationThrottleStateEntity
 import ch.abwesend.foldervault.infrastructure.room.entity.UploadedFileIndexEntity
 
@@ -21,9 +23,10 @@ import ch.abwesend.foldervault.infrastructure.room.entity.UploadedFileIndexEntit
         BackupConfigEntity::class,
         UploadedFileIndexEntity::class,
         BackupMessageEntity::class,
+        BackupRunEntity::class,
         NotificationThrottleStateEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 @TypeConverters(RoomTypeConverters::class)
@@ -32,6 +35,7 @@ abstract class FolderVaultDatabase : RoomDatabase() {
     abstract fun backupConfigDao(): BackupConfigDao
     abstract fun uploadedFileIndexDao(): UploadedFileIndexDao
     abstract fun backupMessageDao(): BackupMessageDao
+    abstract fun backupRunDao(): BackupRunDao
     abstract fun notificationThrottleStateDao(): NotificationThrottleStateDao
 
     companion object {

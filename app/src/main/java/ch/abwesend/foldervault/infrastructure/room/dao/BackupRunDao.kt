@@ -61,7 +61,28 @@ interface BackupRunDao {
     @Query("SELECT * FROM BackupRun WHERE runId = :runId LIMIT 1")
     suspend fun findByRunId(runId: String): BackupRunEntity?
 
+    /**
+     * Marks any RUNNING row that started before [staleBefore] as CANCELLED with
+     * [completedAt] = [now]. Used at app startup to flip rows left behind by process
+     * death — see [STALE_GRACE_WINDOW_MS]. Returns the number of rows updated.
+     */
+    @Query(
+        """UPDATE BackupRun
+           SET status = 'CANCELLED',
+               completedAt = :now
+           WHERE status = 'RUNNING'
+             AND startedAt < :staleBefore"""
+    )
+    suspend fun markStaleRunningAsCancelled(staleBefore: Long, now: Long): Int
+
     companion object {
         const val DEFAULT_LIMIT: Int = 100
+
+        /**
+         * Grace window before a still-RUNNING row is considered abandoned. A legitimate
+         * backup that hits the WorkManager budget completes via the deadline path long
+         * before this; anything older has almost certainly died with the host process.
+         */
+        const val STALE_GRACE_WINDOW_MS: Long = 24L * 60L * 60L * 1000L
     }
 }

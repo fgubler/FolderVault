@@ -10,4 +10,5 @@ enum class BackupRunStatus(@StringRes val labelResId: Int) {
     UP_TO_DATE(R.string.status_up_to_date),
     COMPLETED_WITH_WARNINGS(R.string.status_completed_with_warnings),
     FAILED(R.string.status_failed),
+    CANCELLED(R.string.status_cancelled),
 }

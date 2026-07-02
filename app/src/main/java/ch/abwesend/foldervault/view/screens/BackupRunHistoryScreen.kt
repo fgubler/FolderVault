@@ -110,6 +110,7 @@ private fun RunHistoryItem(run: BackupRun) {
         BackupRunStatus.FAILED -> MaterialTheme.colorScheme.error
         BackupRunStatus.COMPLETED_WITH_WARNINGS -> MaterialTheme.colorScheme.tertiary
         BackupRunStatus.RUNNING, BackupRunStatus.INITIAL_SYNC_IN_PROGRESS -> MaterialTheme.colorScheme.primary
+        BackupRunStatus.CANCELLED -> MaterialTheme.colorScheme.outline
         else -> MaterialTheme.colorScheme.outlineVariant
     }
     val locale = LocalConfiguration.current.locales[0]

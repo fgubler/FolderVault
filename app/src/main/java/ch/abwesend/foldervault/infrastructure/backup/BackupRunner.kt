@@ -29,10 +29,12 @@ import ch.abwesend.foldervault.infrastructure.room.entity.BackupConfigEntity
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupMessageEntity
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupRunEntity
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.time.Instant
@@ -99,6 +101,7 @@ class BackupRunner(
         val authResult = authorizer.authorize()
         if (authResult !is CloudAuthResult.Authorized) {
             summary.authLost = true
+            commitRunStats(config.id, runId, BackupRunStatus.FAILED, summary, completedNormally = false)
             return RunResult.AuthLost(summary, runId)
         }
         val cloudProvider: ICloudStorageProvider = authResult.data
@@ -163,7 +166,19 @@ class BackupRunner(
         } catch (e: CancellationException) {
             // Worker cancellation (timeout, constraints lost, user action) is expected — honor
             // structured concurrency and propagate, so it isn't recorded as a Crashlytics fatal.
+            // The DB writes must run in a NonCancellable scope: this coroutine is already
+            // cancelled, so plain suspending DAO calls would themselves throw CancellationException
+            // and the RUNNING row would stay stuck forever.
             log.warning("BackupRunner cancelled for config $configId")
+            withContext(NonCancellable) {
+                commitRunStats(
+                    configId = config.id,
+                    runId = runId,
+                    status = BackupRunStatus.CANCELLED,
+                    summary = summary,
+                    completedNormally = false,
+                )
+            }
             throw e
         } catch (e: Exception) {
             log.error("BackupRunner encountered a fatal error for config $configId", e)

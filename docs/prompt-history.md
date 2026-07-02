@@ -7,6 +7,69 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-06-30 — Run-history follow-up: no more stuck-RUNNING rows + migration test
+
+### What was done
+Closed the gap from the previous slice where worker cancellation / auth-lost / process death left
+`BackupRun` rows stuck in `RUNNING` forever, and added the missing migration test.
+
+- **New status `BackupRunStatus.CANCELLED`** — distinct from `FAILED` (real error) so cancellation
+  reads as "stopped, not broken" in the run-history list. Border colour: `outline`.
+- **`BackupRunner` cancellation path** (`catch (e: CancellationException)`) now writes a final
+  `CANCELLED` row before rethrowing, wrapped in `withContext(NonCancellable)` — the surrounding
+  coroutine is already cancelled, so plain DAO calls would themselves throw and the row would
+  stay stuck.
+- **`BackupRunner` auth-lost early return** now calls `commitRunStats(..., FAILED, ...)` before
+  returning `RunResult.AuthLost`. Previously the row was inserted as RUNNING and never updated.
+- **Process-death sweeper** in `FolderVaultApp.onCreate`: on each app start, any RUNNING row
+  older than 24h (`BackupRunDao.STALE_GRACE_WINDOW_MS`) is flipped to CANCELLED via
+  `markStaleRunningAsCancelled(staleBefore, now)`. Background coroutine on `Dispatchers.IO`.
+
+### Resumption semantics (decided)
+A retried/scheduled-after-cancel run creates a **new row with a new `runId`**, not a continuation
+of the cancelled one. Three reasons this fits the existing model:
+1. `runBackup()` generates a fresh UUID per call.
+2. File-level continuation is via `UploadedFileIndex` (already-uploaded files are skipped); the
+   run-history table records per-attempt metadata only.
+3. `INITIAL_SYNC_IN_PROGRESS` already creates multiple rows for one logical sync — same shape.
+
+### Tests added
+- `DatabaseMigrationTest` — opens a raw `SupportSQLiteDatabase` at v1 (only the BackupConfig
+  table is created; other v1 tables are irrelevant to MIGRATION_1_2), runs the migration,
+  verifies the new BackupRun table accepts inserts, all three indices exist, BackupConfig rows
+  survive, and the FK cascade is active. Written **without** `MigrationTestHelper` — under
+  AGP 9 the `$projectDir/schemas` directory does not get merged into the unit-test asset path
+  that the helper reads from, so the helper throws `FileNotFoundException`. The raw-SQL
+  approach is independent of asset wiring and still covers the migration's actual behaviour.
+- `BackupRunDaoTest` — two new cases for `markStaleRunningAsCancelled` (flips only stale
+  RUNNING rows; no-op when none are stale; finalised rows untouched even if old).
+- `DatabaseMigrations.MIGRATION_1_2` visibility lifted from `private` to `internal` so the
+  test in the same module can reference it directly.
+
+### Files modified
+`BackupRunStatus`, `strings.xml` (status_cancelled), `BackupRunDao` (sweeper query + grace
+window const), `DatabaseMigrations` (visibility), `BackupRunner` (CancellationException path,
+AuthLost path), `FolderVaultApp` (sweeper on startup), `BackupRunHistoryScreen` (CANCELLED
+border colour).
+
+### Files created
+`DatabaseMigrationTest.kt`.
+
+### Checks
+`./gradlew assembleDebug` ✓ — `./gradlew test` ✓ (176 tests, +2) — `./gradlew detekt` ✓.
+Manual smoke (cancel a running backup, kill the process mid-run, see rows flip to CANCELLED)
+still pending — needs the app on a device.
+
+### Decisions carried forward
+- 24h grace window before sweep: long enough for legitimately long backups; a row older than
+  this with no completion has effectively died with the process.
+- Auth-lost is `FAILED`, not `CANCELLED` — the user can't recover without re-authorising, so
+  the red border accurately conveys "this needs your attention".
+- The `INITIAL_SYNC_IN_PROGRESS` border is unchanged (still primary/blue) — by design, that
+  status represents a finalised-but-partial run, distinct from a cancelled one.
+
+---
+
 ## 2026-06-30 — Backup run history sub-screen
 
 ### What was done

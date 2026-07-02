@@ -130,6 +130,59 @@ class BackupRunDaoTest {
     }
 
     @Test
+    fun `markStaleRunningAsCancelled flips only stale RUNNING rows`() = runTest {
+        val configId = seedConfig()
+        val dao = db.backupRunDao()
+        val now = 10_000L
+        val grace = 1_000L
+        val staleBefore = now - grace
+
+        // Stale RUNNING — must flip
+        dao.insert(runningEntity(configId, "stale", startedAt = staleBefore - 1L))
+        // Fresh RUNNING (just inside the grace window) — must NOT flip
+        dao.insert(runningEntity(configId, "fresh", startedAt = staleBefore + 1L))
+        // Already finalized — must NOT flip even if old
+        dao.insert(
+            runningEntity(configId, "done", startedAt = staleBefore - 500L).copy(
+                completedAt = staleBefore - 400L,
+                status = BackupRunStatus.UP_TO_DATE,
+                filesUploaded = 3,
+            )
+        )
+
+        val updated = dao.markStaleRunningAsCancelled(staleBefore = staleBefore, now = now)
+        assertEquals(1, updated)
+
+        val stale = dao.findByRunId("stale")
+        assertNotNull(stale)
+        assertEquals(BackupRunStatus.CANCELLED, stale.status)
+        assertEquals(now, stale.completedAt)
+
+        val fresh = dao.findByRunId("fresh")
+        assertNotNull(fresh)
+        assertEquals(BackupRunStatus.RUNNING, fresh.status)
+        assertNull(fresh.completedAt)
+
+        val done = dao.findByRunId("done")
+        assertNotNull(done)
+        assertEquals(BackupRunStatus.UP_TO_DATE, done.status)
+    }
+
+    @Test
+    fun `markStaleRunningAsCancelled is a no-op when no rows are stale`() = runTest {
+        val configId = seedConfig()
+        val dao = db.backupRunDao()
+        dao.insert(runningEntity(configId, "fresh", startedAt = 2_000L))
+
+        val updated = dao.markStaleRunningAsCancelled(staleBefore = 1_000L, now = 9_999L)
+
+        assertEquals(0, updated)
+        val fresh = dao.findByRunId("fresh")
+        assertNotNull(fresh)
+        assertEquals(BackupRunStatus.RUNNING, fresh.status)
+    }
+
+    @Test
     fun `deleting BackupConfig cascades to BackupRun`() = runTest {
         val configId = seedConfig()
         val dao = db.backupRunDao()

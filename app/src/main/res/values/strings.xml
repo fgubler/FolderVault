@@ -64,6 +64,7 @@
     <string name="status_up_to_date">Up to date</string>
     <string name="status_completed_with_warnings">Completed with warnings</string>
     <string name="status_failed">Failed</string>
+    <string name="status_cancelled">Cancelled</string>
 
     <!-- MessageSeverity display names -->
     <string name="severity_info">Info</string>

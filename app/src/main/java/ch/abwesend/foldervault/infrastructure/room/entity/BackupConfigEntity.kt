@@ -29,6 +29,13 @@ data class BackupConfigEntity(
     @Embedded(prefix = "enc_") val encryptionParams: EncryptionParams?,
     val retentionPolicy: RetentionPolicy,
     val networkPolicy: NetworkPolicy,
+    /**
+     * When true, WorkManager only fires this backup's periodic + one-time work while the
+     * device is charging. When false, the scheduler still schedules a one-off charging-only
+     * fallback after several consecutive cancellations — see
+     * [ch.abwesend.foldervault.infrastructure.backup.BackupScheduler].
+     */
+    val requiresCharging: Boolean = false,
     val createdAt: Long,
     val lastRunAt: Long?,
     val lastRunStatus: BackupRunStatus,

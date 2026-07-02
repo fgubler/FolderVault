@@ -2,7 +2,6 @@ package ch.abwesend.foldervault.view.screens
 
 import android.content.ActivityNotFoundException
 import android.content.Intent
-import android.net.Uri
 import androidx.annotation.StringRes
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
@@ -55,6 +54,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.backup.BackupConfig
 import ch.abwesend.foldervault.domain.backup.BackupMessage
@@ -79,7 +79,6 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.Locale
-import androidx.core.net.toUri
 
 private const val CLOUD_FOLDER_WIDTH_FRACTION = 0.75f
 
@@ -621,6 +620,7 @@ private fun BackupDetailPreview() {
         encryptionSaltBase64 = null,
         retentionPolicy = RetentionPolicy.KeepAll,
         networkPolicy = NetworkPolicy.WIFI_ONLY,
+        requiresCharging = false,
         createdAt = System.currentTimeMillis(),
         lastRunAt = System.currentTimeMillis() - 7_200_000,
         lastRunStatus = BackupRunStatus.UP_TO_DATE,

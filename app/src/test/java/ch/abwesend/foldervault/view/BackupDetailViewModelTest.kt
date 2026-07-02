@@ -56,6 +56,7 @@ class BackupDetailViewModelTest : StringSpec({
         encryptionSaltBase64 = null,
         retentionPolicy = RetentionPolicy.KeepAll,
         networkPolicy = networkPolicy,
+        requiresCharging = false,
         createdAt = 0L,
         lastRunAt = null,
         lastRunStatus = BackupRunStatus.IDLE,
@@ -113,7 +114,7 @@ class BackupDetailViewModelTest : StringSpec({
 
         vm.backUpNow()
 
-        verify(exactly = 0) { scheduler.scheduleOneTime(any(), any()) }
+        verify(exactly = 0) { scheduler.scheduleOneTime(any(), any(), any()) }
         job.cancel()
     }
 
@@ -127,7 +128,9 @@ class BackupDetailViewModelTest : StringSpec({
 
         vm.backUpNow()
 
-        verify(exactly = 1) { scheduler.scheduleOneTime(configId, NetworkPolicy.WIFI_ONLY) }
+        verify(exactly = 1) {
+            scheduler.scheduleOneTime(configId, NetworkPolicy.WIFI_ONLY, false)
+        }
         vm.showMeteredOverridePrompt.value shouldBe false
         job.cancel()
     }
@@ -138,7 +141,7 @@ class BackupDetailViewModelTest : StringSpec({
 
         vm.backUpNow()
 
-        verify(exactly = 0) { scheduler.scheduleOneTime(any(), any()) }
+        verify(exactly = 0) { scheduler.scheduleOneTime(any(), any(), any()) }
     }
 
     "backUpNow does not call scheduler when a backup is already running" {
@@ -149,7 +152,7 @@ class BackupDetailViewModelTest : StringSpec({
 
         vm.backUpNow()
 
-        verify(exactly = 0) { scheduler.scheduleOneTime(any(), any()) }
+        verify(exactly = 0) { scheduler.scheduleOneTime(any(), any(), any()) }
         isRunningJob.cancel()
         configJob.cancel()
     }
@@ -165,7 +168,7 @@ class BackupDetailViewModelTest : StringSpec({
 
         vm.backUpNow()
 
-        verify(exactly = 0) { scheduler.scheduleOneTime(any(), any()) }
+        verify(exactly = 0) { scheduler.scheduleOneTime(any(), any(), any()) }
         vm.showMeteredOverridePrompt.value shouldBe true
         job.cancel()
     }
@@ -181,7 +184,9 @@ class BackupDetailViewModelTest : StringSpec({
 
         vm.backUpNow()
 
-        verify(exactly = 1) { scheduler.scheduleOneTime(configId, NetworkPolicy.ANY) }
+        verify(exactly = 1) {
+            scheduler.scheduleOneTime(configId, NetworkPolicy.ANY, false)
+        }
         vm.showMeteredOverridePrompt.value shouldBe false
         job.cancel()
     }
@@ -198,7 +203,9 @@ class BackupDetailViewModelTest : StringSpec({
         vm.backUpNow()
         vm.confirmMeteredOverride()
 
-        verify(exactly = 1) { scheduler.scheduleOneTime(configId, NetworkPolicy.ANY) }
+        verify(exactly = 1) {
+            scheduler.scheduleOneTime(configId, NetworkPolicy.ANY, false)
+        }
         vm.showMeteredOverridePrompt.value shouldBe false
         job.cancel()
     }
@@ -215,7 +222,7 @@ class BackupDetailViewModelTest : StringSpec({
         vm.backUpNow()
         vm.dismissMeteredOverride()
 
-        verify(exactly = 0) { scheduler.scheduleOneTime(any(), any()) }
+        verify(exactly = 0) { scheduler.scheduleOneTime(any(), any(), any()) }
         vm.showMeteredOverridePrompt.value shouldBe false
         job.cancel()
     }

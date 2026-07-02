@@ -183,6 +183,54 @@ class BackupRunDaoTest {
     }
 
     @Test
+    fun `getRecentStatuses returns the newest N statuses ordered newest-first`() = runTest {
+        val configId = seedConfig()
+        val dao = db.backupRunDao()
+        dao.insert(runningEntity(configId, "r-oldest", startedAt = 1L))
+            .also { dao.markComplete("r-oldest", 2L, BackupRunStatus.UP_TO_DATE, 0, 0, 0, 0L) }
+        dao.insert(runningEntity(configId, "r-mid", startedAt = 3L))
+            .also { dao.markComplete("r-mid", 4L, BackupRunStatus.CANCELLED, 0, 0, 0, 0L) }
+        dao.insert(runningEntity(configId, "r-newest", startedAt = 5L))
+            .also { dao.markComplete("r-newest", 6L, BackupRunStatus.FAILED, 0, 0, 0, 0L) }
+
+        val statuses = dao.getRecentStatuses(configId, limit = 3)
+
+        assertEquals(
+            listOf(BackupRunStatus.FAILED, BackupRunStatus.CANCELLED, BackupRunStatus.UP_TO_DATE),
+            statuses,
+        )
+    }
+
+    @Test
+    fun `getRecentStatuses respects the limit`() = runTest {
+        val configId = seedConfig()
+        val dao = db.backupRunDao()
+        repeat(5) { i ->
+            dao.insert(runningEntity(configId, "r$i", startedAt = i.toLong()))
+            dao.markComplete("r$i", (i + 100).toLong(), BackupRunStatus.CANCELLED, 0, 0, 0, 0L)
+        }
+
+        val statuses = dao.getRecentStatuses(configId, limit = 3)
+
+        assertEquals(3, statuses.size)
+        assertTrue(statuses.all { it == BackupRunStatus.CANCELLED })
+    }
+
+    @Test
+    fun `getRecentStatuses is isolated per config`() = runTest {
+        val configA = seedConfig("cfg-a")
+        val configB = seedConfig("cfg-b")
+        val dao = db.backupRunDao()
+        dao.insert(runningEntity(configA, "a1", 1L))
+            .also { dao.markComplete("a1", 2L, BackupRunStatus.CANCELLED, 0, 0, 0, 0L) }
+        dao.insert(runningEntity(configB, "b1", 3L))
+            .also { dao.markComplete("b1", 4L, BackupRunStatus.UP_TO_DATE, 0, 0, 0, 0L) }
+
+        assertEquals(listOf(BackupRunStatus.CANCELLED), dao.getRecentStatuses(configA, limit = 3))
+        assertEquals(listOf(BackupRunStatus.UP_TO_DATE), dao.getRecentStatuses(configB, limit = 3))
+    }
+
+    @Test
     fun `deleting BackupConfig cascades to BackupRun`() = runTest {
         val configId = seedConfig()
         val dao = db.backupRunDao()

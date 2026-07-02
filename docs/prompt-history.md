@@ -7,6 +7,71 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-02 — Per-backup "only run while charging" + cancellation-streak fallback
+
+### What was requested
+1. Per-backup **"only run while charging"** toggle (default off).
+2. When the toggle is off but a backup gets cancelled repeatedly, schedule a **single one-off
+   charging-only run** without displacing the normal periodic schedule — a user who always turns
+   the phone off while charging must still see periodic non-charging attempts.
+
+### Design decisions
+- **Trigger rule**: 3 consecutive cancellations. Any success resets the streak.
+- **Threshold hard-coded** (`ChargingFallbackTrigger.CANCELLATION_STREAK_THRESHOLD = 3`) — not
+  user-configurable.
+- **Fallback isolation**: distinct WorkManager unique-work name
+  (`foldervault_backup_charging_fallback_<configId>`), enqueued with `ExistingWorkPolicy.KEEP`
+  so a second cancellation while a fallback is pending is a no-op. Periodic work under
+  `foldervault_backup_<configId>` is untouched.
+- **Short-circuit** when `requiresCharging=true`: no DAO query, no fallback — the periodic
+  schedule already carries the constraint.
+- **UI**: single `Switch` with info-icon popup inside the existing `ScheduleSection`, plain-language
+  body text (matches the UX text-style convention).
+
+### What was done
+- **Room migration**: `BackupConfigEntity` gained `requiresCharging: Boolean = false`; database
+  bumped v2 → v3; `MIGRATION_2_3` adds `INTEGER NOT NULL DEFAULT 0`; schema JSON regenerated at
+  `app/schemas/.../3.json`.
+- **DAO**: added `BackupRunDao.getRecentStatuses(configId, limit)` for streak detection.
+- **Domain**: `BackupConfig.requiresCharging` field + repository mapping updates.
+- **Scheduler interface**: `scheduleOneTime` / `schedulePeriodicIfNeeded` gained the flag;
+  new `scheduleChargingFallback(configId, networkPolicy)` method; `buildConstraints` calls
+  `setRequiresCharging`; `observeIsRunning` combines primary + fallback flows; `cancel`
+  clears both unique-work names.
+- **Runner**: `BackupRunner` gained `scheduler` ctor param; in its `NonCancellable`
+  `CancellationException` catch it calls `ChargingFallbackTrigger.maybeSchedule(...)` right
+  after `commitRunStats`. Streak-detection logic extracted into `ChargingFallbackTrigger` so
+  it's unit-testable without spinning up the full runner.
+- **DI**: `AppModule` wires the new scheduler argument into the `BackupRunner` factory.
+- **ViewModels**: `AddEditBackupViewModel` — new form state field, setter, load/save
+  propagation. `BackupDetailViewModel` — `backUpNow`, `confirmMeteredOverride`, `togglePause`
+  all pass `current.requiresCharging`.
+- **UI**: `AddEditBackupScreen.ScheduleSection` renders a `Row` with a label + info icon +
+  `Switch`, matching the encryption-toggle pattern. New strings: `label_requires_charging`,
+  `info_requires_charging_title`, `info_requires_charging_body`.
+
+### Tests
+- **New** `ChargingFallbackTriggerTest` — 5 Kotest cases: streak reached triggers fallback,
+  streak broken by a success, insufficient history, short-circuit when `requiresCharging=true`,
+  network-policy propagation. All green.
+- **New** `MIGRATION_2_3` tests (default 0, existing rows preserved) — added to
+  `DatabaseMigrationTest`. Total 5 tests, all green.
+- **New** `BackupRunDao.getRecentStatuses` tests — 3 cases (ordering, limit, per-config
+  isolation) added to `BackupRunDaoTest`. Total 11 tests, all green.
+- **Updated** `BackupDetailViewModelTest` fixtures and `scheduler.scheduleOneTime(...)` verify
+  calls to the 3-arg signature. 8 tests, all green.
+- Other existing test fixtures compile unchanged thanks to the entity's
+  `requiresCharging: Boolean = false` default.
+
+### DoD gates
+- ✅ `./gradlew assembleDebug` — clean
+- ✅ `./gradlew test` — all green (ChargingFallbackTrigger 5/5, BackupRunDao 11/11,
+  DatabaseMigration 5/5, BackupDetailViewModel 8/8, all other suites unchanged)
+- ✅ `./gradlew detekt` — no issues
+- ⏭ UI screenshot verification — pending (user to launch on emulator/device and confirm the
+  toggle appears in Schedule & network, info dialog opens, and persistence survives an app
+  restart)
+
 ## 2026-06-30 — Run-history follow-up: no more stuck-RUNNING rows + migration test
 
 ### What was done

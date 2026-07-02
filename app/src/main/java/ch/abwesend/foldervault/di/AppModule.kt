@@ -87,6 +87,7 @@ val appModule = module {
             backupRunDao = get(),
             settingsRepository = get(),
             dispatchers = get(),
+            scheduler = get(),
         )
     }
 

@@ -21,6 +21,7 @@ data class BackupConfig(
     val encryptionSaltBase64: String?,
     val retentionPolicy: RetentionPolicy,
     val networkPolicy: NetworkPolicy,
+    val requiresCharging: Boolean,
     val createdAt: Long,
     val lastRunAt: Long?,
     val lastRunStatus: BackupRunStatus,

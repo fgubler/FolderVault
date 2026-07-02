@@ -52,12 +52,9 @@ import ch.abwesend.foldervault.domain.model.ChangedFilePolicy
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.model.RetentionPolicy
 import ch.abwesend.foldervault.ui.theme.FolderVaultTheme
+import ch.abwesend.foldervault.view.util.formatRelativeAgo
 import ch.abwesend.foldervault.view.viewmodel.HomeViewModel
 import org.koin.androidx.compose.koinViewModel
-
-private const val MS_PER_MINUTE = 60_000L
-private const val MS_PER_HOUR = 3_600_000L
-private const val MS_PER_DAY = 86_400_000L
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -250,13 +247,7 @@ private fun BackupStatusLine(config: BackupConfig) {
 @Composable
 private fun buildLastRunText(config: BackupConfig): String {
     val lastRun = config.lastRunAt ?: return stringResource(R.string.home_status_never_run)
-    val agoMs = System.currentTimeMillis() - lastRun
-    val agoText = when {
-        agoMs < MS_PER_MINUTE -> stringResource(R.string.home_status_just_now)
-        agoMs < MS_PER_HOUR -> stringResource(R.string.home_status_ago_minutes, (agoMs / MS_PER_MINUTE).toInt())
-        agoMs < MS_PER_DAY -> stringResource(R.string.home_status_ago_hours, (agoMs / MS_PER_HOUR).toInt())
-        else -> stringResource(R.string.home_status_ago_days, (agoMs / MS_PER_DAY).toInt())
-    }
+    val agoText = formatRelativeAgo(lastRun)
     val parts = buildList {
         add(stringResource(R.string.home_status_uploaded, config.filesUploaded))
         if (config.filesFailed > 0) add(stringResource(R.string.home_status_failed, config.filesFailed))

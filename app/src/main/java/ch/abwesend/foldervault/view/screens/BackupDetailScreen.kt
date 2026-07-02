@@ -69,6 +69,7 @@ import ch.abwesend.foldervault.domain.model.RetentionPolicy
 import ch.abwesend.foldervault.ui.theme.FolderVaultTheme
 import ch.abwesend.foldervault.view.components.PasswordTextField
 import ch.abwesend.foldervault.view.components.UnexpectedErrorDialog
+import ch.abwesend.foldervault.view.util.formatRelativeAgo
 import ch.abwesend.foldervault.view.viewmodel.BackupDetailViewModel
 import ch.abwesend.foldervault.view.viewmodel.DetailEvent
 import org.koin.androidx.compose.koinViewModel
@@ -78,8 +79,8 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.Locale
+import androidx.core.net.toUri
 
-private const val MS_PER_MINUTE = 60_000L
 private const val CLOUD_FOLDER_WIDTH_FRACTION = 0.75f
 
 private fun formatMessageTimestamp(epochMillis: Long, locale: Locale): String {
@@ -293,9 +294,9 @@ private fun StatusSection(config: BackupConfig) {
             )
         }
         config.lastRunAt?.let { lastRun ->
-            val ago = (System.currentTimeMillis() - lastRun) / MS_PER_MINUTE
+            val agoText = formatRelativeAgo(lastRun)
             Text(
-                stringResource(R.string.last_run_text, ago, config.filesUploaded, config.filesFailed),
+                stringResource(R.string.last_run_text, agoText, config.filesUploaded, config.filesFailed),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -333,7 +334,10 @@ private fun CloudFolderRow(folderName: String, folderId: String) {
         }
         TextButton(
             onClick = {
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://drive.google.com/drive/folders/$folderId"))
+                val intent = Intent(
+                    Intent.ACTION_VIEW,
+                    "https://drive.google.com/drive/folders/$folderId".toUri(),
+                )
                 try {
                     context.startActivity(intent)
                 } catch (_: ActivityNotFoundException) {

@@ -404,12 +404,21 @@ private fun ActionButtonRow(
                 Text(stringResource(if (config.isPaused) R.string.button_resume else R.string.button_pause))
             }
         }
-        OutlinedButton(onClick = onShowRunHistory, modifier = Modifier.fillMaxWidth()) {
-            Text(stringResource(R.string.backup_run_history_button))
-        }
         if (config.encryptionEnabled) {
-            OutlinedButton(onClick = onCheckPassword, modifier = Modifier.fillMaxWidth()) {
-                Text(stringResource(R.string.button_check_password))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedButton(onClick = onShowRunHistory, modifier = Modifier.weight(1f)) {
+                    Text(stringResource(R.string.backup_run_history_button))
+                }
+                OutlinedButton(onClick = onCheckPassword, modifier = Modifier.weight(1f)) {
+                    Text(stringResource(R.string.button_check_password))
+                }
+            }
+        } else {
+            OutlinedButton(onClick = onShowRunHistory, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.backup_run_history_button))
             }
         }
     }

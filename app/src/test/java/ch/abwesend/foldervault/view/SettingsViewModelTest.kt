@@ -7,6 +7,8 @@ import ch.abwesend.foldervault.domain.logging.ITelemetryToggle
 import ch.abwesend.foldervault.domain.logging.LoggerProvider
 import ch.abwesend.foldervault.domain.model.AppSettings
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
+import ch.abwesend.foldervault.domain.system.BackgroundRestrictionStatus
+import ch.abwesend.foldervault.domain.system.IBackgroundRestrictionChecker
 import ch.abwesend.foldervault.view.viewmodel.SettingsViewModel
 import io.kotest.core.spec.IsolationMode
 import io.kotest.core.spec.style.StringSpec
@@ -58,10 +60,18 @@ class SettingsViewModelTest : StringSpec({
     }
     val logFiles = mockk<ILogExporter>(relaxed = true)
 
+    fun makeRestrictionChecker(
+        ignoringBatteryOptimizations: Boolean = false,
+        backgroundDataRestricted: Boolean = false,
+    ): IBackgroundRestrictionChecker = mockk {
+        every { isIgnoringBatteryOptimizations() } returns ignoringBatteryOptimizations
+        every { isBackgroundDataRestricted() } returns backgroundDataRestricted
+    }
+
     "setAnonymousErrorReports(true) calls telemetry toggle with true before persisting" {
         val toggle = FakeTelemetryToggle()
         val settings = makeSettings()
-        val vm = SettingsViewModel(makeRepo(settings), toggle, logFiles, dispatchers)
+        val vm = SettingsViewModel(makeRepo(settings), toggle, logFiles, makeRestrictionChecker(), dispatchers)
 
         vm.setAnonymousErrorReports(true)
         testDispatcher.scheduler.advanceUntilIdle()
@@ -74,12 +84,45 @@ class SettingsViewModelTest : StringSpec({
     "setAnonymousErrorReports(false) calls telemetry toggle with false" {
         val toggle = FakeTelemetryToggle()
         val settings = makeSettings()
-        val vm = SettingsViewModel(makeRepo(settings), toggle, logFiles, dispatchers)
+        val vm = SettingsViewModel(makeRepo(settings), toggle, logFiles, makeRestrictionChecker(), dispatchers)
 
         vm.setAnonymousErrorReports(false)
         testDispatcher.scheduler.advanceUntilIdle()
 
         toggle.lastEnabled shouldBe false
         settings.value.anonymousErrorReports shouldBe false
+    }
+
+    "backgroundRestrictions starts with the all-clear default before the first refresh" {
+        val checker = makeRestrictionChecker(ignoringBatteryOptimizations = true, backgroundDataRestricted = true)
+        val vm = SettingsViewModel(makeRepo(makeSettings()), FakeTelemetryToggle(), logFiles, checker, dispatchers)
+
+        vm.backgroundRestrictions.value shouldBe BackgroundRestrictionStatus()
+    }
+
+    "refreshBackgroundRestrictions exposes the current checker state" {
+        val checker = makeRestrictionChecker(ignoringBatteryOptimizations = true, backgroundDataRestricted = true)
+        val vm = SettingsViewModel(makeRepo(makeSettings()), FakeTelemetryToggle(), logFiles, checker, dispatchers)
+
+        vm.refreshBackgroundRestrictions()
+
+        vm.backgroundRestrictions.value shouldBe BackgroundRestrictionStatus(
+            ignoringBatteryOptimizations = true,
+            backgroundDataRestricted = true,
+        )
+    }
+
+    "refreshBackgroundRestrictions picks up changes made in the system settings" {
+        val checker = mockk<IBackgroundRestrictionChecker> {
+            every { isIgnoringBatteryOptimizations() } returnsMany listOf(false, true)
+            every { isBackgroundDataRestricted() } returns false
+        }
+        val vm = SettingsViewModel(makeRepo(makeSettings()), FakeTelemetryToggle(), logFiles, checker, dispatchers)
+
+        vm.refreshBackgroundRestrictions()
+        vm.backgroundRestrictions.value.ignoringBatteryOptimizations shouldBe false
+
+        vm.refreshBackgroundRestrictions()
+        vm.backgroundRestrictions.value.ignoringBatteryOptimizations shouldBe true
     }
 })

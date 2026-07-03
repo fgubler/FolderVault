@@ -7,6 +7,41 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-03 — Settings: "Reliable background backups" section (battery optimization + Data Saver)
+
+### What was requested
+Help the user lift the two OS-level restrictions that can delay or block background backups:
+battery optimization and Data Saver background-data blocking. Settings page only for now
+(onboarding unchanged); deliberately no direct `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` request
+to avoid Play Store policy risk — the app only jumps to the relevant system-settings screens.
+
+### What was done
+- `domain/system/IBackgroundRestrictionChecker` + `BackgroundRestrictionStatus`: domain seam for
+  reading the two restriction states.
+- `infrastructure/system/AndroidBackgroundRestrictionChecker`: `PowerManager
+  .isIgnoringBatteryOptimizations()` and `ConnectivityManager.restrictBackgroundStatus ==
+  RESTRICT_BACKGROUND_STATUS_ENABLED` (only Data-Saver-ON + not whitelisted counts as restricted).
+- `SettingsViewModel.refreshBackgroundRestrictions()` exposes a `StateFlow`, re-read via
+  `LifecycleResumeEffect` so the status updates when the user returns from the system settings.
+- New settings section "Reliable background backups" between Notifications and Help: per
+  restriction a status line (✓ in primary color when resolved), an info-icon popup explaining why
+  resolving it helps, and a jump button:
+  `ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS` (list screen, no permission needed) and
+  `ACTION_IGNORE_BACKGROUND_DATA_RESTRICTIONS_SETTINGS` with `package:` URI (app-specific screen);
+  both fall back to the app-details screen on `ActivityNotFoundException`.
+- Added `androidx.lifecycle:lifecycle-runtime-compose` for `LifecycleResumeEffect`.
+- Tests first: Robolectric shadow tests for the checker (5), Kotest ViewModel tests for the
+  refresh flow (3 new); extracted `ReliableBackupsSection` / `HelpSection` composables to keep
+  `SettingsContent` under the detekt `LongMethod` limit.
+- Verified on the emulator: both buttons land on the correct system screens; granting the Doze
+  exemption flips the status to ✓ on return to the app.
+
+### Notes
+- Emulator crash encountered during verification was a pre-existing stale-database Room identity
+  mismatch from an older dev build — fixed by `pm clear`, unrelated to this change.
+- Onboarding integration of the same section is a possible follow-up (reuse
+  `ReliableBackupsSection`).
+
 ## 2026-07-03 — Restore screen: retry after wrong password, clearer texts
 
 ### What was requested

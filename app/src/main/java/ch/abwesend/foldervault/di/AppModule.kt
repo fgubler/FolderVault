@@ -15,6 +15,7 @@ import ch.abwesend.foldervault.domain.logging.ITelemetryToggle
 import ch.abwesend.foldervault.domain.network.INetworkConnectivityChecker
 import ch.abwesend.foldervault.domain.restore.IRestoreEngine
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
+import ch.abwesend.foldervault.domain.system.IBackgroundRestrictionChecker
 import ch.abwesend.foldervault.infrastructure.backup.BackupConfigRepository
 import ch.abwesend.foldervault.infrastructure.backup.BackupMessageRepository
 import ch.abwesend.foldervault.infrastructure.backup.BackupNotificationManager
@@ -31,6 +32,7 @@ import ch.abwesend.foldervault.infrastructure.network.AndroidNetworkConnectivity
 import ch.abwesend.foldervault.infrastructure.restore.RestoreEngine
 import ch.abwesend.foldervault.infrastructure.room.FolderVaultDatabase
 import ch.abwesend.foldervault.infrastructure.settings.AppSettingsRepository
+import ch.abwesend.foldervault.infrastructure.system.AndroidBackgroundRestrictionChecker
 import ch.abwesend.foldervault.view.viewmodel.AddEditBackupViewModel
 import ch.abwesend.foldervault.view.viewmodel.BackupDetailViewModel
 import ch.abwesend.foldervault.view.viewmodel.BackupRunHistoryViewModel
@@ -73,6 +75,7 @@ val appModule = module {
     single { BackupNotificationManager(androidContext(), get(), get()) }
     single<IBackupScheduler> { BackupScheduler(androidContext()) }
     single<INetworkConnectivityChecker> { AndroidNetworkConnectivityChecker(androidContext()) }
+    single<IBackgroundRestrictionChecker> { AndroidBackgroundRestrictionChecker(androidContext()) }
 
     // Backup pipeline
     single {
@@ -95,7 +98,7 @@ val appModule = module {
     viewModel { RestoreViewModel(get()) }
     viewModel { HomeViewModel(get(), get()) }
     viewModel { OnboardingViewModel(get()) }
-    viewModel { SettingsViewModel(get(), get(), get(), get()) }
+    viewModel { SettingsViewModel(get(), get(), get(), get(), get()) }
     viewModel { params ->
         AddEditBackupViewModel(
             configRepo = get(),

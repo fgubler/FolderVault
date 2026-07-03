@@ -12,6 +12,8 @@ import ch.abwesend.foldervault.domain.model.BackupSchedule
 import ch.abwesend.foldervault.domain.model.ChangedFilePolicy
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
+import ch.abwesend.foldervault.domain.system.BackgroundRestrictionStatus
+import ch.abwesend.foldervault.domain.system.IBackgroundRestrictionChecker
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -23,6 +25,7 @@ internal class SettingsViewModel(
     private val settingsRepo: IAppSettingsRepository,
     private val telemetryToggle: ITelemetryToggle,
     private val logExporter: ILogExporter,
+    private val restrictionChecker: IBackgroundRestrictionChecker,
     private val dispatchers: IDispatchers,
 ) : BaseViewModel() {
 
@@ -31,6 +34,20 @@ internal class SettingsViewModel(
 
     private val _exportResult = MutableStateFlow<UiText?>(null)
     val exportResult: StateFlow<UiText?> = _exportResult.asStateFlow()
+
+    private val _backgroundRestrictions = MutableStateFlow(BackgroundRestrictionStatus())
+    val backgroundRestrictions: StateFlow<BackgroundRestrictionStatus> = _backgroundRestrictions.asStateFlow()
+
+    /**
+     * Re-reads the OS restriction states. Called whenever the settings screen (re-)enters the
+     * foreground, so the shown status reflects changes the user just made in the system settings.
+     */
+    fun refreshBackgroundRestrictions() {
+        _backgroundRestrictions.value = BackgroundRestrictionStatus(
+            ignoringBatteryOptimizations = restrictionChecker.isIgnoringBatteryOptimizations(),
+            backgroundDataRestricted = restrictionChecker.isBackgroundDataRestricted(),
+        )
+    }
 
     fun setDefaultSchedule(schedule: BackupSchedule) = update { it.copy(defaultSchedule = schedule) }
 

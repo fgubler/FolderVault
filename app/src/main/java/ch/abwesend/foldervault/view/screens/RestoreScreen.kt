@@ -176,7 +176,7 @@ private fun RestoreContent(
                 collisionPolicy = collisionPolicy,
                 onCollisionPolicyChange = onCollisionPolicyChange,
                 onStartRestore = onStartRestore,
-                enabled = state == RestoreState.ReadyToStart,
+                enabled = state == RestoreState.ReadyToStart || state is RestoreState.Done,
             )
         }
 
@@ -330,7 +330,7 @@ private fun RestoreResultSection(result: RestoreResult, onReset: () -> Unit) {
     }
     Spacer(modifier = Modifier.height(8.dp))
     OutlinedButton(onClick = onReset, modifier = Modifier.fillMaxWidth()) {
-        Text(stringResource(R.string.button_restore_again))
+        Text(stringResource(R.string.button_restore_start_over))
     }
 }
 

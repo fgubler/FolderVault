@@ -249,8 +249,8 @@
     <!-- Restore screen -->
     <string name="restore_title">Restore backup</string>
     <string name="restore_explanation_title">Restore an encrypted backup</string>
-    <string name="restore_explanation_body">1. Use the Google Drive app to download your backup folder to local storage.\n2. Pick the downloaded folder and an empty output folder here.\n3. Enter your backup password — every file will be decrypted locally.</string>
-    <string name="restore_step1_header">Step 1: downloaded backup folder</string>
+    <string name="restore_explanation_body">1. Pick your backup folder. If the Google Drive app is installed, you can select the folder directly on Google Drive in the file picker — no download needed. Otherwise, download it to local storage first.\n2. Pick an empty output folder.\n3. Enter your backup password — every file will be decrypted locally.</string>
+    <string name="restore_step1_header">Step 1: backup folder</string>
     <string name="restore_pick_backup_folder">Pick backup folder</string>
     <string name="restore_scanning">Scanning…</string>
     <string name="restore_no_encrypted_files">No encrypted files found. Your %1$d file(s) are already usable without decryption.</string>
@@ -272,7 +272,7 @@
     <string name="restore_wrong_password">Wrong password. No files were modified.</string>
     <string name="restore_cancelled">Restore was cancelled.</string>
     <string name="restore_failed">Restore failed: %1$s</string>
-    <string name="button_restore_again">Restore again</string>
+    <string name="button_restore_start_over">Start over (clear selection)</string>
     <string name="dialog_restoring_title">Restoring…</string>
     <string name="restore_verifying_password">Verifying password…</string>
     <string name="restore_decrypting_progress">Decrypting %1$d / %2$d files</string>

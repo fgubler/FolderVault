@@ -7,6 +7,30 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-03 — Restore screen: retry after wrong password, clearer texts
+
+### What was requested
+1. After a failed restore attempt (e.g. wrong password), allow the user to fix the password and
+   retry directly — previously the "Start restore" button stayed disabled and the user had to
+   reset the whole flow.
+2. Rename the reset button ("Restore again") to make clear it clears the selection and starts over.
+3. Adapt the helper text: if the Google Drive app is installed, folders on Google Drive can be
+   selected directly in the system file picker, so backups can be restored straight from Drive
+   without downloading first.
+
+### What was changed
+- `RestoreScreen.kt`: `PasswordAndStartSection` is now also enabled when the state is
+  `RestoreState.Done` (not only `ReadyToStart`), enabling a retry with the same source/output.
+- `strings.xml`:
+  - `button_restore_again` → `button_restore_start_over` ("Start over (clear selection)").
+  - `restore_explanation_body` rewritten: picking the backup folder directly on Google Drive via
+    the file picker is now the primary path; downloading first is the fallback.
+  - `restore_step1_header`: "downloaded backup folder" → "backup folder" (consistency).
+
+### Verification
+- `assembleDebug`, `test`, `detekt` all green. No tests reference the composable directly
+  (pure UI-state wiring change; the ViewModel logic is unchanged).
+
 ## 2026-07-02 — Per-backup "only run while charging" + cancellation-streak fallback
 
 ### What was requested

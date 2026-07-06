@@ -3,6 +3,7 @@ package ch.abwesend.foldervault.infrastructure.backup
 import android.content.Context
 import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.backup.CloudManifest
+import ch.abwesend.foldervault.domain.backup.IBackupScheduler
 import ch.abwesend.foldervault.domain.backup.ManifestEntry
 import ch.abwesend.foldervault.domain.cloud.CloudAuthException
 import ch.abwesend.foldervault.domain.cloud.CloudAuthResult
@@ -60,6 +61,7 @@ class BackupRunner(
     private val backupRunDao: BackupRunDao,
     private val settingsRepository: IAppSettingsRepository,
     private val dispatchers: IDispatchers,
+    private val scheduler: IBackupScheduler,
 ) {
     private val log get() = logger
 
@@ -178,6 +180,7 @@ class BackupRunner(
                     summary = summary,
                     completedNormally = false,
                 )
+                ChargingFallbackTrigger.maybeSchedule(config, backupRunDao, scheduler)
             }
             throw e
         } catch (e: Exception) {

@@ -26,7 +26,7 @@ import ch.abwesend.foldervault.infrastructure.room.entity.UploadedFileIndexEntit
         BackupRunEntity::class,
         NotificationThrottleStateEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 @TypeConverters(RoomTypeConverters::class)

@@ -23,8 +23,8 @@ android {
     defaultConfig {
         applicationId = "ch.abwesend.foldervault"
         minSdk = 26
-        versionCode = 6
-        versionName = "1.3.1"
+        versionCode = 8
+        versionName = "1.5.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -105,6 +105,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.activity.compose)
 
     // ── Compose ───────────────────────────────────────────────────────────────

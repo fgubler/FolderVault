@@ -26,6 +26,7 @@ class BackupWorker(
     companion object {
         const val KEY_CONFIG_ID = "configId"
         const val WORK_NAME_PREFIX = "foldervault_backup_"
+        const val CHARGING_FALLBACK_WORK_NAME_PREFIX = "foldervault_backup_charging_fallback_"
         private const val RUN_BUDGET_MINUTES = 8L
         private const val DEADLINE_BUFFER_SECONDS = 30L
         private const val MS_PER_MINUTE = 60_000L
@@ -34,6 +35,7 @@ class BackupWorker(
         private const val DEADLINE_BUFFER_MS = DEADLINE_BUFFER_SECONDS * MS_PER_SECOND // stop 30s before deadline
 
         fun workName(configId: String) = "$WORK_NAME_PREFIX$configId"
+        fun chargingFallbackWorkName(configId: String) = "$CHARGING_FALLBACK_WORK_NAME_PREFIX$configId"
     }
 
     override suspend fun doWork(): Result {
@@ -65,7 +67,11 @@ class BackupWorker(
                         // Reuse the config's network policy so a Wi-Fi-only backup never spills
                         // over onto mobile data on the continuation run.
                         logger.info("Run hit time budget with progress; re-enqueueing for config $id")
-                        BackupScheduler(applicationContext).scheduleOneTime(id, config.networkPolicy)
+                        BackupScheduler(applicationContext).scheduleOneTime(
+                            id,
+                            config.networkPolicy,
+                            config.requiresCharging,
+                        )
                         Result.success() // not retry() — we don't want backoff accumulation
                     } else {
                         notificationManager.clearResolvedThrottles(id)

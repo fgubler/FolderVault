@@ -106,6 +106,34 @@ class DatabaseMigrationTest {
         }
     }
 
+    @Test
+    fun `migration 2 to 3 adds requiresCharging column defaulting to 0`() {
+        val db = helper.writableDatabase
+        seedV1BackupConfig(db, configId = "config-charging")
+        DatabaseMigrations.MIGRATION_1_2.migrate(db)
+
+        DatabaseMigrations.MIGRATION_2_3.migrate(db)
+
+        db.query("SELECT requiresCharging FROM BackupConfig WHERE id = 'config-charging'").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(0, c.getInt(0))
+        }
+    }
+
+    @Test
+    fun `migration 2 to 3 preserves existing BackupConfig rows`() {
+        val db = helper.writableDatabase
+        seedV1BackupConfig(db, configId = "kept-across-v3", displayName = "Survives v3")
+        DatabaseMigrations.MIGRATION_1_2.migrate(db)
+
+        DatabaseMigrations.MIGRATION_2_3.migrate(db)
+
+        db.query("SELECT displayName FROM BackupConfig WHERE id = 'kept-across-v3'").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("Survives v3", c.getString(0))
+        }
+    }
+
     /**
      * Subset of the v1 schema: only the tables this migration touches or references. Other v1
      * tables (UploadedFileIndex, BackupMessage, NotificationThrottleState) are irrelevant to

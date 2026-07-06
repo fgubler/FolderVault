@@ -77,7 +77,7 @@ class BackupDetailViewModel(
             if (needsWifi && !connectivityChecker.isOnUnmeteredNetwork()) {
                 _showMeteredOverridePrompt.value = true
             } else {
-                scheduler.scheduleOneTime(configId, current.networkPolicy)
+                scheduler.scheduleOneTime(configId, current.networkPolicy, current.requiresCharging)
             }
         }
     }
@@ -85,8 +85,9 @@ class BackupDetailViewModel(
     /** Confirms the warning — schedules the run with no Wi-Fi requirement for this one time. */
     fun confirmMeteredOverride() {
         _showMeteredOverridePrompt.value = false
-        if (config.value?.isPaused != true && !isRunning.value) {
-            scheduler.scheduleOneTime(configId, NetworkPolicy.ANY)
+        val current = config.value
+        if (current != null && !current.isPaused && !isRunning.value) {
+            scheduler.scheduleOneTime(configId, NetworkPolicy.ANY, current.requiresCharging)
         }
     }
 
@@ -102,7 +103,13 @@ class BackupDetailViewModel(
             scheduler.cancel(configId)
         } else {
             val globalDefault = settingsRepo.settings.first().defaultSchedule
-            scheduler.schedulePeriodicIfNeeded(configId, current.schedule, current.networkPolicy, globalDefault)
+            scheduler.schedulePeriodicIfNeeded(
+                configId = configId,
+                schedule = current.schedule,
+                networkPolicy = current.networkPolicy,
+                requiresCharging = current.requiresCharging,
+                globalDefault = globalDefault,
+            )
         }
         configRepo.setPaused(configId, newPaused)
     }

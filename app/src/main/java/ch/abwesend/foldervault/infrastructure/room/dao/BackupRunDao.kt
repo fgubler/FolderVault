@@ -62,6 +62,18 @@ interface BackupRunDao {
     suspend fun findByRunId(runId: String): BackupRunEntity?
 
     /**
+     * Returns the [limit] most-recent statuses for [configId] (newest first). Used by the
+     * charging-only fallback trigger to decide whether the last N runs have all been cancelled.
+     */
+    @Query(
+        """SELECT status FROM BackupRun
+           WHERE backupConfigId = :configId
+           ORDER BY startedAt DESC
+           LIMIT :limit"""
+    )
+    suspend fun getRecentStatuses(configId: String, limit: Int): List<BackupRunStatus>
+
+    /**
      * Marks any RUNNING row that started before [staleBefore] as CANCELLED with
      * [completedAt] = [now]. Used at app startup to flip rows left behind by process
      * death — see [STALE_GRACE_WINDOW_MS]. Returns the number of rows updated.

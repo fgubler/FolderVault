@@ -41,6 +41,7 @@ data class AddEditFormState(
     val schedule: BackupSchedule = BackupSchedule.DAILY,
     val changedFilePolicy: ChangedFilePolicy = ChangedFilePolicy.DUPLICATE_WITH_TIMESTAMP,
     val networkPolicy: NetworkPolicy = NetworkPolicy.WIFI_ONLY,
+    val requiresCharging: Boolean = false,
     val encryptionEnabled: Boolean = false,
     val password: String = "",
     val passwordConfirm: String = "",
@@ -125,6 +126,7 @@ class AddEditBackupViewModel(
             schedule = resolvedSchedule,
             changedFilePolicy = config.changedFilePolicy,
             networkPolicy = config.networkPolicy,
+            requiresCharging = config.requiresCharging,
             encryptionEnabled = config.encryptionEnabled,
             retentionPolicy = config.retentionPolicy,
             isEditMode = true,
@@ -141,6 +143,8 @@ class AddEditBackupViewModel(
     fun setChangedFilePolicy(policy: ChangedFilePolicy) = updateForm { it.copy(changedFilePolicy = policy) }
 
     fun setNetworkPolicy(policy: NetworkPolicy) = updateForm { it.copy(networkPolicy = policy) }
+
+    fun setRequiresCharging(enabled: Boolean) = updateForm { it.copy(requiresCharging = enabled) }
 
     fun setEncryptionEnabled(enabled: Boolean) = updateForm { it.copy(encryptionEnabled = enabled) }
 
@@ -239,7 +243,13 @@ class AddEditBackupViewModel(
                 val config = buildConfig(state, subFolder.first, subFolder.second) ?: return@safeLaunch
                 configRepo.save(config)
                 val globalDefault = settingsRepo.settings.first().defaultSchedule
-                scheduler.schedulePeriodicIfNeeded(config.id, config.schedule, config.networkPolicy, globalDefault)
+                scheduler.schedulePeriodicIfNeeded(
+                    configId = config.id,
+                    schedule = config.schedule,
+                    networkPolicy = config.networkPolicy,
+                    requiresCharging = config.requiresCharging,
+                    globalDefault = globalDefault,
+                )
                 _events.emit(AddEditEvent.Saved)
             } catch (e: Exception) {
                 e.rethrowCancellation()
@@ -353,6 +363,7 @@ class AddEditBackupViewModel(
             encryptionSaltBase64 = saltBase64,
             retentionPolicy = state.retentionPolicy,
             networkPolicy = state.networkPolicy,
+            requiresCharging = state.requiresCharging,
             createdAt = existingConfig?.createdAt ?: System.currentTimeMillis(),
             lastRunAt = existingConfig?.lastRunAt,
             lastRunStatus = existingConfig?.lastRunStatus ?: BackupRunStatus.IDLE,

@@ -127,6 +127,7 @@
     <string name="button_connect_drive">Connect to Google Drive</string>
     <string name="label_schedule">Schedule</string>
     <string name="label_network_policy">Network policy</string>
+    <string name="label_requires_charging">Only run while charging</string>
     <string name="label_changed_file_policy">Changed-file policy</string>
     <string name="label_retention_policy">Retention policy</string>
     <string name="label_keep_n_copies">Number of copies to keep</string>
@@ -137,6 +138,8 @@
     <string name="label_confirm_password">Confirm password</string>
     <string name="button_save">Save</string>
     <string name="button_saving">Saving…</string>
+    <string name="info_requires_charging_title">Only run while charging</string>
+    <string name="info_requires_charging_body">When on, FolderVault waits for the phone to be plugged in before starting a backup. When off, backups run whenever the phone has power to spare — but if several attempts in a row get cut short (for example the phone unplugs or reboots), FolderVault will schedule one extra charging-only run in the background so at least one attempt gets to finish. Your normal schedule keeps running either way.</string>
     <string name="info_changed_file_policy_title">Changed-file policy</string>
     <string name="info_changed_file_policy_body">FolderVault is built for files that rarely change. When a file you\'ve already backed up gets edited, this setting decides whether to upload it as a new timestamped copy, overwrite the previous upload, or skip the change.</string>
     <string name="info_retention_policy_title">Retention policy</string>
@@ -221,6 +224,19 @@
     <string name="label_anonymous_error_reports">Anonymous error reports</string>
     <string name="desc_anonymous_error_reports">Help improve the app by sending anonymous crash reports</string>
     <string name="button_request_notification_permission">Re-request notification permission</string>
+    <string name="section_reliable_backups">Reliable background backups</string>
+    <string name="label_battery_optimization">Battery optimization</string>
+    <string name="status_battery_optimization_exempt">✓ FolderVault is excluded from battery optimization</string>
+    <string name="status_battery_optimization_active">Android may delay backups to save battery</string>
+    <string name="button_open_battery_settings">Open battery settings</string>
+    <string name="info_battery_optimization_title">Battery optimization</string>
+    <string name="info_battery_optimization_body">To save battery, Android puts apps to sleep when you are not using them. This can delay scheduled backups, sometimes by hours. If you exclude FolderVault from battery optimization, backups start much closer to their schedule.\n\nIn the screen that opens, find FolderVault in the list and choose \"Don\'t optimize\".</string>
+    <string name="label_background_data">Background data</string>
+    <string name="status_background_data_allowed">✓ Background data is allowed</string>
+    <string name="status_background_data_restricted">Data Saver is blocking backups over mobile data</string>
+    <string name="button_open_data_settings">Open data settings</string>
+    <string name="info_background_data_title">Background data</string>
+    <string name="info_background_data_body">When Data Saver is on, Android blocks background data for apps while you are on mobile data. Backups that are allowed to use mobile data then have to wait until you are on Wi-Fi. If you allow unrestricted data usage for FolderVault, those backups can run anyway.\n\nBackups set to Wi-Fi only are not affected by this.</string>
     <string name="button_show_onboarding">Show onboarding again</string>
     <string name="button_export_today_log">Export today\'s logfile</string>
     <string name="export_log_success">Logfile exported</string>
@@ -246,8 +262,8 @@
     <!-- Restore screen -->
     <string name="restore_title">Restore backup</string>
     <string name="restore_explanation_title">Restore an encrypted backup</string>
-    <string name="restore_explanation_body">1. Use the Google Drive app to download your backup folder to local storage.\n2. Pick the downloaded folder and an empty output folder here.\n3. Enter your backup password — every file will be decrypted locally.</string>
-    <string name="restore_step1_header">Step 1: downloaded backup folder</string>
+    <string name="restore_explanation_body">1. Pick your backup folder. If the Google Drive app is installed, you can select the folder directly on Google Drive in the file picker — no download needed. Otherwise, download it to local storage first.\n2. Pick an empty output folder.\n3. Enter your backup password — every file will be decrypted locally.</string>
+    <string name="restore_step1_header">Step 1: backup folder</string>
     <string name="restore_pick_backup_folder">Pick backup folder</string>
     <string name="restore_scanning">Scanning…</string>
     <string name="restore_no_encrypted_files">No encrypted files found. Your %1$d file(s) are already usable without decryption.</string>
@@ -269,7 +285,7 @@
     <string name="restore_wrong_password">Wrong password. No files were modified.</string>
     <string name="restore_cancelled">Restore was cancelled.</string>
     <string name="restore_failed">Restore failed: %1$s</string>
-    <string name="button_restore_again">Restore again</string>
+    <string name="button_restore_start_over">Start over (clear selection)</string>
     <string name="dialog_restoring_title">Restoring…</string>
     <string name="restore_verifying_password">Verifying password…</string>
     <string name="restore_decrypting_progress">Decrypting %1$d / %2$d files</string>

@@ -38,5 +38,16 @@ object DatabaseMigrations {
         }
     }
 
-    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2)
+    /**
+     * v2 → v3: adds the per-config `requiresCharging` flag on BackupConfig. Existing rows
+     * default to 0 (disabled) so the migration is a no-op behaviour-wise for users who don't
+     * enable the new option.
+     */
+    internal val MIGRATION_2_3 = object : Migration(2, 3) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE BackupConfig ADD COLUMN requiresCharging INTEGER NOT NULL DEFAULT 0")
+        }
+    }
+
+    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
 }

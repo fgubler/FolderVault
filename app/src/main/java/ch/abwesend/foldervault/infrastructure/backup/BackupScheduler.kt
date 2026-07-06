@@ -16,8 +16,8 @@ import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.model.BackupSchedule
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -36,6 +36,7 @@ class BackupScheduler(private val context: Context) : IBackupScheduler {
         configId: String,
         schedule: BackupSchedule,
         networkPolicy: NetworkPolicy,
+        requiresCharging: Boolean,
         globalDefault: BackupSchedule,
     ) {
         val resolved = if (schedule == BackupSchedule.USE_GLOBAL_DEFAULT) globalDefault else schedule
@@ -51,7 +52,7 @@ class BackupScheduler(private val context: Context) : IBackupScheduler {
                 BackupSchedule.MANUAL_ONLY, BackupSchedule.USE_GLOBAL_DEFAULT -> return
             }
             val request = PeriodicWorkRequestBuilder<BackupWorker>(hours, TimeUnit.HOURS)
-                .setConstraints(buildConstraints(networkPolicy))
+                .setConstraints(buildConstraints(networkPolicy, requiresCharging))
                 .setInputData(workDataOf(BackupWorker.KEY_CONFIG_ID to configId))
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, BACKOFF_INITIAL_DELAY_SECONDS, TimeUnit.SECONDS)
                 .build()
@@ -68,10 +69,10 @@ class BackupScheduler(private val context: Context) : IBackupScheduler {
     }
 
     /** Enqueues a one-time "back up now" run; replaces any already-queued one-time run. */
-    override fun scheduleOneTime(configId: String, networkPolicy: NetworkPolicy) {
+    override fun scheduleOneTime(configId: String, networkPolicy: NetworkPolicy, requiresCharging: Boolean) {
         try {
             val request = OneTimeWorkRequestBuilder<BackupWorker>()
-                .setConstraints(buildConstraints(networkPolicy))
+                .setConstraints(buildConstraints(networkPolicy, requiresCharging))
                 .setInputData(workDataOf(BackupWorker.KEY_CONFIG_ID to configId))
                 .build()
             workManager.enqueueUniqueWork(
@@ -87,10 +88,38 @@ class BackupScheduler(private val context: Context) : IBackupScheduler {
         }
     }
 
-    /** Cancels all work (periodic + one-time) for this config. Call before deleting a config. */
+    /**
+     * Charging-only fallback: forces [Constraints.setRequiresCharging] and uses a dedicated
+     * unique-work name so it never displaces the config's periodic / one-time runs.
+     * [ExistingWorkPolicy.KEEP] means we no-op if a fallback for this config is still pending.
+     */
+    override fun scheduleChargingFallback(configId: String, networkPolicy: NetworkPolicy) {
+        try {
+            val request = OneTimeWorkRequestBuilder<BackupWorker>()
+                .setConstraints(buildConstraints(networkPolicy, requiresCharging = true))
+                .setInputData(workDataOf(BackupWorker.KEY_CONFIG_ID to configId))
+                .build()
+            workManager.enqueueUniqueWork(
+                BackupWorker.chargingFallbackWorkName(configId),
+                ExistingWorkPolicy.KEEP,
+                request,
+            )
+            log.info("Enqueued charging-only fallback backup for config $configId")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.error("Failed to enqueue charging-only fallback for config $configId", e)
+        }
+    }
+
+    /**
+     * Cancels all work (periodic + one-time + charging-only fallback) for this config.
+     * Call before deleting a config.
+     */
     override fun cancel(configId: String) {
         try {
             workManager.cancelUniqueWork(BackupWorker.workName(configId))
+            workManager.cancelUniqueWork(BackupWorker.chargingFallbackWorkName(configId))
             log.info("Cancelled all backup work for config $configId")
         } catch (e: CancellationException) {
             throw e
@@ -99,12 +128,15 @@ class BackupScheduler(private val context: Context) : IBackupScheduler {
         }
     }
 
-    override fun observeIsRunning(configId: String): Flow<Boolean> =
-        workManager.getWorkInfosForUniqueWorkFlow(BackupWorker.workName(configId))
-            .map { infos -> infos.any { it.state == WorkInfo.State.RUNNING } }
-            .distinctUntilChanged()
+    override fun observeIsRunning(configId: String): Flow<Boolean> {
+        val primary = workManager.getWorkInfosForUniqueWorkFlow(BackupWorker.workName(configId))
+        val fallback = workManager.getWorkInfosForUniqueWorkFlow(BackupWorker.chargingFallbackWorkName(configId))
+        return combine(primary, fallback) { primaryInfos, fallbackInfos ->
+            (primaryInfos + fallbackInfos).any { it.state == WorkInfo.State.RUNNING }
+        }.distinctUntilChanged()
+    }
 
-    private fun buildConstraints(networkPolicy: NetworkPolicy) = Constraints.Builder()
+    private fun buildConstraints(networkPolicy: NetworkPolicy, requiresCharging: Boolean) = Constraints.Builder()
         .setRequiredNetworkType(
             if (networkPolicy == NetworkPolicy.WIFI_ONLY) {
                 NetworkType.UNMETERED
@@ -114,5 +146,6 @@ class BackupScheduler(private val context: Context) : IBackupScheduler {
         )
         .setRequiresBatteryNotLow(true)
         .setRequiresStorageNotLow(true)
+        .setRequiresCharging(requiresCharging)
         .build()
 }

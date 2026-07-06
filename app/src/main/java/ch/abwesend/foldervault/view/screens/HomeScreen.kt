@@ -290,6 +290,7 @@ private fun BackupCardPreview() {
         encryptionSaltBase64 = null,
         retentionPolicy = RetentionPolicy.KeepAll,
         networkPolicy = NetworkPolicy.WIFI_ONLY,
+        requiresCharging = false,
         createdAt = System.currentTimeMillis(),
         lastRunAt = System.currentTimeMillis() - 7_200_000,
         lastRunStatus = BackupRunStatus.UP_TO_DATE,

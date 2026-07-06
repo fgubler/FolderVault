@@ -1,7 +1,12 @@
 package ch.abwesend.foldervault.view.screens
 
 import android.Manifest
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.StringRes
@@ -36,16 +41,19 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.model.AppSettings
 import ch.abwesend.foldervault.domain.model.AppTheme
 import ch.abwesend.foldervault.domain.model.BackupSchedule
 import ch.abwesend.foldervault.domain.model.ChangedFilePolicy
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
+import ch.abwesend.foldervault.domain.system.BackgroundRestrictionStatus
 import ch.abwesend.foldervault.ui.theme.FolderVaultTheme
 import ch.abwesend.foldervault.view.components.EnumDropdown
 import ch.abwesend.foldervault.view.components.InfoIconButton
@@ -64,12 +72,19 @@ internal fun SettingsScreen(
     val settings by viewModel.settings.collectAsState()
     val unexpectedError by viewModel.unexpectedError.collectAsState()
     val exportResult by viewModel.exportResult.collectAsState()
+    val backgroundRestrictions by viewModel.backgroundRestrictions.collectAsState()
+    val context = LocalContext.current
     val notificationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { _ -> }
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("text/plain"),
     ) { uri -> if (uri != null) viewModel.exportTodayLogFile(uri) }
+
+    LifecycleResumeEffect(Unit) {
+        viewModel.refreshBackgroundRestrictions()
+        onPauseOrDispose { }
+    }
 
     UnexpectedErrorDialog(error = unexpectedError, onDismiss = viewModel::dismissUnexpectedError)
     exportResult?.let { message ->
@@ -97,6 +112,7 @@ internal fun SettingsScreen(
     ) { innerPadding ->
         SettingsContent(
             settings = settings,
+            backgroundRestrictions = backgroundRestrictions,
             modifier = Modifier.padding(innerPadding),
             onScheduleChange = viewModel::setDefaultSchedule,
             onChangedFilePolicyChange = viewModel::setDefaultChangedFilePolicy,
@@ -116,6 +132,8 @@ internal fun SettingsScreen(
             onExportTodayLog = {
                 exportLauncher.launch("foldervault-log-${System.currentTimeMillis()}.log")
             },
+            onOpenBatterySettings = { context.openBatteryOptimizationSettings() },
+            onOpenBackgroundDataSettings = { context.openBackgroundDataSettings() },
         )
     }
 }
@@ -124,6 +142,7 @@ internal fun SettingsScreen(
 @Composable
 private fun SettingsContent(
     settings: AppSettings,
+    backgroundRestrictions: BackgroundRestrictionStatus,
     onScheduleChange: (BackupSchedule) -> Unit,
     onChangedFilePolicyChange: (ChangedFilePolicy) -> Unit,
     onNetworkPolicyChange: (NetworkPolicy) -> Unit,
@@ -133,6 +152,8 @@ private fun SettingsContent(
     onShowOnboarding: () -> Unit,
     onRequestNotificationPermission: () -> Unit,
     onExportTodayLog: () -> Unit,
+    onOpenBatterySettings: () -> Unit,
+    onOpenBackgroundDataSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -207,22 +228,41 @@ private fun SettingsContent(
         }
 
         SectionDivider()
-        SettingsSectionHeader(stringResource(R.string.section_help))
+        ReliableBackupsSection(
+            backgroundRestrictions = backgroundRestrictions,
+            onOpenBatterySettings = onOpenBatterySettings,
+            onOpenBackgroundDataSettings = onOpenBackgroundDataSettings,
+        )
 
-        OutlinedButton(
-            onClick = onShowOnboarding,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(stringResource(R.string.button_show_onboarding))
-        }
+        SectionDivider()
+        HelpSection(
+            onShowOnboarding = onShowOnboarding,
+            onExportTodayLog = onExportTodayLog,
+        )
+    }
+}
 
-        Spacer(modifier = Modifier.height(12.dp))
-        OutlinedButton(
-            onClick = onExportTodayLog,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(stringResource(R.string.button_export_today_log))
-        }
+@Suppress("MultipleEmitters")
+@Composable
+private fun HelpSection(
+    onShowOnboarding: () -> Unit,
+    onExportTodayLog: () -> Unit,
+) {
+    SettingsSectionHeader(stringResource(R.string.section_help))
+
+    OutlinedButton(
+        onClick = onShowOnboarding,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(stringResource(R.string.button_show_onboarding))
+    }
+
+    Spacer(modifier = Modifier.height(12.dp))
+    OutlinedButton(
+        onClick = onExportTodayLog,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(stringResource(R.string.button_export_today_log))
     }
 }
 
@@ -264,6 +304,98 @@ private fun SwitchRow(
     }
 }
 
+/**
+ * Settings section showing the OS-level restrictions that can delay or block background backups,
+ * with buttons jumping to the system-settings screens where the user can lift them.
+ */
+@Suppress("MultipleEmitters")
+@Composable
+private fun ReliableBackupsSection(
+    backgroundRestrictions: BackgroundRestrictionStatus,
+    onOpenBatterySettings: () -> Unit,
+    onOpenBackgroundDataSettings: () -> Unit,
+) {
+    SettingsSectionHeader(stringResource(R.string.section_reliable_backups))
+
+    BackgroundRestrictionRow(
+        label = stringResource(R.string.label_battery_optimization),
+        statusText = stringResource(
+            if (backgroundRestrictions.ignoringBatteryOptimizations) {
+                R.string.status_battery_optimization_exempt
+            } else {
+                R.string.status_battery_optimization_active
+            },
+        ),
+        isResolved = backgroundRestrictions.ignoringBatteryOptimizations,
+        buttonLabel = stringResource(R.string.button_open_battery_settings),
+        infoTitle = stringResource(R.string.info_battery_optimization_title),
+        infoBody = stringResource(R.string.info_battery_optimization_body),
+        onOpenSettings = onOpenBatterySettings,
+    )
+
+    Spacer(modifier = Modifier.height(12.dp))
+    BackgroundRestrictionRow(
+        label = stringResource(R.string.label_background_data),
+        statusText = stringResource(
+            if (backgroundRestrictions.backgroundDataRestricted) {
+                R.string.status_background_data_restricted
+            } else {
+                R.string.status_background_data_allowed
+            },
+        ),
+        isResolved = !backgroundRestrictions.backgroundDataRestricted,
+        buttonLabel = stringResource(R.string.button_open_data_settings),
+        infoTitle = stringResource(R.string.info_background_data_title),
+        infoBody = stringResource(R.string.info_background_data_body),
+        onOpenSettings = onOpenBackgroundDataSettings,
+    )
+}
+
+/**
+ * One entry of the "reliable background backups" section: a label with the current restriction
+ * state, an info popup explaining why resolving it helps, and a button jumping to the system
+ * settings screen where the user can resolve it.
+ */
+@Suppress("LongParameterList")
+@Composable
+private fun BackgroundRestrictionRow(
+    label: String,
+    statusText: String,
+    isResolved: Boolean,
+    buttonLabel: String,
+    infoTitle: String,
+    infoBody: String,
+    onOpenSettings: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(label, style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    statusText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (isResolved) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
+            InfoIconButton(title = infoTitle, body = infoBody)
+        }
+        OutlinedButton(
+            onClick = onOpenSettings,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(buttonLabel)
+        }
+    }
+}
+
 @Suppress("MultipleEmitters")
 @Composable
 private fun FileSizeLimitField(defaultSizeMb: Int, onFileSizeLimitChange: (Int) -> Unit) {
@@ -290,6 +422,42 @@ private fun FileSizeLimitField(defaultSizeMb: Int, onFileSizeLimitChange: (Int) 
     }
 }
 
+/**
+ * Opens the system list where the user can exclude FolderVault from battery optimization.
+ * The app deliberately does not request the exemption directly (Play Store policy); the user
+ * has to grant it in the system settings.
+ */
+private fun Context.openBatteryOptimizationSettings() {
+    startSystemScreenWithFallback(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+}
+
+/**
+ * Opens the system screen for this app's background data usage, where the user can allow
+ * unrestricted data so backups over mobile data keep working while Data Saver is on.
+ */
+private fun Context.openBackgroundDataSettings() {
+    startSystemScreenWithFallback(
+        Intent(
+            Settings.ACTION_IGNORE_BACKGROUND_DATA_RESTRICTIONS_SETTINGS,
+            Uri.fromParts("package", packageName, null),
+        ),
+    )
+}
+
+/**
+ * Starts the given system-settings intent, falling back to the app-details screen on devices
+ * whose OEM skin does not offer the standard screen.
+ */
+private fun Context.startSystemScreenWithFallback(intent: Intent) {
+    try {
+        startActivity(intent)
+    } catch (_: ActivityNotFoundException) {
+        startActivity(
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)),
+        )
+    }
+}
+
 @StringRes
 private fun BackupSchedule.labelResId(): Int = when (this) {
     BackupSchedule.USE_GLOBAL_DEFAULT -> R.string.schedule_global_default
@@ -305,6 +473,7 @@ private fun SettingsScreenPreview() {
     FolderVaultTheme {
         SettingsContent(
             settings = AppSettings(),
+            backgroundRestrictions = BackgroundRestrictionStatus(),
             onScheduleChange = {},
             onChangedFilePolicyChange = {},
             onNetworkPolicyChange = {},
@@ -314,6 +483,8 @@ private fun SettingsScreenPreview() {
             onShowOnboarding = {},
             onRequestNotificationPermission = {},
             onExportTodayLog = {},
+            onOpenBatterySettings = {},
+            onOpenBackgroundDataSettings = {},
         )
     }
 }

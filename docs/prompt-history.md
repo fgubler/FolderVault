@@ -7,6 +7,130 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-03 — Settings: "Reliable background backups" section (battery optimization + Data Saver)
+
+### What was requested
+Help the user lift the two OS-level restrictions that can delay or block background backups:
+battery optimization and Data Saver background-data blocking. Settings page only for now
+(onboarding unchanged); deliberately no direct `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` request
+to avoid Play Store policy risk — the app only jumps to the relevant system-settings screens.
+
+### What was done
+- `domain/system/IBackgroundRestrictionChecker` + `BackgroundRestrictionStatus`: domain seam for
+  reading the two restriction states.
+- `infrastructure/system/AndroidBackgroundRestrictionChecker`: `PowerManager
+  .isIgnoringBatteryOptimizations()` and `ConnectivityManager.restrictBackgroundStatus ==
+  RESTRICT_BACKGROUND_STATUS_ENABLED` (only Data-Saver-ON + not whitelisted counts as restricted).
+- `SettingsViewModel.refreshBackgroundRestrictions()` exposes a `StateFlow`, re-read via
+  `LifecycleResumeEffect` so the status updates when the user returns from the system settings.
+- New settings section "Reliable background backups" between Notifications and Help: per
+  restriction a status line (✓ in primary color when resolved), an info-icon popup explaining why
+  resolving it helps, and a jump button:
+  `ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS` (list screen, no permission needed) and
+  `ACTION_IGNORE_BACKGROUND_DATA_RESTRICTIONS_SETTINGS` with `package:` URI (app-specific screen);
+  both fall back to the app-details screen on `ActivityNotFoundException`.
+- Added `androidx.lifecycle:lifecycle-runtime-compose` for `LifecycleResumeEffect`.
+- Tests first: Robolectric shadow tests for the checker (5), Kotest ViewModel tests for the
+  refresh flow (3 new); extracted `ReliableBackupsSection` / `HelpSection` composables to keep
+  `SettingsContent` under the detekt `LongMethod` limit.
+- Verified on the emulator: both buttons land on the correct system screens; granting the Doze
+  exemption flips the status to ✓ on return to the app.
+
+### Notes
+- Emulator crash encountered during verification was a pre-existing stale-database Room identity
+  mismatch from an older dev build — fixed by `pm clear`, unrelated to this change.
+- Onboarding integration of the same section is a possible follow-up (reuse
+  `ReliableBackupsSection`).
+
+## 2026-07-03 — Restore screen: retry after wrong password, clearer texts
+
+### What was requested
+1. After a failed restore attempt (e.g. wrong password), allow the user to fix the password and
+   retry directly — previously the "Start restore" button stayed disabled and the user had to
+   reset the whole flow.
+2. Rename the reset button ("Restore again") to make clear it clears the selection and starts over.
+3. Adapt the helper text: if the Google Drive app is installed, folders on Google Drive can be
+   selected directly in the system file picker, so backups can be restored straight from Drive
+   without downloading first.
+
+### What was changed
+- `RestoreScreen.kt`: `PasswordAndStartSection` is now also enabled when the state is
+  `RestoreState.Done` (not only `ReadyToStart`), enabling a retry with the same source/output.
+- `strings.xml`:
+  - `button_restore_again` → `button_restore_start_over` ("Start over (clear selection)").
+  - `restore_explanation_body` rewritten: picking the backup folder directly on Google Drive via
+    the file picker is now the primary path; downloading first is the fallback.
+  - `restore_step1_header`: "downloaded backup folder" → "backup folder" (consistency).
+
+### Verification
+- `assembleDebug`, `test`, `detekt` all green. No tests reference the composable directly
+  (pure UI-state wiring change; the ViewModel logic is unchanged).
+
+## 2026-07-02 — Per-backup "only run while charging" + cancellation-streak fallback
+
+### What was requested
+1. Per-backup **"only run while charging"** toggle (default off).
+2. When the toggle is off but a backup gets cancelled repeatedly, schedule a **single one-off
+   charging-only run** without displacing the normal periodic schedule — a user who always turns
+   the phone off while charging must still see periodic non-charging attempts.
+
+### Design decisions
+- **Trigger rule**: 3 consecutive cancellations. Any success resets the streak.
+- **Threshold hard-coded** (`ChargingFallbackTrigger.CANCELLATION_STREAK_THRESHOLD = 3`) — not
+  user-configurable.
+- **Fallback isolation**: distinct WorkManager unique-work name
+  (`foldervault_backup_charging_fallback_<configId>`), enqueued with `ExistingWorkPolicy.KEEP`
+  so a second cancellation while a fallback is pending is a no-op. Periodic work under
+  `foldervault_backup_<configId>` is untouched.
+- **Short-circuit** when `requiresCharging=true`: no DAO query, no fallback — the periodic
+  schedule already carries the constraint.
+- **UI**: single `Switch` with info-icon popup inside the existing `ScheduleSection`, plain-language
+  body text (matches the UX text-style convention).
+
+### What was done
+- **Room migration**: `BackupConfigEntity` gained `requiresCharging: Boolean = false`; database
+  bumped v2 → v3; `MIGRATION_2_3` adds `INTEGER NOT NULL DEFAULT 0`; schema JSON regenerated at
+  `app/schemas/.../3.json`.
+- **DAO**: added `BackupRunDao.getRecentStatuses(configId, limit)` for streak detection.
+- **Domain**: `BackupConfig.requiresCharging` field + repository mapping updates.
+- **Scheduler interface**: `scheduleOneTime` / `schedulePeriodicIfNeeded` gained the flag;
+  new `scheduleChargingFallback(configId, networkPolicy)` method; `buildConstraints` calls
+  `setRequiresCharging`; `observeIsRunning` combines primary + fallback flows; `cancel`
+  clears both unique-work names.
+- **Runner**: `BackupRunner` gained `scheduler` ctor param; in its `NonCancellable`
+  `CancellationException` catch it calls `ChargingFallbackTrigger.maybeSchedule(...)` right
+  after `commitRunStats`. Streak-detection logic extracted into `ChargingFallbackTrigger` so
+  it's unit-testable without spinning up the full runner.
+- **DI**: `AppModule` wires the new scheduler argument into the `BackupRunner` factory.
+- **ViewModels**: `AddEditBackupViewModel` — new form state field, setter, load/save
+  propagation. `BackupDetailViewModel` — `backUpNow`, `confirmMeteredOverride`, `togglePause`
+  all pass `current.requiresCharging`.
+- **UI**: `AddEditBackupScreen.ScheduleSection` renders a `Row` with a label + info icon +
+  `Switch`, matching the encryption-toggle pattern. New strings: `label_requires_charging`,
+  `info_requires_charging_title`, `info_requires_charging_body`.
+
+### Tests
+- **New** `ChargingFallbackTriggerTest` — 5 Kotest cases: streak reached triggers fallback,
+  streak broken by a success, insufficient history, short-circuit when `requiresCharging=true`,
+  network-policy propagation. All green.
+- **New** `MIGRATION_2_3` tests (default 0, existing rows preserved) — added to
+  `DatabaseMigrationTest`. Total 5 tests, all green.
+- **New** `BackupRunDao.getRecentStatuses` tests — 3 cases (ordering, limit, per-config
+  isolation) added to `BackupRunDaoTest`. Total 11 tests, all green.
+- **Updated** `BackupDetailViewModelTest` fixtures and `scheduler.scheduleOneTime(...)` verify
+  calls to the 3-arg signature. 8 tests, all green.
+- Other existing test fixtures compile unchanged thanks to the entity's
+  `requiresCharging: Boolean = false` default.
+
+### DoD gates
+- ✅ `./gradlew assembleDebug` — clean
+- ✅ `./gradlew test` — all green (ChargingFallbackTrigger 5/5, BackupRunDao 11/11,
+  DatabaseMigration 5/5, BackupDetailViewModel 8/8, all other suites unchanged)
+- ✅ `./gradlew detekt` — no issues
+- ⏭ UI screenshot verification — pending (user to launch on emulator/device and confirm the
+  toggle appears in Schedule & network, info dialog opens, and persistence survives an app
+  restart)
+
 ## 2026-06-30 — Run-history follow-up: no more stuck-RUNNING rows + migration test
 
 ### What was done

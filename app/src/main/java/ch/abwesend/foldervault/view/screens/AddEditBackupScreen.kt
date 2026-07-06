@@ -143,6 +143,7 @@ fun AddEditBackupScreen(
             onScheduleChange = viewModel::setSchedule,
             onChangedFilePolicyChange = viewModel::setChangedFilePolicy,
             onNetworkPolicyChange = viewModel::setNetworkPolicy,
+            onRequiresChargingChange = viewModel::setRequiresCharging,
             onEncryptionToggle = viewModel::setEncryptionEnabled,
             onPasswordChange = viewModel::setPassword,
             onPasswordConfirmChange = viewModel::setPasswordConfirm,
@@ -162,6 +163,7 @@ private fun AddEditContent(
     onScheduleChange: (BackupSchedule) -> Unit,
     onChangedFilePolicyChange: (ChangedFilePolicy) -> Unit,
     onNetworkPolicyChange: (NetworkPolicy) -> Unit,
+    onRequiresChargingChange: (Boolean) -> Unit,
     onEncryptionToggle: (Boolean) -> Unit,
     onPasswordChange: (String) -> Unit,
     onPasswordConfirmChange: (String) -> Unit,
@@ -191,8 +193,10 @@ private fun AddEditContent(
         ScheduleSection(
             schedule = form.schedule,
             networkPolicy = form.networkPolicy,
+            requiresCharging = form.requiresCharging,
             onScheduleChange = onScheduleChange,
             onNetworkPolicyChange = onNetworkPolicyChange,
+            onRequiresChargingChange = onRequiresChargingChange,
         )
 
         HorizontalDivider()
@@ -296,8 +300,10 @@ private fun CloudSection(
 private fun ScheduleSection(
     schedule: BackupSchedule,
     networkPolicy: NetworkPolicy,
+    requiresCharging: Boolean,
     onScheduleChange: (BackupSchedule) -> Unit,
     onNetworkPolicyChange: (NetworkPolicy) -> Unit,
+    onRequiresChargingChange: (Boolean) -> Unit,
 ) {
     SectionHeader(stringResource(R.string.section_schedule_network))
     EnumDropdown(
@@ -315,6 +321,15 @@ private fun ScheduleSection(
         displayName = { stringResource(it.labelResId) },
         onSelect = onNetworkPolicyChange,
     )
+    Spacer(modifier = Modifier.height(12.dp))
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Text(stringResource(R.string.label_requires_charging), modifier = Modifier.weight(1f))
+        InfoIconButton(
+            title = stringResource(R.string.info_requires_charging_title),
+            body = stringResource(R.string.info_requires_charging_body),
+        )
+        Switch(checked = requiresCharging, onCheckedChange = onRequiresChargingChange)
+    }
 }
 
 @Suppress("MultipleEmitters")
@@ -507,6 +522,7 @@ private fun AddEditBackupScreenPreview() {
             onScheduleChange = {},
             onChangedFilePolicyChange = {},
             onNetworkPolicyChange = {},
+            onRequiresChargingChange = {},
             onEncryptionToggle = {},
             onPasswordChange = {},
             onPasswordConfirmChange = {},

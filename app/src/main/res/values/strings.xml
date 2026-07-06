@@ -176,7 +176,6 @@
     <string name="button_clear_all">Clear all</string>
     <string name="no_messages">No messages</string>
     <string name="backup_run_history_title">Run history</string>
-    <string name="backup_run_history_button">Run history</string>
     <string name="backup_run_history_empty">No previous backup runs yet.</string>
     <string name="backup_run_duration">Duration: %1$s</string>
     <string name="backup_run_duration_in_progress">in progress</string>

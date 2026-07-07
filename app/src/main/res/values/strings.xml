@@ -92,10 +92,10 @@
     <string name="home_cd_settings">Settings</string>
     <string name="home_cd_add">Add backup</string>
     <string name="home_cd_encrypted">Encrypted</string>
-    <string name="home_cd_paused">Paused</string>
+    <string name="home_cd_paused">Disabled</string>
     <string name="home_empty_title">No backups yet</string>
     <string name="home_empty_subtitle">Tap + to create your first backup</string>
-    <string name="home_status_paused">Paused</string>
+    <string name="home_status_paused">Disabled</string>
     <string name="home_status_initial_sync">Initial backup: %1$d / %2$d files — continues in next run</string>
     <string name="home_status_running">Running…</string>
     <string name="home_status_never_run">Never run</string>
@@ -180,6 +180,9 @@
     <string name="label_cloud_folder">Cloud folder</string>
     <string name="label_account">Account</string>
     <string name="label_network">Network</string>
+    <string name="label_only_while_charging">Only while charging</string>
+    <string name="common_yes">Yes</string>
+    <string name="common_no">No</string>
     <string name="label_encryption">Encryption</string>
     <string name="label_retention">Retention</string>
     <string name="encryption_enabled">Enabled</string>
@@ -204,8 +207,8 @@
     <string name="button_dismiss">Dismiss</string>
     <string name="button_back_up_now">Back up now</string>
     <string name="button_backing_up">Backing up…</string>
-    <string name="button_resume">Resume</string>
-    <string name="button_pause">Pause</string>
+    <string name="button_enable">Enable</string>
+    <string name="button_disable">Disable</string>
     <string name="button_check_password">Check my password</string>
     <string name="button_open_in_drive">Open in Google Drive</string>
     <string name="dialog_open_drive_error_title">Cannot open Google Drive</string>

@@ -21,8 +21,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -279,6 +277,10 @@ private fun ConfigInfoSection(config: BackupConfig) {
         }
         InfoRow(stringResource(R.string.label_network), stringResource(networkLabelRes))
         InfoRow(
+            stringResource(R.string.label_only_while_charging),
+            stringResource(if (config.requiresCharging) R.string.common_yes else R.string.common_no),
+        )
+        InfoRow(
             stringResource(R.string.label_encryption),
             stringResource(if (config.encryptionEnabled) R.string.encryption_enabled else R.string.encryption_disabled),
         )
@@ -419,11 +421,7 @@ private fun ActionButtonRow(
                 }
             }
             OutlinedButton(onClick = onTogglePause, modifier = Modifier.weight(1f)) {
-                Icon(
-                    if (config.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                    contentDescription = null,
-                )
-                Text(stringResource(if (config.isPaused) R.string.button_resume else R.string.button_pause))
+                Text(stringResource(if (config.isPaused) R.string.button_enable else R.string.button_disable))
             }
         }
         if (config.encryptionEnabled) {

@@ -23,6 +23,12 @@ navigates back.
   back gesture) and returns the click handler for the top-bar back arrow; both show a
   `DiscardChangesDialog` ("Leave" / "Keep editing") before navigating back.
 - New strings: `dialog_discard_changes_title/_body`, `button_discard`, `button_keep_editing`.
+- `BackupDetailScreen`: the config-info section now shows an "Only while charging: Yes/No" row
+  (the `requiresCharging` setting itself — independent of the automatic charging-only retry
+  after repeated cancellations). The Pause/Resume button became **Disable/Enable** with no
+  icon, to make clear it disables the backup config rather than pausing a running backup.
+- `HomeScreen`: for consistency, the card indicator for a disabled backup changed from a
+  Pause icon / "Paused" status text to a Block icon / "Disabled".
 
 ### Decisions
 - A first version tracked a `pristineForm` baseline in the ViewModel and only asked when the

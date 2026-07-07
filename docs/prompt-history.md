@@ -7,6 +7,33 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-07 — Issue #17: UX improvements on the add/edit backup screen
+
+### What was requested
+GitHub issue #17: (1) keep the Save button visible at the bottom of the add/edit backup screen
+instead of requiring the user to scroll to it; (2) show a confirmation dialog when the user
+navigates back.
+
+### What was done
+- `AddEditBackupScreen`: the Save button (plus the inline validation error text) moved out of the
+  scrolling column into a new `SaveBottomBar` wired into the Scaffold's `bottomBar`, with
+  `imePadding` + `navigationBarsPadding` so it stays above the keyboard and system bars. The
+  content column's own `imePadding` was dropped (the Scaffold inner padding now covers it).
+- Back interception: `rememberConfirmingBackHandler()` registers a `BackHandler` (system
+  back gesture) and returns the click handler for the top-bar back arrow; both show a
+  `DiscardChangesDialog` ("Leave" / "Keep editing") before navigating back.
+- New strings: `dialog_discard_changes_title/_body`, `button_discard`, `button_keep_editing`.
+
+### Decisions
+- A first version tracked a `pristineForm` baseline in the ViewModel and only asked when the
+  form was actually dirty; on review the user chose the simpler behavior: **always ask on
+  back**, no change detection. The dialog wording ("Leave without saving? Any changes you made
+  will be lost.") is phrased so it is also correct when nothing was changed.
+
+### Verification
+- `assembleDebug` + `detekt` green (LongMethod on the screen composable resolved by extracting
+  `rememberConfirmingBackHandler`). No new unit tests — the remaining logic is pure UI wiring.
+
 ## 2026-07-07 — Per-backup Google account (execution of PLAN-per-backup-google-account.md)
 
 ### What was requested

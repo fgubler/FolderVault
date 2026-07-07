@@ -2,6 +2,7 @@ package ch.abwesend.foldervault.view.screens
 
 import android.accounts.AccountManager
 import android.content.Intent
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -14,12 +15,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -29,6 +32,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -63,6 +67,7 @@ import ch.abwesend.foldervault.view.viewmodel.AddEditBackupViewModel
 import ch.abwesend.foldervault.view.viewmodel.AddEditEvent
 import ch.abwesend.foldervault.view.viewmodel.AddEditFormState
 import ch.abwesend.foldervault.view.viewmodel.CloudSetupState
+import ch.abwesend.foldervault.view.viewmodel.UiText
 import ch.abwesend.foldervault.view.viewmodel.asString
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
@@ -122,19 +127,28 @@ fun AddEditBackupScreen(
         }
     }
 
+    val onBackRequested = rememberConfirmingBackHandler(onBack)
+
     val titleRes = if (configId == null) R.string.add_backup_title else R.string.edit_backup_title
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(titleRes)) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = onBackRequested) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = stringResource(R.string.button_back_cd),
                         )
                     }
                 },
+            )
+        },
+        bottomBar = {
+            SaveBottomBar(
+                errorMessage = form.errorMessage,
+                isSaving = form.isSaving,
+                onSave = viewModel::save,
             )
         },
         modifier = modifier,
@@ -153,8 +167,90 @@ fun AddEditBackupScreen(
             onPasswordChange = viewModel::setPassword,
             onPasswordConfirmChange = viewModel::setPasswordConfirm,
             onRetentionChange = viewModel::setRetentionPolicy,
-            onSave = viewModel::save,
         )
+    }
+}
+
+/**
+ * Intercepts the system back gesture and returns the click handler for the top-bar back button:
+ * both ask for confirmation before leaving, since any changes to the form would be lost.
+ */
+@Composable
+private fun rememberConfirmingBackHandler(onBack: () -> Unit): () -> Unit {
+    var showDiscardDialog by remember { mutableStateOf(false) }
+    val onBackRequested = { showDiscardDialog = true }
+    BackHandler(onBack = onBackRequested)
+    if (showDiscardDialog) {
+        DiscardChangesDialog(
+            onDiscard = {
+                showDiscardDialog = false
+                onBack()
+            },
+            onKeepEditing = { showDiscardDialog = false },
+        )
+    }
+    return onBackRequested
+}
+
+/**
+ * Confirmation shown when the user navigates back: any changes to the form would be lost.
+ */
+@Composable
+private fun DiscardChangesDialog(
+    onDiscard: () -> Unit,
+    onKeepEditing: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onKeepEditing,
+        title = { Text(stringResource(R.string.dialog_discard_changes_title)) },
+        text = { Text(stringResource(R.string.dialog_discard_changes_body)) },
+        confirmButton = {
+            TextButton(onClick = onDiscard) {
+                Text(stringResource(R.string.button_discard))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onKeepEditing) {
+                Text(stringResource(R.string.button_keep_editing))
+            }
+        },
+    )
+}
+
+/**
+ * Save button pinned to the bottom of the screen so it is reachable without scrolling.
+ * Validation errors are shown right above it for the same reason.
+ */
+@Composable
+private fun SaveBottomBar(
+    errorMessage: UiText?,
+    isSaving: Boolean,
+    onSave: () -> Unit,
+) {
+    Surface {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .imePadding()
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+        ) {
+            errorMessage?.let {
+                Text(
+                    it.asString(),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+            Button(
+                onClick = onSave,
+                enabled = !isSaving,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(if (isSaving) R.string.button_saving else R.string.button_save))
+            }
+        }
     }
 }
 
@@ -209,14 +305,12 @@ private fun AddEditContent(
     onPasswordChange: (String) -> Unit,
     onPasswordConfirmChange: (String) -> Unit,
     onRetentionChange: (RetentionPolicy) -> Unit,
-    onSave: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .imePadding()
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
@@ -257,18 +351,6 @@ private fun AddEditContent(
             onPasswordChange = onPasswordChange,
             onPasswordConfirmChange = onPasswordConfirmChange,
         )
-
-        form.errorMessage?.let {
-            Text(it.asString(), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-        }
-
-        Button(
-            onClick = onSave,
-            enabled = !form.isSaving,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(stringResource(if (form.isSaving) R.string.button_saving else R.string.button_save))
-        }
     }
 }
 
@@ -575,7 +657,6 @@ private fun AddEditBackupScreenPreview() {
             onPasswordChange = {},
             onPasswordConfirmChange = {},
             onRetentionChange = {},
-            onSave = {},
         )
     }
 }

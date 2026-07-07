@@ -139,6 +139,10 @@
     <string name="label_confirm_password">Confirm password</string>
     <string name="button_save">Save</string>
     <string name="button_saving">Saving…</string>
+    <string name="dialog_discard_changes_title">Leave without saving?</string>
+    <string name="dialog_discard_changes_body">Any changes you made will be lost.</string>
+    <string name="button_discard">Leave</string>
+    <string name="button_keep_editing">Keep editing</string>
     <string name="info_requires_charging_title">Only run while charging</string>
     <string name="info_requires_charging_body">When on, FolderVault waits for the phone to be plugged in before starting a backup. When off, backups run whenever the phone has power to spare — but if several attempts in a row get cut short (for example the phone unplugs or reboots), FolderVault will schedule one extra charging-only run in the background so at least one attempt gets to finish. Your normal schedule keeps running either way.</string>
     <string name="info_changed_file_policy_title">Changed-file policy</string>

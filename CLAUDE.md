@@ -42,10 +42,40 @@ Crashlytics confinement: ONLY `infrastructure/logging/CrashlyticsSink.kt` may im
 - **Konsist** architecture tests live in `src/test/.../architecture/`.
 - **Robolectric** / Compose UI tests use JUnit4 (`@RunWith(RobolectricTestRunner::class)`) —
   they run on the JUnit5 platform via the Vintage engine.
+- **Prefer hand-written fakes over MockK** for new tests of logic behind a domain / platform
+  seam (see `IDatabaseFileAccess` + `DatabaseRecoveryServiceTest`): extract the platform access
+  behind an interface and fake it. MockK's agent and Robolectric's jar download cannot run in
+  the Bash sandbox, so MockK/Robolectric tests are only verifiable outside it.
 
 ### Style
 - Prefer KDoc style comments over normal comments on methods, classes and properties
 - Avoid early returns unless they bring a lot of benefit
+
+## Sandbox: when to ask the user instead of working around it
+Never change code, dependencies, or build config just to make something pass *inside* the
+sandbox. If one of these comes up, stop and ask — each is a one-liner for the user:
+
+- **A dependency (or new version) is not in the local Gradle cache** — Maven downloads are
+  blocked in the sandbox. Do NOT downgrade/pin to whatever happens to be cached; ask the user
+  to run `! ./gradlew assembleDebug` (the `!` prefix runs outside the sandbox) to fill the
+  cache, then continue.
+- **Robolectric tests fail with `Couldn't create lock file ~/.robolectric-download-lock`** or
+  a `MavenDependencyResolver` download error — sandbox/profile issue, not a code issue. Ask the
+  user to run the tests via `! ./gradlew test` (or to restart so the Gradle daemon picks up a
+  corrected sandbox profile).
+- **MockK fails with agent-attach errors / `Could not initialize class io.mockk.impl.JvmMockKGateway`**
+  (plus cascading `NoClassDefFoundError`s in unrelated tests) — MockK cannot run in the sandbox
+  at all. Write hand-written fakes for NEW tests; for existing MockK/Robolectric tests, ask the
+  user to verify with `! ./gradlew test` instead of rewriting them.
+- **The Gradle daemon misbehaves or holds stale state** (e.g. an old sandbox profile) — never
+  run `./gradlew --stop` (it breaks the sandbox JDK toolchain); ask the user to restart the
+  daemon / session.
+- **`.claude/settings.local.json` needs a change** (sandbox allowlist, network hosts) — propose
+  the exact edit and let the user approve/apply it.
+
+Rule of thumb: if a failure message points at `~/.robolectric-download-lock`, agent attach,
+"Could not resolve <artifact>", or "Operation not permitted" on a path outside the project,
+it is the sandbox — report it and ask, don't adapt the code around it.
 
 ## v1 / v1.1 scope split
 - **v1 always creates a fresh `FolderVault_<UUID>` cloud root.** No "use existing folder", no

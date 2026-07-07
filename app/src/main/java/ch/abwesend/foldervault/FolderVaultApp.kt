@@ -5,6 +5,7 @@ import ch.abwesend.foldervault.di.appModule
 import ch.abwesend.foldervault.domain.logging.ITelemetryToggle
 import ch.abwesend.foldervault.domain.logging.LoggerProvider
 import ch.abwesend.foldervault.domain.logging.logger
+import ch.abwesend.foldervault.domain.result.rethrowCancellation
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
 import ch.abwesend.foldervault.infrastructure.backup.BackupNotificationManager
 import ch.abwesend.foldervault.infrastructure.logging.CrashlyticsSink
@@ -40,17 +41,26 @@ class FolderVaultApp : Application() {
      * Process death leaves these rows behind — no code runs at death, so the cleanup is
      * deferred to the next app start. The grace window prevents racing legitimately
      * long-running backups.
+     *
+     * Must not crash on a broken database: this is the first database access after app start,
+     * and a failure here would kill the process before the database-error screen can appear
+     * (the screen owns surfacing and recovering from that failure).
      */
     private fun sweepStaleRunningBackupRuns() {
         val dao = get<BackupRunDao>()
         CoroutineScope(Dispatchers.IO).launch {
-            val now = System.currentTimeMillis()
-            val updated = dao.markStaleRunningAsCancelled(
-                staleBefore = now - BackupRunDao.STALE_GRACE_WINDOW_MS,
-                now = now,
-            )
-            if (updated > 0) {
-                logger.info("Swept $updated stale RUNNING backup-run rows to CANCELLED")
+            try {
+                val now = System.currentTimeMillis()
+                val updated = dao.markStaleRunningAsCancelled(
+                    staleBefore = now - BackupRunDao.STALE_GRACE_WINDOW_MS,
+                    now = now,
+                )
+                if (updated > 0) {
+                    logger.info("Swept $updated stale RUNNING backup-run rows to CANCELLED")
+                }
+            } catch (e: Exception) {
+                e.rethrowCancellation()
+                logger.warning("Could not sweep stale backup runs — database unavailable?", e)
             }
         }
     }

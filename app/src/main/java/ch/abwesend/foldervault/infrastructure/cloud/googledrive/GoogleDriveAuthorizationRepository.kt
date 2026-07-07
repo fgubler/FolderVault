@@ -1,5 +1,6 @@
 package ch.abwesend.foldervault.infrastructure.cloud.googledrive
 
+import android.accounts.Account
 import android.content.Context
 import android.content.Intent
 import androidx.credentials.ClearCredentialStateRequest
@@ -33,10 +34,10 @@ class GoogleDriveAuthorizationRepository(private val context: Context) : ICloudA
         private const val APP_NAME = "FolderVault"
     }
 
-    override suspend fun authorize(): CloudAuthResult<ICloudStorageProvider> =
+    override suspend fun authorize(accountName: String?): CloudAuthResult<ICloudStorageProvider> =
         withContext(dispatchers.io) {
             try {
-                val result = requestAuthorization()
+                val result = requestAuthorization(accountName)
                 if (result.hasResolution()) {
                     result.pendingIntent?.let { CloudAuthResult.ConsentRequired(it) } ?: CloudAuthResult.Error
                 } else {
@@ -67,11 +68,11 @@ class GoogleDriveAuthorizationRepository(private val context: Context) : ICloudA
             }.ifError { logger.error("Failed to clear Drive authorization", it) }
         }
 
-    private suspend fun requestAuthorization(): AuthorizationResult = withContext(dispatchers.io) {
-        val scopes = listOf(Scope(DriveScopes.DRIVE_FILE), Scope("email"))
-        val request = AuthorizationRequest.builder().setRequestedScopes(scopes).build()
-        Tasks.await(Identity.getAuthorizationClient(context).authorize(request))
-    }
+    private suspend fun requestAuthorization(accountName: String?): AuthorizationResult =
+        withContext(dispatchers.io) {
+            val request = buildAuthorizationRequest(accountName)
+            Tasks.await(Identity.getAuthorizationClient(context).authorize(request))
+        }
 
     private fun AuthorizationResult.buildStorageProvider(): ICloudStorageProvider {
         val token = accessToken ?: error("Authorization succeeded but no access token returned")
@@ -81,3 +82,17 @@ class GoogleDriveAuthorizationRepository(private val context: Context) : ICloudA
         return GoogleDriveRepository(drive)
     }
 }
+
+/**
+ * Builds the Drive authorization request, targeting [accountName] when given so the grant is
+ * resolved for exactly that Google account instead of whichever one the platform picks.
+ * Top-level (instead of private in the repository) to be testable without a GMS client.
+ */
+internal fun buildAuthorizationRequest(accountName: String?): AuthorizationRequest {
+    val scopes = listOf(Scope(DriveScopes.DRIVE_FILE), Scope("email"))
+    val builder = AuthorizationRequest.builder().setRequestedScopes(scopes)
+    accountName?.let { builder.setAccount(Account(it, GOOGLE_ACCOUNT_TYPE)) }
+    return builder.build()
+}
+
+internal const val GOOGLE_ACCOUNT_TYPE = "com.google"

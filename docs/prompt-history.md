@@ -7,6 +7,168 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-07 — Opt-in completion notification after each finished backup run
+
+### What was requested
+A settings toggle to show a notification after each *finished* backup run — success or failure —
+with the backup name, the number of uploaded files, and the outcome. Retried attempts and
+cancelled runs must stay silent. Clarified with the user: when a run needs several attempts, the
+notification only reports the file count of the last (successful) attempt — cross-attempt
+aggregation was deemed not worth the complexity.
+
+### What was done
+- `AppSettings.notifyOnBackupCompletion` (default **off**) + DataStore key
+  `notify_on_backup_completion` in `AppSettingsRepository`.
+- Settings screen: new `NotificationsSection` composable with a `SwitchRow`; enabling the toggle
+  immediately triggers the POST_NOTIFICATIONS runtime permission request (reusing the existing
+  launcher). New `SettingsViewModel.setNotifyOnBackupCompletion`.
+- `RunResult` now exposes `summary` as an abstract member (all variants already carried one).
+- `BackupNotificationManager`:
+  - new channel `foldervault_backup_completions` ("Finished backups", IMPORTANCE_DEFAULT);
+  - pure `completionOutcomeOf(RunResult): BackupRunOutcome?` — `Success` → SUCCESS, unless
+    `hitTimeBudget` (continuation re-enqueued → silent); `AuthLost` → silent (WorkManager
+    retries); `FatalError` → FAILURE. Cancelled runs never produce a `RunResult`, so they are
+    silent by construction;
+  - `postCompletionNotificationIfEnabled(...)` gated on the setting, with a nullable file count
+    (null when the run died before producing a summary); notification IDs use a `0x20000000`
+    prefix so they never collide with problem-notification IDs;
+  - deep-link pending intent + `nm.notify` extracted into shared `detailScreenPendingIntent` /
+    `notifySafely` helpers (also used by the problems path).
+- `BackupWorker`: posts the completion notification for terminal results only (mapped via
+  `completionOutcomeOf`); `surfaceFatalError` also posts a FAILURE completion (no file count).
+- Strings: channel name/description, success/failure titles, plural body
+  `backup_notification_completion_text`, no-count failure body, settings label/description.
+- Tests: `CompletionNotificationDecisionTest` (pure outcome mapping + ID-prefix isolation),
+  two new `AppSettingsRepositoryTest` cases (default off, round-trip).
+
+### Decisions carried forward
+- Only the last attempt's upload count is reported — per-run, not per-attempt aggregation.
+- A time-budget continuation (`hitTimeBudget`) is treated like a retry: silent until the final
+  continuation run finishes.
+
+## 2026-07-07 — Issue #17: UX improvements on the add/edit backup screen
+
+### What was requested
+GitHub issue #17: (1) keep the Save button visible at the bottom of the add/edit backup screen
+instead of requiring the user to scroll to it; (2) show a confirmation dialog when the user
+navigates back.
+
+### What was done
+- `AddEditBackupScreen`: the Save button (plus the inline validation error text) moved out of the
+  scrolling column into a new `SaveBottomBar` wired into the Scaffold's `bottomBar`, with
+  `imePadding` + `navigationBarsPadding` so it stays above the keyboard and system bars. The
+  content column's own `imePadding` was dropped (the Scaffold inner padding now covers it).
+- Back interception: `rememberConfirmingBackHandler()` registers a `BackHandler` (system
+  back gesture) and returns the click handler for the top-bar back arrow; both show a
+  `DiscardChangesDialog` ("Leave" / "Keep editing") before navigating back.
+- New strings: `dialog_discard_changes_title/_body`, `button_discard`, `button_keep_editing`.
+- `BackupDetailScreen`: the config-info section now shows an "Only while charging: Yes/No" row
+  (the `requiresCharging` setting itself — independent of the automatic charging-only retry
+  after repeated cancellations). The Pause/Resume button became **Disable/Enable** with no
+  icon, to make clear it disables the backup config rather than pausing a running backup.
+- `HomeScreen`: for consistency, the card indicator for a disabled backup changed from a
+  Pause icon / "Paused" status text to a Block icon / "Disabled".
+
+### Decisions
+- A first version tracked a `pristineForm` baseline in the ViewModel and only asked when the
+  form was actually dirty; on review the user chose the simpler behavior: **always ask on
+  back**, no change detection. The dialog wording ("Leave without saving? Any changes you made
+  will be lost.") is phrased so it is also correct when nothing was changed.
+
+### Verification
+- `assembleDebug` + `detekt` green (LongMethod on the screen composable resolved by extracting
+  `rememberConfirmingBackHandler`). No new unit tests — the remaining logic is pure UI wiring.
+
+## 2026-07-07 — Per-backup Google account (execution of PLAN-per-backup-google-account.md)
+
+### What was requested
+Read, question, improve, and execute the plan for letting each backup config use its own Google
+account (previously the one authorized account was silently reused for every backup, with a
+single install-wide `FolderVault_<UUID>` root in `AppSettings`).
+
+### Decisions (asked before implementing)
+- **Account is locked after creation** (plan's open decision): the add screen shows the system
+  account chooser ("Connect to Google Drive" + a "Use a different account" button while unsaved);
+  once the config is saved, its account can no longer be changed. Reconnecting in edit mode
+  targets the config's stored account directly. This avoids stranded sub-folders and full
+  re-uploads; moving a backup to another account = delete + recreate.
+- The uncommitted firebaseBom downgrade (34.15.0 → 33.9.0, sandbox cache workaround) stays for now.
+
+### What was done
+- `AppSettings`: the three `cloudRoot*` fields replaced by `cloudRoots: List<CloudAccountRoot>`
+  (new `@Serializable` domain type: account / rootFolderId / rootFolderName) + `rootForAccount()`.
+  One root **per account** instead of one per install; still one sub-folder per config.
+- `AppSettingsRepository`: `cloud_roots_json` DataStore key; migration-on-read from the three
+  legacy keys (only when all three are present); the first write persists the JSON key and
+  removes the legacy keys. Constructor now takes a `DataStore<Preferences>` (secondary
+  constructor keeps the `Context` entry point) so tests run against a temp-file DataStore
+  without Robolectric.
+- `ICloudAuthorizer.authorize(accountName: String? = null)`; the Google impl targets the account
+  via `AuthorizationRequest.Builder.setAccount(Account(name, "com.google"))` (verified present in
+  cached play-services-auth 21.3.0). Request building extracted to internal
+  `buildAuthorizationRequest()` as a testable seam.
+- `AddEditBackupScreen`: system account chooser via `AccountManager.newChooseAccountIntent`
+  (no permission needed on minSdk 26); `rememberOnConnectDrive()` branches add vs. edit mode;
+  "Use a different account" `TextButton` shown only in add mode after connecting.
+- `AddEditBackupViewModel`: `startDriveSetup(accountName)` (edit mode resolves the locked
+  account from the existing config); `createCloudFolder` reuses/creates the root **per account**
+  and appends to `cloudRoots`; `createNewSubFolder` authorizes with the connected account.
+- Background pipeline authorizes with `config.cloudAccountIdentifier`: `BackupRunner` (initial
+  auth + `writeRootMetadataWithReAuth`, which gained an account param) and
+  `BackupUploader.handleAuthError`.
+- Tests: `AppSettingsTest` (rootForAccount + JSON round-trip, pure Kotest),
+  `AppSettingsRepositoryTest` (real DataStore on temp files — round-trip, legacy migration,
+  legacy-key cleanup, corrupt-JSON fallback; sandbox-runnable), `GoogleDriveAuthorizationRequestTest`
+  (Robolectric — account set/unset, scopes), `AddEditBackupViewModelTest` rewritten for
+  per-account roots + account forwarding, `BackupUploaderTest` re-auth-with-account case.
+- `CLAUDE.md` v1/v1.1 note updated: root is per account, account locked after creation.
+
+### Verification
+- `assembleDebug` + `detekt` green; all sandbox-runnable tests green (incl. the 9 new pure ones).
+- MockK/Robolectric tests can't run in the Bash sandbox (known limitation) — full
+  `! ./gradlew test` verification handed to the user, plus manual two-account device test.
+
+## 2026-07-07 — Issues #13 + #15: no destructive migrations, database-error screen with recovery
+
+### What was requested
+Fix GitHub issues #13 (verify destructive DB migrations are never enabled) and #15 (when the
+database fails to open, show an error screen with log export and a user-confirmed database
+reset instead of crashing). Follow-up in a second session: the new tests failed inside the
+Bash sandbox — adapt the code so the file-system access lives in its own class that tests can
+replace, instead of working around the sandbox.
+
+### What was done
+- `IDatabaseRecoveryService` (domain) + `DatabaseRecoveryService` (infrastructure/room):
+  health check forces the database open via `openHelper.writableDatabase`; reset deletes the
+  database file(s), cancels all scheduled backup work, and reopens to a fresh schema.
+- `IDatabaseFileAccess` + `RoomDatabaseFileAccess` (infrastructure/room): the physical
+  file-system access (open / delete) extracted behind an interface so the recovery service is
+  unit-testable without Robolectric or a real database file.
+- `DatabaseGuard` (navigation) + `DatabaseGuardViewModel` + `DatabaseErrorScreen`: the app UI
+  is only shown once the health check passes; the error screen offers "try again", "export
+  today's log", and a confirmed destructive reset.
+- `DatabaseArchitectureTest` (Konsist): production code must never call
+  `fallbackToDestructiveMigration*` — guards issue #13 permanently.
+- `DatabaseMigrationChainTest`: every schema-version bump needs a matching migration in
+  `DatabaseMigrations.ALL`.
+- Tests: `DatabaseRecoveryServiceTest` and `DatabaseGuardViewModelTest` rewritten as plain
+  JVM Kotest specs with hand-written fakes (no Robolectric, no MockK).
+
+### Issues resolved / environment findings
+- Robolectric cannot run inside the Bash sandbox: it opens `~/.robolectric-download-lock`,
+  but the sandbox allowlist entry is misspelled (`.roboelectric…`) — one-character fix in
+  `.claude/settings.local.json` would unblock all Robolectric tests.
+- MockK cannot run inside the sandbox either: its ByteBuddy agent fails to self-attach (JVM
+  attach handshake is blocked); `-Djdk.attach.allowAttachSelf=true` does not help. Hence
+  hand-written fakes for the new tests; existing MockK-based tests only run outside the sandbox.
+- `firebaseBom` downgraded 34.15.0 → 33.9.0 and kept (user decision): 34.15.0 is not in the
+  local Gradle cache and the sandbox blocks Maven downloads, while 33.9.0 resolves offline.
+
+### Decisions carried forward
+- The user-confirmed reset is the only "destructive migration" the app allows.
+- New unit tests for logic around platform seams should abstract the seam (like
+  `IDatabaseFileAccess`) and use fakes, so they stay runnable in restricted environments.
+
 ## 2026-07-03 — Settings: "Reliable background backups" section (battery optimization + Data Saver)
 
 ### What was requested

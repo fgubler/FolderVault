@@ -1,6 +1,8 @@
 package ch.abwesend.foldervault.view.screens
 
+import android.accounts.AccountManager
 import android.content.Intent
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -13,12 +15,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -28,8 +32,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -61,12 +67,14 @@ import ch.abwesend.foldervault.view.viewmodel.AddEditBackupViewModel
 import ch.abwesend.foldervault.view.viewmodel.AddEditEvent
 import ch.abwesend.foldervault.view.viewmodel.AddEditFormState
 import ch.abwesend.foldervault.view.viewmodel.CloudSetupState
+import ch.abwesend.foldervault.view.viewmodel.UiText
 import ch.abwesend.foldervault.view.viewmodel.asString
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
 
 private const val RETENTION_DEFAULT_KEEP_LAST_N = 10
 private const val RETENTION_DEFAULT_KEEP_DAYS = 90
+private const val GOOGLE_ACCOUNT_TYPE = "com.google"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -102,6 +110,8 @@ fun AddEditBackupScreen(
         viewModel.handleDriveConsentResult(result.data)
     }
 
+    val onConnectDrive = rememberOnConnectDrive(isEditMode = form.isEditMode, viewModel = viewModel)
+
     LaunchedEffect(form.cloudSetup) {
         val state = form.cloudSetup
         if (state is CloudSetupState.ConsentRequired) {
@@ -117,19 +127,28 @@ fun AddEditBackupScreen(
         }
     }
 
+    val onBackRequested = rememberConfirmingBackHandler(onBack)
+
     val titleRes = if (configId == null) R.string.add_backup_title else R.string.edit_backup_title
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(titleRes)) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = onBackRequested) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = stringResource(R.string.button_back_cd),
                         )
                     }
                 },
+            )
+        },
+        bottomBar = {
+            SaveBottomBar(
+                errorMessage = form.errorMessage,
+                isSaving = form.isSaving,
+                onSave = viewModel::save,
             )
         },
         modifier = modifier,
@@ -139,7 +158,7 @@ fun AddEditBackupScreen(
             modifier = Modifier.padding(innerPadding),
             onDisplayNameChange = viewModel::setDisplayName,
             onPickFolder = { folderPickerLauncher.launch(null) },
-            onConnectDrive = viewModel::startDriveSetup,
+            onConnectDrive = onConnectDrive,
             onScheduleChange = viewModel::setSchedule,
             onChangedFilePolicyChange = viewModel::setChangedFilePolicy,
             onNetworkPolicyChange = viewModel::setNetworkPolicy,
@@ -148,8 +167,126 @@ fun AddEditBackupScreen(
             onPasswordChange = viewModel::setPassword,
             onPasswordConfirmChange = viewModel::setPasswordConfirm,
             onRetentionChange = viewModel::setRetentionPolicy,
-            onSave = viewModel::save,
         )
+    }
+}
+
+/**
+ * Intercepts the system back gesture and returns the click handler for the top-bar back button:
+ * both ask for confirmation before leaving, since any changes to the form would be lost.
+ */
+@Composable
+private fun rememberConfirmingBackHandler(onBack: () -> Unit): () -> Unit {
+    var showDiscardDialog by remember { mutableStateOf(false) }
+    val onBackRequested = { showDiscardDialog = true }
+    BackHandler(onBack = onBackRequested)
+    if (showDiscardDialog) {
+        DiscardChangesDialog(
+            onDiscard = {
+                showDiscardDialog = false
+                onBack()
+            },
+            onKeepEditing = { showDiscardDialog = false },
+        )
+    }
+    return onBackRequested
+}
+
+/**
+ * Confirmation shown when the user navigates back: any changes to the form would be lost.
+ */
+@Composable
+private fun DiscardChangesDialog(
+    onDiscard: () -> Unit,
+    onKeepEditing: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onKeepEditing,
+        title = { Text(stringResource(R.string.dialog_discard_changes_title)) },
+        text = { Text(stringResource(R.string.dialog_discard_changes_body)) },
+        confirmButton = {
+            TextButton(onClick = onDiscard) {
+                Text(stringResource(R.string.button_discard))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onKeepEditing) {
+                Text(stringResource(R.string.button_keep_editing))
+            }
+        },
+    )
+}
+
+/**
+ * Save button pinned to the bottom of the screen so it is reachable without scrolling.
+ * Validation errors are shown right above it for the same reason.
+ */
+@Composable
+private fun SaveBottomBar(
+    errorMessage: UiText?,
+    isSaving: Boolean,
+    onSave: () -> Unit,
+) {
+    Surface {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .imePadding()
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+        ) {
+            errorMessage?.let {
+                Text(
+                    it.asString(),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+            Button(
+                onClick = onSave,
+                enabled = !isSaving,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(if (isSaving) R.string.button_saving else R.string.button_save))
+            }
+        }
+    }
+}
+
+/**
+ * Returns the click handler for the "connect Drive" / "use a different account" buttons.
+ *
+ * Add mode lets the user pick the Google account via the system account chooser; in edit mode
+ * the account is locked after creation, so reconnecting targets the config's stored account
+ * directly without showing the chooser.
+ */
+@Composable
+private fun rememberOnConnectDrive(
+    isEditMode: Boolean,
+    viewModel: AddEditBackupViewModel,
+): () -> Unit {
+    val accountPickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        result.data?.getStringExtra(AccountManager.KEY_ACCOUNT_NAME)?.let(viewModel::startDriveSetup)
+    }
+    return {
+        if (isEditMode) {
+            viewModel.startDriveSetup()
+        } else {
+            accountPickerLauncher.launch(
+                AccountManager.newChooseAccountIntent(
+                    null,
+                    null,
+                    arrayOf(GOOGLE_ACCOUNT_TYPE),
+                    null,
+                    null,
+                    null,
+                    null,
+                ),
+            )
+        }
     }
 }
 
@@ -168,14 +305,12 @@ private fun AddEditContent(
     onPasswordChange: (String) -> Unit,
     onPasswordConfirmChange: (String) -> Unit,
     onRetentionChange: (RetentionPolicy) -> Unit,
-    onSave: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .imePadding()
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
@@ -187,7 +322,7 @@ private fun AddEditContent(
         )
 
         HorizontalDivider()
-        CloudSection(cloudSetup = form.cloudSetup, onConnect = onConnectDrive)
+        CloudSection(cloudSetup = form.cloudSetup, isEditMode = form.isEditMode, onConnect = onConnectDrive)
 
         HorizontalDivider()
         ScheduleSection(
@@ -216,18 +351,6 @@ private fun AddEditContent(
             onPasswordChange = onPasswordChange,
             onPasswordConfirmChange = onPasswordConfirmChange,
         )
-
-        form.errorMessage?.let {
-            Text(it.asString(), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-        }
-
-        Button(
-            onClick = onSave,
-            enabled = !form.isSaving,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(stringResource(if (form.isSaving) R.string.button_saving else R.string.button_save))
-        }
     }
 }
 
@@ -264,6 +387,7 @@ private fun BasicsSection(
 @Composable
 private fun CloudSection(
     cloudSetup: CloudSetupState,
+    isEditMode: Boolean,
     onConnect: () -> Unit,
 ) {
     SectionHeader(stringResource(R.string.section_cloud_destination))
@@ -291,6 +415,12 @@ private fun CloudSection(
             cloudSetup is CloudSetupState.CreatingFolder
         OutlinedButton(onClick = onConnect, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
             Text(stringResource(R.string.button_connect_drive))
+        }
+    } else if (!isEditMode) {
+        // The account is locked once the backup is saved; before that the user may still change
+        // their mind and connect a different Google account.
+        TextButton(onClick = onConnect) {
+            Text(stringResource(R.string.button_change_account))
         }
     }
 }
@@ -527,7 +657,6 @@ private fun AddEditBackupScreenPreview() {
             onPasswordChange = {},
             onPasswordConfirmChange = {},
             onRetentionChange = {},
-            onSave = {},
         )
     }
 }

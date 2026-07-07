@@ -10,6 +10,7 @@ import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.crypto.IEncryptionRepository
 import ch.abwesend.foldervault.domain.crypto.IFvc1Cipher
 import ch.abwesend.foldervault.domain.crypto.IKeyStoreRepository
+import ch.abwesend.foldervault.domain.database.IDatabaseRecoveryService
 import ch.abwesend.foldervault.domain.logging.ILogExporter
 import ch.abwesend.foldervault.domain.logging.ITelemetryToggle
 import ch.abwesend.foldervault.domain.network.INetworkConnectivityChecker
@@ -30,12 +31,15 @@ import ch.abwesend.foldervault.infrastructure.logging.FirebaseTelemetryToggle
 import ch.abwesend.foldervault.infrastructure.logging.LocalLogFiles
 import ch.abwesend.foldervault.infrastructure.network.AndroidNetworkConnectivityChecker
 import ch.abwesend.foldervault.infrastructure.restore.RestoreEngine
+import ch.abwesend.foldervault.infrastructure.room.DatabaseRecoveryService
 import ch.abwesend.foldervault.infrastructure.room.FolderVaultDatabase
+import ch.abwesend.foldervault.infrastructure.room.RoomDatabaseFileAccess
 import ch.abwesend.foldervault.infrastructure.settings.AppSettingsRepository
 import ch.abwesend.foldervault.infrastructure.system.AndroidBackgroundRestrictionChecker
 import ch.abwesend.foldervault.view.viewmodel.AddEditBackupViewModel
 import ch.abwesend.foldervault.view.viewmodel.BackupDetailViewModel
 import ch.abwesend.foldervault.view.viewmodel.BackupRunHistoryViewModel
+import ch.abwesend.foldervault.view.viewmodel.DatabaseGuardViewModel
 import ch.abwesend.foldervault.view.viewmodel.HomeViewModel
 import ch.abwesend.foldervault.view.viewmodel.OnboardingViewModel
 import ch.abwesend.foldervault.view.viewmodel.RestoreViewModel
@@ -53,6 +57,9 @@ val appModule = module {
 
     // Room
     single { FolderVaultDatabase.create(androidContext()) }
+    single<IDatabaseRecoveryService> {
+        DatabaseRecoveryService(RoomDatabaseFileAccess(androidContext(), get()), get(), get())
+    }
     single { get<FolderVaultDatabase>().backupConfigDao() }
     single { get<FolderVaultDatabase>().uploadedFileIndexDao() }
     single { get<FolderVaultDatabase>().backupMessageDao() }
@@ -72,7 +79,7 @@ val appModule = module {
     single<ILogExporter> { get<LocalLogFiles>() }
 
     // Backup notifications and scheduling
-    single { BackupNotificationManager(androidContext(), get(), get()) }
+    single { BackupNotificationManager(androidContext(), get(), get(), get()) }
     single<IBackupScheduler> { BackupScheduler(androidContext()) }
     single<INetworkConnectivityChecker> { AndroidNetworkConnectivityChecker(androidContext()) }
     single<IBackgroundRestrictionChecker> { AndroidBackgroundRestrictionChecker(androidContext()) }
@@ -95,6 +102,7 @@ val appModule = module {
     }
 
     // ViewModels
+    viewModel { DatabaseGuardViewModel(get(), get(), get()) }
     viewModel { RestoreViewModel(get()) }
     viewModel { HomeViewModel(get(), get()) }
     viewModel { OnboardingViewModel(get()) }

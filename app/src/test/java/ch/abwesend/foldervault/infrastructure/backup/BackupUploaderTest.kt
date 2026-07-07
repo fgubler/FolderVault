@@ -3,6 +3,8 @@ package ch.abwesend.foldervault.infrastructure.backup
 import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
+import ch.abwesend.foldervault.domain.cloud.CloudAuthException
+import ch.abwesend.foldervault.domain.cloud.CloudAuthResult
 import ch.abwesend.foldervault.domain.cloud.CloudFile
 import ch.abwesend.foldervault.domain.cloud.CloudQuotaExceededException
 import ch.abwesend.foldervault.domain.cloud.ICloudAuthorizer
@@ -386,6 +388,53 @@ class BackupUploaderTest : StringSpec({
             summary.filesUploaded shouldBe 1
             summary.filesFailed shouldBe 0
             coVerify(exactly = 1) { cloudProvider.uploadFile(any(), any(), any(), any(), any()) }
+        } finally {
+            stagingDir.deleteRecursively()
+        }
+    }
+
+    "auth error re-authorizes targeting the config's account" {
+        val recoveredProvider = mockk<ICloudStorageProvider>(relaxed = true) {
+            coEvery { uploadFile(any(), any(), any(), any(), any()) } returns SuccessResult(CloudFile("c-1", "a.txt"))
+        }
+        val cloudProvider = mockk<ICloudStorageProvider>(relaxed = true) {
+            coEvery { uploadFile(any(), any(), any(), any(), any()) } returns ErrorResult(CloudAuthException())
+        }
+        val authorizer = mockk<ICloudAuthorizer> {
+            coEvery { authorize(any()) } returns CloudAuthResult.Authorized(recoveredProvider)
+        }
+        val dispatchers = mockk<IDispatchers> { every { io } returns testDispatcher }
+        val uploader = BackupUploader(
+            context = makeContext(),
+            cipher = mockk<IFvc1Cipher>(),
+            authorizer = authorizer,
+            uploadedFileIndexDao = mockk<UploadedFileIndexDao>(relaxed = true),
+            backupMessageDao = mockk<BackupMessageDao>(relaxed = true),
+            dispatchers = dispatchers,
+            cloudProvider = cloudProvider,
+        )
+        val folderCache = FolderPathCache(cloudProvider)
+        val stagingDir = Files.createTempDirectory("fv-uploader-test").toFile()
+        try {
+            val channel = Channel<UploadTask>(1)
+            channel.send(UploadTask("a.txt", mockk<Uri>(), 100L, 0L, UploadMode.NEW, UploadTier.NORMAL))
+            channel.close()
+
+            val summary = RunSummary()
+            uploader.processChannel(
+                makeConfig("cfg-reauth"),
+                channel,
+                "run-reauth",
+                stagingDir,
+                folderCache,
+                null,
+                null,
+                summary,
+            )
+
+            summary.filesUploaded shouldBe 1
+            summary.authLost shouldBe false
+            coVerify(exactly = 1) { authorizer.authorize("user@test.com") }
         } finally {
             stagingDir.deleteRecursively()
         }

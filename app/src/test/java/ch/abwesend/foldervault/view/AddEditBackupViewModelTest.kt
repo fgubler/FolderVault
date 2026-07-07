@@ -11,6 +11,7 @@ import ch.abwesend.foldervault.domain.crypto.IFvc1Cipher
 import ch.abwesend.foldervault.domain.logging.ILogger
 import ch.abwesend.foldervault.domain.logging.LoggerProvider
 import ch.abwesend.foldervault.domain.model.AppSettings
+import ch.abwesend.foldervault.domain.model.CloudAccountRoot
 import ch.abwesend.foldervault.domain.result.SuccessResult
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
 import ch.abwesend.foldervault.view.viewmodel.AddEditBackupViewModel
@@ -57,25 +58,26 @@ class AddEditBackupViewModelTest : StringSpec({
             every { settings } returns flowOf(initial)
         }
 
+    fun makeAuthorizer(provider: ICloudStorageProvider): ICloudAuthorizer =
+        mockk {
+            coEvery { authorize(any()) } returns CloudAuthResult.Authorized(provider)
+        }
+
     fun makeVm(
         provider: ICloudStorageProvider,
         settingsRepo: IAppSettingsRepository = makeSettingsRepo(),
-    ): AddEditBackupViewModel {
-        val authorizer = mockk<ICloudAuthorizer> {
-            coEvery { authorize() } returns CloudAuthResult.Authorized(provider)
-        }
-        return AddEditBackupViewModel(
-            configRepo = mockk<IBackupConfigRepository>(relaxed = true),
-            scheduler = mockk<IBackupScheduler>(relaxed = true),
-            authorizer = authorizer,
-            encryptionRepo = mockk<IEncryptionRepository>(relaxed = true),
-            cipher = mockk<IFvc1Cipher>(relaxed = true),
-            settingsRepo = settingsRepo,
-            existingConfigId = null,
-        )
-    }
+        authorizer: ICloudAuthorizer = makeAuthorizer(provider),
+    ): AddEditBackupViewModel = AddEditBackupViewModel(
+        configRepo = mockk<IBackupConfigRepository>(relaxed = true),
+        scheduler = mockk<IBackupScheduler>(relaxed = true),
+        authorizer = authorizer,
+        encryptionRepo = mockk<IEncryptionRepository>(relaxed = true),
+        cipher = mockk<IFvc1Cipher>(relaxed = true),
+        settingsRepo = settingsRepo,
+        existingConfigId = null,
+    )
 
-    "fresh install: startDriveSetup creates root and persists it to settings" {
+    "fresh install: startDriveSetup creates root and appends it to settings" {
         val provider = makeProvider()
         val settingsRepo = makeSettingsRepo()
         val vm = makeVm(provider, settingsRepo)
@@ -90,17 +92,25 @@ class AddEditBackupViewModelTest : StringSpec({
         val transformSlot = slot<(AppSettings) -> AppSettings>()
         coVerify { settingsRepo.update(capture(transformSlot)) }
         val updated = transformSlot.captured(AppSettings())
-        updated.cloudRootFolderId shouldBe "folder-id"
-        updated.cloudRootFolderName shouldBe "FolderVault_test"
-        updated.cloudRootAccountIdentifier shouldBe "user@test.com"
+        updated.cloudRoots shouldBe listOf(
+            CloudAccountRoot(
+                accountIdentifier = "user@test.com",
+                rootFolderId = "folder-id",
+                rootFolderName = "FolderVault_test",
+            ),
+        )
     }
 
-    "second config: startDriveSetup reuses the existing root and does NOT call createRootFolder" {
+    "existing account root: startDriveSetup reuses it and does NOT call createRootFolder" {
         val provider = makeProvider()
         val settingsWithRoot = AppSettings(
-            cloudRootFolderId = "existing-root",
-            cloudRootFolderName = "FolderVault_existing",
-            cloudRootAccountIdentifier = "user@test.com",
+            cloudRoots = listOf(
+                CloudAccountRoot(
+                    accountIdentifier = "user@test.com",
+                    rootFolderId = "existing-root",
+                    rootFolderName = "FolderVault_existing",
+                ),
+            ),
         )
         val vm = makeVm(provider, makeSettingsRepo(settingsWithRoot))
 
@@ -114,14 +124,15 @@ class AddEditBackupViewModelTest : StringSpec({
         coVerify(exactly = 0) { provider.createRootFolder() }
     }
 
-    "account mismatch: startDriveSetup creates a new root even when settings have one" {
+    "second account: startDriveSetup creates a new root and keeps the other account's root" {
         val provider = makeProvider()
-        val settingsWithDifferentAccount = AppSettings(
-            cloudRootFolderId = "stale-root",
-            cloudRootFolderName = "FolderVault_stale",
-            cloudRootAccountIdentifier = "other@example.com",
+        val otherAccountRoot = CloudAccountRoot(
+            accountIdentifier = "other@example.com",
+            rootFolderId = "other-root",
+            rootFolderName = "FolderVault_other",
         )
-        val vm = makeVm(provider, makeSettingsRepo(settingsWithDifferentAccount))
+        val settingsRepo = makeSettingsRepo(AppSettings(cloudRoots = listOf(otherAccountRoot)))
+        val vm = makeVm(provider, settingsRepo)
 
         vm.startDriveSetup()
         testDispatcher.scheduler.advanceUntilIdle()
@@ -130,5 +141,39 @@ class AddEditBackupViewModelTest : StringSpec({
         state.shouldBeInstanceOf<CloudSetupState.Done>()
         state.folderId shouldBe "folder-id"
         coVerify(exactly = 1) { provider.createRootFolder() }
+
+        val transformSlot = slot<(AppSettings) -> AppSettings>()
+        coVerify { settingsRepo.update(capture(transformSlot)) }
+        val updated = transformSlot.captured(AppSettings(cloudRoots = listOf(otherAccountRoot)))
+        updated.cloudRoots shouldBe listOf(
+            otherAccountRoot,
+            CloudAccountRoot(
+                accountIdentifier = "user@test.com",
+                rootFolderId = "folder-id",
+                rootFolderName = "FolderVault_test",
+            ),
+        )
+    }
+
+    "startDriveSetup forwards the picked account to the authorizer" {
+        val provider = makeProvider()
+        val authorizer = makeAuthorizer(provider)
+        val vm = makeVm(provider, authorizer = authorizer)
+
+        vm.startDriveSetup("picked@test.com")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        coVerify { authorizer.authorize("picked@test.com") }
+    }
+
+    "startDriveSetup without a picked account authorizes with null for a new config" {
+        val provider = makeProvider()
+        val authorizer = makeAuthorizer(provider)
+        val vm = makeVm(provider, authorizer = authorizer)
+
+        vm.startDriveSetup()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        coVerify { authorizer.authorize(null) }
     }
 })

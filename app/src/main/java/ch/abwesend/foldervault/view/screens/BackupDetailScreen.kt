@@ -20,8 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -141,24 +140,12 @@ fun BackupDetailScreen(
     Scaffold(
         modifier = modifier,
         topBar = {
-            TopAppBar(
-                title = { Text(config?.displayName ?: stringResource(R.string.detail_default_title)) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.button_back_cd),
-                        )
-                    }
-                },
-                actions = {
-                    IconButton(onClick = onEdit) {
-                        Icon(Icons.Default.Edit, stringResource(R.string.edit_backup_title))
-                    }
-                    IconButton(onClick = { showDeleteDialog = true }) {
-                        Icon(Icons.Default.Delete, stringResource(R.string.dialog_delete_title))
-                    }
-                },
+            BackupDetailTopBar(
+                title = config?.displayName ?: stringResource(R.string.detail_default_title),
+                onBack = onBack,
+                onShowRunHistory = onShowRunHistory,
+                onEdit = onEdit,
+                onDelete = { showDeleteDialog = true },
             )
         },
     ) { innerPadding ->
@@ -173,7 +160,6 @@ fun BackupDetailScreen(
                 onBackUpNow = viewModel::backUpNow,
                 onTogglePause = viewModel::togglePause,
                 onCheckPassword = { showPasswordDialog = true },
-                onShowRunHistory = onShowRunHistory,
                 onDismissMessage = { viewModel.dismiss(listOf(it)) },
                 onDismissAll = viewModel::dismissAll,
                 modifier = Modifier.padding(innerPadding),
@@ -181,6 +167,40 @@ fun BackupDetailScreen(
             )
         }
     }
+}
+
+/** Top bar of the detail screen with navigation back plus run-history, edit and delete actions. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BackupDetailTopBar(
+    title: String,
+    onBack: () -> Unit,
+    onShowRunHistory: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    TopAppBar(
+        title = { Text(title) },
+        navigationIcon = {
+            IconButton(onClick = onBack) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(R.string.button_back_cd),
+                )
+            }
+        },
+        actions = {
+            IconButton(onClick = onShowRunHistory) {
+                Icon(Icons.Default.History, stringResource(R.string.backup_run_history_title))
+            }
+            IconButton(onClick = onEdit) {
+                Icon(Icons.Default.Edit, stringResource(R.string.edit_backup_title))
+            }
+            IconButton(onClick = onDelete) {
+                Icon(Icons.Default.Delete, stringResource(R.string.dialog_delete_title))
+            }
+        },
+    )
 }
 
 @Suppress("LongParameterList")
@@ -192,7 +212,6 @@ private fun DetailContent(
     onBackUpNow: () -> Unit,
     onTogglePause: () -> Unit,
     onCheckPassword: () -> Unit,
-    onShowRunHistory: () -> Unit,
     onDismissMessage: (Long) -> Unit,
     onDismissAll: () -> Unit,
     modifier: Modifier = Modifier,
@@ -205,7 +224,7 @@ private fun DetailContent(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item { ConfigInfoSection(config = config) }
-        item { ActionButtonRow(config, isRunning, onBackUpNow, onTogglePause, onCheckPassword, onShowRunHistory) }
+        item { ActionButtonRow(config, isRunning, onBackUpNow, onTogglePause, onCheckPassword) }
         item { HorizontalDivider() }
         item {
             Row(
@@ -257,6 +276,10 @@ private fun ConfigInfoSection(config: BackupConfig) {
             R.string.network_any_short
         }
         InfoRow(stringResource(R.string.label_network), stringResource(networkLabelRes))
+        InfoRow(
+            stringResource(R.string.label_only_while_charging),
+            stringResource(if (config.requiresCharging) R.string.common_yes else R.string.common_no),
+        )
         InfoRow(
             stringResource(R.string.label_encryption),
             stringResource(if (config.encryptionEnabled) R.string.encryption_enabled else R.string.encryption_disabled),
@@ -367,7 +390,6 @@ private fun CloudFolderRow(folderName: String, folderId: String) {
     }
 }
 
-@Suppress("LongParameterList")
 @Composable
 private fun ActionButtonRow(
     config: BackupConfig,
@@ -375,7 +397,6 @@ private fun ActionButtonRow(
     onBackUpNow: () -> Unit,
     onTogglePause: () -> Unit,
     onCheckPassword: () -> Unit,
-    onShowRunHistory: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
@@ -400,28 +421,12 @@ private fun ActionButtonRow(
                 }
             }
             OutlinedButton(onClick = onTogglePause, modifier = Modifier.weight(1f)) {
-                Icon(
-                    if (config.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                    contentDescription = null,
-                )
-                Text(stringResource(if (config.isPaused) R.string.button_resume else R.string.button_pause))
+                Text(stringResource(if (config.isPaused) R.string.button_enable else R.string.button_disable))
             }
         }
         if (config.encryptionEnabled) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedButton(onClick = onShowRunHistory, modifier = Modifier.weight(1f)) {
-                    Text(stringResource(R.string.backup_run_history_button))
-                }
-                OutlinedButton(onClick = onCheckPassword, modifier = Modifier.weight(1f)) {
-                    Text(stringResource(R.string.button_check_password))
-                }
-            }
-        } else {
-            OutlinedButton(onClick = onShowRunHistory, modifier = Modifier.fillMaxWidth()) {
-                Text(stringResource(R.string.backup_run_history_button))
+            OutlinedButton(onClick = onCheckPassword, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.button_check_password))
             }
         }
     }
@@ -657,7 +662,6 @@ private fun BackupDetailPreview() {
             onBackUpNow = {},
             onTogglePause = {},
             onCheckPassword = {},
-            onShowRunHistory = {},
             onDismissMessage = {},
             onDismissAll = {},
             onMarkRead = {},

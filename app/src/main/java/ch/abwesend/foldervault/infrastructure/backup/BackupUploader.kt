@@ -281,7 +281,7 @@ class BackupUploader(
         runId: String,
         summary: RunSummary,
     ): BinaryResult<CloudFile, Exception>? {
-        val reAuthResult = authorizer.authorize()
+        val reAuthResult = authorizer.authorize(config.cloudAccountIdentifier)
         if (reAuthResult !is CloudAuthResult.Authorized) {
             summary.authLost = true
             emitMessage(config, runId, MessageSeverity.ERROR, MessageType.AUTH_LOST)

@@ -6,7 +6,8 @@
     "filesystem": {
       "allowWrite": [
         "~/.gradle/",
-        "~/.android/"
+        "~/.android/",
+        "~/.robolectric-download-lock"
       ],
       "allowRead": [
         "~/.gradle/",

@@ -14,9 +14,11 @@ import ch.abwesend.foldervault.domain.cloud.ICloudStorageProvider
 import ch.abwesend.foldervault.domain.crypto.IEncryptionRepository
 import ch.abwesend.foldervault.domain.crypto.IFvc1Cipher
 import ch.abwesend.foldervault.domain.logging.logger
+import ch.abwesend.foldervault.domain.model.AppSettings
 import ch.abwesend.foldervault.domain.model.BackupRunStatus
 import ch.abwesend.foldervault.domain.model.BackupSchedule
 import ch.abwesend.foldervault.domain.model.ChangedFilePolicy
+import ch.abwesend.foldervault.domain.model.CloudAccountRoot
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.model.RetentionPolicy
 import ch.abwesend.foldervault.domain.result.SuccessResult
@@ -106,10 +108,9 @@ class AddEditBackupViewModel(
         val config = configRepo.getById(id).first() ?: return
         existingConfig = config
         val settings = settingsRepo.settings.first()
-        val rootId = settings.cloudRootFolderId
-        val rootName = settings.cloudRootFolderName
-        val cloudState = if (rootId != null && rootName != null) {
-            CloudSetupState.Done(rootId, rootName, config.cloudAccountIdentifier)
+        val root = settings.rootForAccount(config.cloudAccountIdentifier)
+        val cloudState = if (root != null) {
+            CloudSetupState.Done(root.rootFolderId, root.rootFolderName, config.cloudAccountIdentifier)
         } else {
             CloudSetupState.Idle
         }
@@ -154,16 +155,27 @@ class AddEditBackupViewModel(
 
     fun setRetentionPolicy(policy: RetentionPolicy) = updateForm { it.copy(retentionPolicy = policy) }
 
-    fun startDriveSetup() {
-        if (_form.value.cloudSetup is CloudSetupState.Done) return
-        safeLaunch {
-            updateForm { it.copy(cloudSetup = CloudSetupState.Authorizing, errorMessage = null) }
-            when (val result = authorizer.authorize()) {
-                is CloudAuthResult.Authorized -> createCloudFolder(result.data)
-                is CloudAuthResult.ConsentRequired -> updateForm {
-                    it.copy(cloudSetup = CloudSetupState.ConsentRequired(result.pendingIntent))
+    /**
+     * Starts (or restarts) the Drive connection flow.
+     *
+     * [accountName] is the Google account chosen in the system account picker (add mode). When
+     * `null` (edit mode — the account is locked after creation), the existing config's account is
+     * targeted instead, so a reconnect can never silently land on a different account.
+     */
+    fun startDriveSetup(accountName: String? = null) {
+        val currentState = _form.value.cloudSetup
+        val busy = currentState is CloudSetupState.Authorizing || currentState is CloudSetupState.CreatingFolder
+        if (!busy) {
+            val targetAccount = accountName ?: existingConfig?.cloudAccountIdentifier
+            safeLaunch {
+                updateForm { it.copy(cloudSetup = CloudSetupState.Authorizing, errorMessage = null) }
+                when (val result = authorizer.authorize(targetAccount)) {
+                    is CloudAuthResult.Authorized -> createCloudFolder(result.data)
+                    is CloudAuthResult.ConsentRequired -> updateForm {
+                        it.copy(cloudSetup = CloudSetupState.ConsentRequired(result.pendingIntent))
+                    }
+                    CloudAuthResult.Error -> setAuthFailedError()
                 }
-                CloudAuthResult.Error -> setAuthFailedError()
             }
         }
     }
@@ -184,11 +196,12 @@ class AddEditBackupViewModel(
     }
 
     /**
-     * Sets up the install-level Drive root.
+     * Sets up the Drive root for the authorized account.
      *
-     * Reuses a previously created `FolderVault_<UUID>` root from settings when the active Drive
-     * account still matches; otherwise creates a fresh root and persists `(id, name, account)`
-     * to settings. The per-config sub-folder is created later, at save time (see [ensureSubFolder]).
+     * Reuses that account's previously created `FolderVault_<UUID>` root from settings when one
+     * exists; otherwise creates a fresh root and appends it to [AppSettings.cloudRoots]. Roots
+     * are per account, so connecting a second account never touches the first account's root.
+     * The per-config sub-folder is created later, at save time (see [ensureSubFolder]).
      */
     private suspend fun createCloudFolder(provider: ICloudStorageProvider) {
         updateForm { it.copy(cloudSetup = CloudSetupState.CreatingFolder) }
@@ -202,13 +215,10 @@ class AddEditBackupViewModel(
         val account = accountResult.value
 
         val settings = settingsRepo.settings.first()
-        val savedId = settings.cloudRootFolderId
-        val savedName = settings.cloudRootFolderName
-        val savedAccount = settings.cloudRootAccountIdentifier
-        val reuseExistingRoot = savedId != null && savedName != null && savedAccount == account
+        val existingRoot = settings.rootForAccount(account)
 
-        val (rootId, rootName) = if (reuseExistingRoot) {
-            savedId!! to savedName!!
+        val (rootId, rootName) = if (existingRoot != null) {
+            existingRoot.rootFolderId to existingRoot.rootFolderName
         } else {
             val createResult = provider.createRootFolder()
             if (createResult !is SuccessResult) {
@@ -218,12 +228,13 @@ class AddEditBackupViewModel(
                 return
             }
             val newRoot = createResult.value
+            val accountRoot = CloudAccountRoot(
+                accountIdentifier = account,
+                rootFolderId = newRoot.id,
+                rootFolderName = newRoot.name,
+            )
             settingsRepo.update { s ->
-                s.copy(
-                    cloudRootFolderId = newRoot.id,
-                    cloudRootFolderName = newRoot.name,
-                    cloudRootAccountIdentifier = account,
-                )
+                s.copy(cloudRoots = s.cloudRoots.filterNot { it.accountIdentifier == account } + accountRoot)
             }
             newRoot.id to newRoot.name
         }
@@ -283,7 +294,7 @@ class AddEditBackupViewModel(
 
     private suspend fun createNewSubFolder(state: AddEditFormState): Pair<String, String>? {
         val cloudState = state.cloudSetup as? CloudSetupState.Done
-        val authResult = if (cloudState != null) authorizer.authorize() else null
+        val authResult = if (cloudState != null) authorizer.authorize(cloudState.accountId) else null
         val provider = (authResult as? CloudAuthResult.Authorized)?.data
         val errorRes: Int? = when {
             cloudState == null -> R.string.error_no_drive_connection

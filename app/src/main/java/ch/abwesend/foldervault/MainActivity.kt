@@ -11,7 +11,7 @@ import ch.abwesend.foldervault.domain.model.AppSettings
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
 import ch.abwesend.foldervault.ui.theme.FolderVaultTheme
 import ch.abwesend.foldervault.view.navigation.AppDestination
-import ch.abwesend.foldervault.view.navigation.AppNavGraph
+import ch.abwesend.foldervault.view.navigation.DatabaseGuard
 import org.koin.compose.koinInject
 
 class MainActivity : ComponentActivity() {
@@ -23,7 +23,7 @@ class MainActivity : ComponentActivity() {
             val settingsRepo = koinInject<IAppSettingsRepository>()
             val settings by settingsRepo.settings.collectAsState(initial = AppSettings())
             FolderVaultTheme(theme = settings.theme) {
-                AppNavGraph(startDestination = startDestination)
+                DatabaseGuard(startDestination = startDestination)
             }
         }
     }

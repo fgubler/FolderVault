@@ -13,6 +13,15 @@
     <string name="notif_problem_encryption_failed">encryption failed</string>
     <string name="notif_problem_quota_exceeded">quota exceeded</string>
     <string name="notif_problem_generic_error">error</string>
+    <string name="notification_channel_completions_name">Finished backups</string>
+    <string name="notification_channel_completions_description">Shows a summary after each finished backup run</string>
+    <string name="backup_notification_completion_success_title">Backup finished</string>
+    <string name="backup_notification_completion_failure_title">Backup failed</string>
+    <plurals name="backup_notification_completion_text">
+        <item quantity="one">Backup \'%1$s\': %2$d file uploaded</item>
+        <item quantity="other">Backup \'%1$s\': %2$d files uploaded</item>
+    </plurals>
+    <string name="backup_notification_completion_text_no_count">Backup \'%1$s\' did not finish — tap to review</string>
 
     <!-- Common -->
     <string name="loading">Loading…</string>
@@ -92,10 +101,10 @@
     <string name="home_cd_settings">Settings</string>
     <string name="home_cd_add">Add backup</string>
     <string name="home_cd_encrypted">Encrypted</string>
-    <string name="home_cd_paused">Paused</string>
+    <string name="home_cd_paused">Disabled</string>
     <string name="home_empty_title">No backups yet</string>
     <string name="home_empty_subtitle">Tap + to create your first backup</string>
-    <string name="home_status_paused">Paused</string>
+    <string name="home_status_paused">Disabled</string>
     <string name="home_status_initial_sync">Initial backup: %1$d / %2$d files — continues in next run</string>
     <string name="home_status_running">Running…</string>
     <string name="home_status_never_run">Never run</string>
@@ -125,6 +134,7 @@
     <string name="cloud_status_done">Google Drive • %1$s\nFolder: %2$s</string>
     <string name="cloud_status_error">Error: %1$s</string>
     <string name="button_connect_drive">Connect to Google Drive</string>
+    <string name="button_change_account">Use a different account</string>
     <string name="label_schedule">Schedule</string>
     <string name="label_network_policy">Network policy</string>
     <string name="label_requires_charging">Only run while charging</string>
@@ -138,6 +148,10 @@
     <string name="label_confirm_password">Confirm password</string>
     <string name="button_save">Save</string>
     <string name="button_saving">Saving…</string>
+    <string name="dialog_discard_changes_title">Leave without saving?</string>
+    <string name="dialog_discard_changes_body">Any changes you made will be lost.</string>
+    <string name="button_discard">Leave</string>
+    <string name="button_keep_editing">Keep editing</string>
     <string name="info_requires_charging_title">Only run while charging</string>
     <string name="info_requires_charging_body">When on, FolderVault waits for the phone to be plugged in before starting a backup. When off, backups run whenever the phone has power to spare — but if several attempts in a row get cut short (for example the phone unplugs or reboots), FolderVault will schedule one extra charging-only run in the background so at least one attempt gets to finish. Your normal schedule keeps running either way.</string>
     <string name="info_changed_file_policy_title">Changed-file policy</string>
@@ -160,11 +174,24 @@
     <string name="error_unexpected">Something went wrong. Please try again.</string>
     <string name="dialog_unexpected_error_title">Unexpected error</string>
 
+    <!-- Database error screen -->
+    <string name="database_error_title">There is a problem with the app\'s database</string>
+    <string name="database_error_body">FolderVault could not open the database where it stores your backup setups and its record of already-uploaded files. Backups cannot run until this is fixed.\n\nYour files in the cloud are not affected.\n\nYou can export today\'s logfile to help investigate the problem, or reset the database as a last resort.</string>
+    <string name="button_retry">Try again</string>
+    <string name="button_reset_database">Reset database</string>
+    <string name="dialog_reset_database_title">Reset the database?</string>
+    <string name="dialog_reset_database_body">This deletes everything FolderVault stores on this device: your backup setups and its record of which files were already uploaded. You will have to set up your backups again afterwards.\n\nNothing in your cloud storage will be deleted or changed.</string>
+    <string name="button_reset_database_confirm">Delete and reset</string>
+    <string name="database_reset_failed">Resetting the database failed. Please try again or reinstall the app.</string>
+
     <!-- Backup detail screen -->
     <string name="detail_default_title">Backup detail</string>
     <string name="label_cloud_folder">Cloud folder</string>
     <string name="label_account">Account</string>
     <string name="label_network">Network</string>
+    <string name="label_only_while_charging">Only while charging</string>
+    <string name="common_yes">Yes</string>
+    <string name="common_no">No</string>
     <string name="label_encryption">Encryption</string>
     <string name="label_retention">Retention</string>
     <string name="encryption_enabled">Enabled</string>
@@ -176,7 +203,6 @@
     <string name="button_clear_all">Clear all</string>
     <string name="no_messages">No messages</string>
     <string name="backup_run_history_title">Run history</string>
-    <string name="backup_run_history_button">Run history</string>
     <string name="backup_run_history_empty">No previous backup runs yet.</string>
     <string name="backup_run_duration">Duration: %1$s</string>
     <string name="backup_run_duration_in_progress">in progress</string>
@@ -190,8 +216,8 @@
     <string name="button_dismiss">Dismiss</string>
     <string name="button_back_up_now">Back up now</string>
     <string name="button_backing_up">Backing up…</string>
-    <string name="button_resume">Resume</string>
-    <string name="button_pause">Pause</string>
+    <string name="button_enable">Enable</string>
+    <string name="button_disable">Disable</string>
     <string name="button_check_password">Check my password</string>
     <string name="button_open_in_drive">Open in Google Drive</string>
     <string name="dialog_open_drive_error_title">Cannot open Google Drive</string>
@@ -224,6 +250,8 @@
     <string name="label_anonymous_error_reports">Anonymous error reports</string>
     <string name="desc_anonymous_error_reports">Help improve the app by sending anonymous crash reports</string>
     <string name="button_request_notification_permission">Re-request notification permission</string>
+    <string name="label_notify_on_backup_completion">Notify when a backup finishes</string>
+    <string name="desc_notify_on_backup_completion">Show a notification after each backup run, with the number of uploaded files</string>
     <string name="section_reliable_backups">Reliable background backups</string>
     <string name="label_battery_optimization">Battery optimization</string>
     <string name="status_battery_optimization_exempt">✓ FolderVault is excluded from battery optimization</string>

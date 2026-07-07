@@ -7,6 +7,55 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-07 — Per-backup Google account (execution of PLAN-per-backup-google-account.md)
+
+### What was requested
+Read, question, improve, and execute the plan for letting each backup config use its own Google
+account (previously the one authorized account was silently reused for every backup, with a
+single install-wide `FolderVault_<UUID>` root in `AppSettings`).
+
+### Decisions (asked before implementing)
+- **Account is locked after creation** (plan's open decision): the add screen shows the system
+  account chooser ("Connect to Google Drive" + a "Use a different account" button while unsaved);
+  once the config is saved, its account can no longer be changed. Reconnecting in edit mode
+  targets the config's stored account directly. This avoids stranded sub-folders and full
+  re-uploads; moving a backup to another account = delete + recreate.
+- The uncommitted firebaseBom downgrade (34.15.0 → 33.9.0, sandbox cache workaround) stays for now.
+
+### What was done
+- `AppSettings`: the three `cloudRoot*` fields replaced by `cloudRoots: List<CloudAccountRoot>`
+  (new `@Serializable` domain type: account / rootFolderId / rootFolderName) + `rootForAccount()`.
+  One root **per account** instead of one per install; still one sub-folder per config.
+- `AppSettingsRepository`: `cloud_roots_json` DataStore key; migration-on-read from the three
+  legacy keys (only when all three are present); the first write persists the JSON key and
+  removes the legacy keys. Constructor now takes a `DataStore<Preferences>` (secondary
+  constructor keeps the `Context` entry point) so tests run against a temp-file DataStore
+  without Robolectric.
+- `ICloudAuthorizer.authorize(accountName: String? = null)`; the Google impl targets the account
+  via `AuthorizationRequest.Builder.setAccount(Account(name, "com.google"))` (verified present in
+  cached play-services-auth 21.3.0). Request building extracted to internal
+  `buildAuthorizationRequest()` as a testable seam.
+- `AddEditBackupScreen`: system account chooser via `AccountManager.newChooseAccountIntent`
+  (no permission needed on minSdk 26); `rememberOnConnectDrive()` branches add vs. edit mode;
+  "Use a different account" `TextButton` shown only in add mode after connecting.
+- `AddEditBackupViewModel`: `startDriveSetup(accountName)` (edit mode resolves the locked
+  account from the existing config); `createCloudFolder` reuses/creates the root **per account**
+  and appends to `cloudRoots`; `createNewSubFolder` authorizes with the connected account.
+- Background pipeline authorizes with `config.cloudAccountIdentifier`: `BackupRunner` (initial
+  auth + `writeRootMetadataWithReAuth`, which gained an account param) and
+  `BackupUploader.handleAuthError`.
+- Tests: `AppSettingsTest` (rootForAccount + JSON round-trip, pure Kotest),
+  `AppSettingsRepositoryTest` (real DataStore on temp files — round-trip, legacy migration,
+  legacy-key cleanup, corrupt-JSON fallback; sandbox-runnable), `GoogleDriveAuthorizationRequestTest`
+  (Robolectric — account set/unset, scopes), `AddEditBackupViewModelTest` rewritten for
+  per-account roots + account forwarding, `BackupUploaderTest` re-auth-with-account case.
+- `CLAUDE.md` v1/v1.1 note updated: root is per account, account locked after creation.
+
+### Verification
+- `assembleDebug` + `detekt` green; all sandbox-runnable tests green (incl. the 9 new pure ones).
+- MockK/Robolectric tests can't run in the Bash sandbox (known limitation) — full
+  `! ./gradlew test` verification handed to the user, plus manual two-account device test.
+
 ## 2026-07-07 — Issues #13 + #15: no destructive migrations, database-error screen with recovery
 
 ### What was requested

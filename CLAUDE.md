@@ -80,11 +80,14 @@ it is the sandbox — report it and ask, don't adapt the code around it.
 ## v1 / v1.1 scope split
 - **v1 always creates a fresh `FolderVault_<UUID>` cloud root.** No "use existing folder", no
   Google Picker, no §5.9 reconciliation. Reinstalling means re-uploading from scratch.
-- **One shared root per install + a sub-folder per backup config.** The root id lives in
-  `AppSettings` (DataStore); each `BackupConfigEntity` stores its `cloudSubFolderId` /
-  `cloudSubFolderName`. Sub-folder names follow `<displayName>_<6-hex of SHA256(treeUri)>`
-  (`SubFolderNameBuilder`) and are immutable after first creation — renaming `displayName`
-  later does NOT rename the Drive folder (v1.1).
+- **One root per Google account + a sub-folder per backup config.** Each backup config picks its
+  account at creation (system account chooser) and the account is **locked after creation** —
+  changing it means delete + recreate. The known roots live in `AppSettings.cloudRoots`
+  (`List<CloudAccountRoot>`, JSON in DataStore; legacy three-key single-root installs migrate on
+  read). Every `authorize()` call targets the config's `cloudAccountIdentifier`. Each
+  `BackupConfigEntity` stores its `cloudSubFolderId` / `cloudSubFolderName`. Sub-folder names
+  follow `<displayName>_<6-hex of SHA256(treeUri)>` (`SubFolderNameBuilder`) and are immutable
+  after first creation — renaming `displayName` later does NOT rename the Drive folder (v1.1).
 - **v1 writes** the per-run manifest (`.foldervault-manifest.json`) inside each sub-folder.
   The identity meta file (`.foldervault-meta.json` from spec §6.1) is **not** written in v1 —
   re-add it together with the Picker / re-attach flow in v1.1, where it will actually be read.

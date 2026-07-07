@@ -11,15 +11,12 @@ data class AppSettings(
     val defaultNetworkPolicy: NetworkPolicy = NetworkPolicy.WIFI_ONLY,
     val anonymousErrorReports: Boolean = true,
     /**
-     * Drive folder ID of the shared per-install backup root (`FolderVault_<UUID>`).
-     * `null` until the first backup config is created.
+     * The known `FolderVault_<UUID>` backup roots, one per Google account that has been used by
+     * at least one backup config. Empty until the first backup config is created.
      */
-    val cloudRootFolderId: String? = null,
-    /** Display name of the shared per-install backup root. `null` until first config is created. */
-    val cloudRootFolderName: String? = null,
-    /**
-     * Account identifier (Drive email) that owns the shared root. Used to detect account switches —
-     * if the active provider's account no longer matches, the root must be recreated.
-     */
-    val cloudRootAccountIdentifier: String? = null,
-)
+    val cloudRoots: List<CloudAccountRoot> = emptyList(),
+) {
+    /** Returns the backup root belonging to [accountIdentifier], or `null` if none exists yet. */
+    fun rootForAccount(accountIdentifier: String): CloudAccountRoot? =
+        cloudRoots.firstOrNull { it.accountIdentifier == accountIdentifier }
+}

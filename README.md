@@ -58,6 +58,24 @@ That equivalent line in `~/.gradle/gradle.properties` needs to be adapted with t
 ./gradlew detekt               # static analysis
 ```
 
+### Troubleshooting: MockK / Robolectric tests fail after a Claude Code session
+
+If `./gradlew test` suddenly fails en masse with
+`Could not initialize class io.mockk.impl.JvmMockKGateway`
+(`Could not self-attach to current VM`) or
+`Couldn't create lock file ~/.robolectric-download-lock (Operation not permitted)`,
+the Gradle daemon was started inside Claude Code's macOS sandbox and is still carrying that
+sandbox profile. Test workers forked by such a daemon cannot attach the MockK agent or write
+the Robolectric lock file. Restart the daemon from a normal terminal:
+
+```bash
+./gradlew --stop
+./gradlew test
+```
+
+The reverse also holds: a daemon started from a normal terminal is un-sandboxed, and later
+sandboxed Claude Code builds that reuse it will run MockK/Robolectric tests fine.
+
 ## Restore (decrypt a locally-downloaded backup)
 
 Encrypted backups can only be decrypted by this app. To restore:

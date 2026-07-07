@@ -1,5 +1,6 @@
 package ch.abwesend.foldervault.view.screens
 
+import android.accounts.AccountManager
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
@@ -30,6 +31,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -67,6 +69,7 @@ import org.koin.core.parameter.parametersOf
 
 private const val RETENTION_DEFAULT_KEEP_LAST_N = 10
 private const val RETENTION_DEFAULT_KEEP_DAYS = 90
+private const val GOOGLE_ACCOUNT_TYPE = "com.google"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -101,6 +104,8 @@ fun AddEditBackupScreen(
     ) { result ->
         viewModel.handleDriveConsentResult(result.data)
     }
+
+    val onConnectDrive = rememberOnConnectDrive(isEditMode = form.isEditMode, viewModel = viewModel)
 
     LaunchedEffect(form.cloudSetup) {
         val state = form.cloudSetup
@@ -139,7 +144,7 @@ fun AddEditBackupScreen(
             modifier = Modifier.padding(innerPadding),
             onDisplayNameChange = viewModel::setDisplayName,
             onPickFolder = { folderPickerLauncher.launch(null) },
-            onConnectDrive = viewModel::startDriveSetup,
+            onConnectDrive = onConnectDrive,
             onScheduleChange = viewModel::setSchedule,
             onChangedFilePolicyChange = viewModel::setChangedFilePolicy,
             onNetworkPolicyChange = viewModel::setNetworkPolicy,
@@ -150,6 +155,42 @@ fun AddEditBackupScreen(
             onRetentionChange = viewModel::setRetentionPolicy,
             onSave = viewModel::save,
         )
+    }
+}
+
+/**
+ * Returns the click handler for the "connect Drive" / "use a different account" buttons.
+ *
+ * Add mode lets the user pick the Google account via the system account chooser; in edit mode
+ * the account is locked after creation, so reconnecting targets the config's stored account
+ * directly without showing the chooser.
+ */
+@Composable
+private fun rememberOnConnectDrive(
+    isEditMode: Boolean,
+    viewModel: AddEditBackupViewModel,
+): () -> Unit {
+    val accountPickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        result.data?.getStringExtra(AccountManager.KEY_ACCOUNT_NAME)?.let(viewModel::startDriveSetup)
+    }
+    return {
+        if (isEditMode) {
+            viewModel.startDriveSetup()
+        } else {
+            accountPickerLauncher.launch(
+                AccountManager.newChooseAccountIntent(
+                    null,
+                    null,
+                    arrayOf(GOOGLE_ACCOUNT_TYPE),
+                    null,
+                    null,
+                    null,
+                    null,
+                ),
+            )
+        }
     }
 }
 
@@ -187,7 +228,7 @@ private fun AddEditContent(
         )
 
         HorizontalDivider()
-        CloudSection(cloudSetup = form.cloudSetup, onConnect = onConnectDrive)
+        CloudSection(cloudSetup = form.cloudSetup, isEditMode = form.isEditMode, onConnect = onConnectDrive)
 
         HorizontalDivider()
         ScheduleSection(
@@ -264,6 +305,7 @@ private fun BasicsSection(
 @Composable
 private fun CloudSection(
     cloudSetup: CloudSetupState,
+    isEditMode: Boolean,
     onConnect: () -> Unit,
 ) {
     SectionHeader(stringResource(R.string.section_cloud_destination))
@@ -291,6 +333,12 @@ private fun CloudSection(
             cloudSetup is CloudSetupState.CreatingFolder
         OutlinedButton(onClick = onConnect, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
             Text(stringResource(R.string.button_connect_drive))
+        }
+    } else if (!isEditMode) {
+        // The account is locked once the backup is saved; before that the user may still change
+        // their mind and connect a different Google account.
+        TextButton(onClick = onConnect) {
+            Text(stringResource(R.string.button_change_account))
         }
     }
 }

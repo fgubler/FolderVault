@@ -99,8 +99,9 @@ class BackupRunner(
             .ifError { log.warning("Failed to clean up old staging dirs for run $runId", it) }
         val stagingDir = stagingManager.createRunDir(runId)
 
-        // Authorize — silent only (no UI interaction from a worker)
-        val authResult = authorizer.authorize()
+        // Authorize — silent only (no UI interaction from a worker), targeting the account this
+        // config was created with so multi-account setups don't cross-upload.
+        val authResult = authorizer.authorize(config.cloudAccountIdentifier)
         if (authResult !is CloudAuthResult.Authorized) {
             summary.authLost = true
             commitRunStats(config.id, runId, BackupRunStatus.FAILED, summary, completedNormally = false)
@@ -254,6 +255,7 @@ class BackupRunner(
             config.cloudSubFolderId,
             CloudManifest.CLOUD_FILE_NAME,
             bytes,
+            config.cloudAccountIdentifier,
         )
         if (writeResult !is SuccessResult) {
             log.warning("Failed to write cloud manifest for config $configId")
@@ -273,11 +275,12 @@ class BackupRunner(
         rootFolderId: String,
         name: String,
         bytes: ByteArray,
+        accountIdentifier: String,
     ): BinaryResult<Unit, Exception> {
         val first = cloudProvider.writeRootMetadata(rootFolderId, name, bytes)
         val authExpired = first is ErrorResult && first.error is CloudAuthException
         return if (authExpired) {
-            val reAuth = authorizer.authorize()
+            val reAuth = authorizer.authorize(accountIdentifier)
             if (reAuth is CloudAuthResult.Authorized) {
                 reAuth.data.writeRootMetadata(rootFolderId, name, bytes)
             } else {

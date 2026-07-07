@@ -125,6 +125,7 @@
     <string name="cloud_status_done">Google Drive • %1$s\nFolder: %2$s</string>
     <string name="cloud_status_error">Error: %1$s</string>
     <string name="button_connect_drive">Connect to Google Drive</string>
+    <string name="button_change_account">Use a different account</string>
     <string name="label_schedule">Schedule</string>
     <string name="label_network_policy">Network policy</string>
     <string name="label_requires_charging">Only run while charging</string>

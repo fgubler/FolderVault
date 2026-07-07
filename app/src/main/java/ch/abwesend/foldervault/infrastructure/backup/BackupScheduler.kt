@@ -128,6 +128,18 @@ class BackupScheduler(private val context: Context) : IBackupScheduler {
         }
     }
 
+    /** Cancels every piece of scheduled backup work — all work this app enqueues is backup work. */
+    override fun cancelAll() {
+        try {
+            workManager.cancelAllWork()
+            log.info("Cancelled all scheduled backup work")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.error("Failed to cancel all scheduled backup work", e)
+        }
+    }
+
     override fun observeIsRunning(configId: String): Flow<Boolean> {
         val primary = workManager.getWorkInfosForUniqueWorkFlow(BackupWorker.workName(configId))
         val fallback = workManager.getWorkInfosForUniqueWorkFlow(BackupWorker.chargingFallbackWorkName(configId))

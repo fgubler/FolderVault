@@ -26,7 +26,7 @@ import ch.abwesend.foldervault.infrastructure.room.entity.UploadedFileIndexEntit
         BackupRunEntity::class,
         NotificationThrottleStateEntity::class,
     ],
-    version = 3,
+    version = FolderVaultDatabase.DB_VERSION,
     exportSchema = true,
 )
 @TypeConverters(RoomTypeConverters::class)
@@ -39,8 +39,19 @@ abstract class FolderVaultDatabase : RoomDatabase() {
     abstract fun notificationThrottleStateDao(): NotificationThrottleStateDao
 
     companion object {
-        private const val DB_NAME = "foldervault.db"
+        /**
+         * Current schema version. Whenever this is bumped, a matching entry must be added to
+         * [DatabaseMigrations.ALL] — enforced by `DatabaseMigrationChainTest`.
+         */
+        const val DB_VERSION = 3
 
+        internal const val DB_NAME = "foldervault.db"
+
+        /**
+         * Deliberately registers explicit migrations only — no `fallbackToDestructiveMigration`.
+         * A missing migration must surface as an error the user can act on (see
+         * [DatabaseRecoveryService]) instead of silently wiping local data.
+         */
         fun create(context: Context): FolderVaultDatabase =
             Room.databaseBuilder(context, FolderVaultDatabase::class.java, DB_NAME)
                 .addMigrations(*DatabaseMigrations.ALL)

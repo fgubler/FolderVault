@@ -7,6 +7,47 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-07 — Issues #13 + #15: no destructive migrations, database-error screen with recovery
+
+### What was requested
+Fix GitHub issues #13 (verify destructive DB migrations are never enabled) and #15 (when the
+database fails to open, show an error screen with log export and a user-confirmed database
+reset instead of crashing). Follow-up in a second session: the new tests failed inside the
+Bash sandbox — adapt the code so the file-system access lives in its own class that tests can
+replace, instead of working around the sandbox.
+
+### What was done
+- `IDatabaseRecoveryService` (domain) + `DatabaseRecoveryService` (infrastructure/room):
+  health check forces the database open via `openHelper.writableDatabase`; reset deletes the
+  database file(s), cancels all scheduled backup work, and reopens to a fresh schema.
+- `IDatabaseFileAccess` + `RoomDatabaseFileAccess` (infrastructure/room): the physical
+  file-system access (open / delete) extracted behind an interface so the recovery service is
+  unit-testable without Robolectric or a real database file.
+- `DatabaseGuard` (navigation) + `DatabaseGuardViewModel` + `DatabaseErrorScreen`: the app UI
+  is only shown once the health check passes; the error screen offers "try again", "export
+  today's log", and a confirmed destructive reset.
+- `DatabaseArchitectureTest` (Konsist): production code must never call
+  `fallbackToDestructiveMigration*` — guards issue #13 permanently.
+- `DatabaseMigrationChainTest`: every schema-version bump needs a matching migration in
+  `DatabaseMigrations.ALL`.
+- Tests: `DatabaseRecoveryServiceTest` and `DatabaseGuardViewModelTest` rewritten as plain
+  JVM Kotest specs with hand-written fakes (no Robolectric, no MockK).
+
+### Issues resolved / environment findings
+- Robolectric cannot run inside the Bash sandbox: it opens `~/.robolectric-download-lock`,
+  but the sandbox allowlist entry is misspelled (`.roboelectric…`) — one-character fix in
+  `.claude/settings.local.json` would unblock all Robolectric tests.
+- MockK cannot run inside the sandbox either: its ByteBuddy agent fails to self-attach (JVM
+  attach handshake is blocked); `-Djdk.attach.allowAttachSelf=true` does not help. Hence
+  hand-written fakes for the new tests; existing MockK-based tests only run outside the sandbox.
+- `firebaseBom` downgraded 34.15.0 → 33.9.0 and kept (user decision): 34.15.0 is not in the
+  local Gradle cache and the sandbox blocks Maven downloads, while 33.9.0 resolves offline.
+
+### Decisions carried forward
+- The user-confirmed reset is the only "destructive migration" the app allows.
+- New unit tests for logic around platform seams should abstract the seam (like
+  `IDatabaseFileAccess`) and use fakes, so they stay runnable in restricted environments.
+
 ## 2026-07-03 — Settings: "Reliable background backups" section (battery optimization + Data Saver)
 
 ### What was requested

@@ -160,6 +160,16 @@
     <string name="error_unexpected">Something went wrong. Please try again.</string>
     <string name="dialog_unexpected_error_title">Unexpected error</string>
 
+    <!-- Database error screen -->
+    <string name="database_error_title">There is a problem with the app\'s database</string>
+    <string name="database_error_body">FolderVault could not open the database where it stores your backup setups and its record of already-uploaded files. Backups cannot run until this is fixed.\n\nYour files in the cloud are not affected.\n\nYou can export today\'s logfile to help investigate the problem, or reset the database as a last resort.</string>
+    <string name="button_retry">Try again</string>
+    <string name="button_reset_database">Reset database</string>
+    <string name="dialog_reset_database_title">Reset the database?</string>
+    <string name="dialog_reset_database_body">This deletes everything FolderVault stores on this device: your backup setups and its record of which files were already uploaded. You will have to set up your backups again afterwards.\n\nNothing in your cloud storage will be deleted or changed.</string>
+    <string name="button_reset_database_confirm">Delete and reset</string>
+    <string name="database_reset_failed">Resetting the database failed. Please try again or reinstall the app.</string>
+
     <!-- Backup detail screen -->
     <string name="detail_default_title">Backup detail</string>
     <string name="label_cloud_folder">Cloud folder</string>

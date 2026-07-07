@@ -36,6 +36,12 @@ interface IBackupScheduler {
     fun cancel(configId: String)
 
     /**
+     * Cancels every piece of scheduled backup work for all configs. Used when the local
+     * database is reset: the configs the scheduled work belongs to no longer exist.
+     */
+    fun cancelAll()
+
+    /**
      * Emits `true` while a backup for [configId] is enqueued or actively running, `false` otherwise.
      * Backed by WorkManager — survives process death and reflects retries.
      */

@@ -11,6 +11,11 @@ data class AppSettings(
     val defaultNetworkPolicy: NetworkPolicy = NetworkPolicy.WIFI_ONLY,
     val anonymousErrorReports: Boolean = true,
     /**
+     * Whether to show a notification after each finished backup run (success or failure).
+     * Retried and cancelled runs stay silent — only a terminal run outcome notifies.
+     */
+    val notifyOnBackupCompletion: Boolean = false,
+    /**
      * The known `FolderVault_<UUID>` backup roots, one per Google account that has been used by
      * at least one backup config. Empty until the first backup config is created.
      */

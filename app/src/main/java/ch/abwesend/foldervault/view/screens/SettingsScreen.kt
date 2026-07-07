@@ -77,6 +77,11 @@ internal fun SettingsScreen(
     val notificationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { _ -> }
+    val requestNotificationPermission = {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("text/plain"),
     ) { uri -> if (uri != null) viewModel.exportTodayLogFile(uri) }
@@ -120,15 +125,16 @@ internal fun SettingsScreen(
             onFileSizeLimitChange = viewModel::setDefaultFileSizeLimit,
             onThemeChange = viewModel::setTheme,
             onErrorReportsChange = viewModel::setAnonymousErrorReports,
+            onNotifyOnBackupCompletionChange = { enabled ->
+                viewModel.setNotifyOnBackupCompletion(enabled)
+                // Enabling the notification is pointless without the permission — ask right away.
+                if (enabled) requestNotificationPermission()
+            },
             onShowOnboarding = {
                 viewModel.setShowOnboarding(true)
                 onShowOnboarding()
             },
-            onRequestNotificationPermission = {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                }
-            },
+            onRequestNotificationPermission = requestNotificationPermission,
             onExportTodayLog = {
                 exportLauncher.launch("foldervault-log-${System.currentTimeMillis()}.log")
             },
@@ -149,6 +155,7 @@ private fun SettingsContent(
     onFileSizeLimitChange: (Int) -> Unit,
     onThemeChange: (AppTheme) -> Unit,
     onErrorReportsChange: (Boolean) -> Unit,
+    onNotifyOnBackupCompletionChange: (Boolean) -> Unit,
     onShowOnboarding: () -> Unit,
     onRequestNotificationPermission: () -> Unit,
     onExportTodayLog: () -> Unit,
@@ -218,14 +225,11 @@ private fun SettingsContent(
         )
 
         SectionDivider()
-        SettingsSectionHeader(stringResource(R.string.section_notifications))
-
-        OutlinedButton(
-            onClick = onRequestNotificationPermission,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(stringResource(R.string.button_request_notification_permission))
-        }
+        NotificationsSection(
+            notifyOnBackupCompletion = settings.notifyOnBackupCompletion,
+            onNotifyOnBackupCompletionChange = onNotifyOnBackupCompletionChange,
+            onRequestNotificationPermission = onRequestNotificationPermission,
+        )
 
         SectionDivider()
         ReliableBackupsSection(
@@ -239,6 +243,31 @@ private fun SettingsContent(
             onShowOnboarding = onShowOnboarding,
             onExportTodayLog = onExportTodayLog,
         )
+    }
+}
+
+@Suppress("MultipleEmitters")
+@Composable
+private fun NotificationsSection(
+    notifyOnBackupCompletion: Boolean,
+    onNotifyOnBackupCompletionChange: (Boolean) -> Unit,
+    onRequestNotificationPermission: () -> Unit,
+) {
+    SettingsSectionHeader(stringResource(R.string.section_notifications))
+
+    SwitchRow(
+        label = stringResource(R.string.label_notify_on_backup_completion),
+        description = stringResource(R.string.desc_notify_on_backup_completion),
+        checked = notifyOnBackupCompletion,
+        onCheckedChange = onNotifyOnBackupCompletionChange,
+    )
+
+    Spacer(modifier = Modifier.height(12.dp))
+    OutlinedButton(
+        onClick = onRequestNotificationPermission,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(stringResource(R.string.button_request_notification_permission))
     }
 }
 
@@ -480,6 +509,7 @@ private fun SettingsScreenPreview() {
             onFileSizeLimitChange = {},
             onThemeChange = {},
             onErrorReportsChange = {},
+            onNotifyOnBackupCompletionChange = {},
             onShowOnboarding = {},
             onRequestNotificationPermission = {},
             onExportTodayLog = {},

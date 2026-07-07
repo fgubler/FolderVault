@@ -79,7 +79,7 @@ val appModule = module {
     single<ILogExporter> { get<LocalLogFiles>() }
 
     // Backup notifications and scheduling
-    single { BackupNotificationManager(androidContext(), get(), get()) }
+    single { BackupNotificationManager(androidContext(), get(), get(), get()) }
     single<IBackupScheduler> { BackupScheduler(androidContext()) }
     single<INetworkConnectivityChecker> { AndroidNetworkConnectivityChecker(androidContext()) }
     single<IBackgroundRestrictionChecker> { AndroidBackgroundRestrictionChecker(androidContext()) }

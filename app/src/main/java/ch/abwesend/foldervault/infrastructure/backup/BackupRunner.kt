@@ -45,9 +45,14 @@ import javax.crypto.SecretKey
 
 sealed class RunResult {
     abstract val runId: String
-    data class Success(val summary: RunSummary, override val runId: String) : RunResult()
-    data class AuthLost(val summary: RunSummary, override val runId: String) : RunResult()
-    data class FatalError(val error: Exception, val summary: RunSummary, override val runId: String) : RunResult()
+    abstract val summary: RunSummary
+    data class Success(override val summary: RunSummary, override val runId: String) : RunResult()
+    data class AuthLost(override val summary: RunSummary, override val runId: String) : RunResult()
+    data class FatalError(
+        val error: Exception,
+        override val summary: RunSummary,
+        override val runId: String,
+    ) : RunResult()
 }
 
 class BackupRunner(

@@ -7,6 +7,45 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-07 — Opt-in completion notification after each finished backup run
+
+### What was requested
+A settings toggle to show a notification after each *finished* backup run — success or failure —
+with the backup name, the number of uploaded files, and the outcome. Retried attempts and
+cancelled runs must stay silent. Clarified with the user: when a run needs several attempts, the
+notification only reports the file count of the last (successful) attempt — cross-attempt
+aggregation was deemed not worth the complexity.
+
+### What was done
+- `AppSettings.notifyOnBackupCompletion` (default **off**) + DataStore key
+  `notify_on_backup_completion` in `AppSettingsRepository`.
+- Settings screen: new `NotificationsSection` composable with a `SwitchRow`; enabling the toggle
+  immediately triggers the POST_NOTIFICATIONS runtime permission request (reusing the existing
+  launcher). New `SettingsViewModel.setNotifyOnBackupCompletion`.
+- `RunResult` now exposes `summary` as an abstract member (all variants already carried one).
+- `BackupNotificationManager`:
+  - new channel `foldervault_backup_completions` ("Finished backups", IMPORTANCE_DEFAULT);
+  - pure `completionOutcomeOf(RunResult): BackupRunOutcome?` — `Success` → SUCCESS, unless
+    `hitTimeBudget` (continuation re-enqueued → silent); `AuthLost` → silent (WorkManager
+    retries); `FatalError` → FAILURE. Cancelled runs never produce a `RunResult`, so they are
+    silent by construction;
+  - `postCompletionNotificationIfEnabled(...)` gated on the setting, with a nullable file count
+    (null when the run died before producing a summary); notification IDs use a `0x20000000`
+    prefix so they never collide with problem-notification IDs;
+  - deep-link pending intent + `nm.notify` extracted into shared `detailScreenPendingIntent` /
+    `notifySafely` helpers (also used by the problems path).
+- `BackupWorker`: posts the completion notification for terminal results only (mapped via
+  `completionOutcomeOf`); `surfaceFatalError` also posts a FAILURE completion (no file count).
+- Strings: channel name/description, success/failure titles, plural body
+  `backup_notification_completion_text`, no-count failure body, settings label/description.
+- Tests: `CompletionNotificationDecisionTest` (pure outcome mapping + ID-prefix isolation),
+  two new `AppSettingsRepositoryTest` cases (default off, round-trip).
+
+### Decisions carried forward
+- Only the last attempt's upload count is reported — per-run, not per-attempt aggregation.
+- A time-budget continuation (`hitTimeBudget`) is treated like a retry: silent until the final
+  continuation run finishes.
+
 ## 2026-07-07 — Issue #17: UX improvements on the add/edit backup screen
 
 ### What was requested

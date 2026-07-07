@@ -60,6 +60,18 @@ class BackupWorker(
                 runId = result.runId,
             )
 
+            // Cancelled runs never reach this point (the CancellationException propagates), and
+            // non-terminal results (retry / continuation) map to null — so only a truly finished
+            // run can produce a completion notification.
+            BackupNotificationManager.completionOutcomeOf(result)?.let { outcome ->
+                notificationManager.postCompletionNotificationIfEnabled(
+                    configId = id,
+                    configName = config.displayName,
+                    outcome = outcome,
+                    filesUploaded = result.summary.filesUploaded,
+                )
+            }
+
             when (result) {
                 is RunResult.Success -> {
                     if (result.summary.hitTimeBudget) {
@@ -119,6 +131,14 @@ class BackupWorker(
             configId = configId,
             configName = config.displayName,
             runId = runId,
+        )
+
+        // The run died before the pipeline produced a summary, so no file count is available.
+        notificationManager.postCompletionNotificationIfEnabled(
+            configId = configId,
+            configName = config.displayName,
+            outcome = BackupRunOutcome.FAILURE,
+            filesUploaded = null,
         )
     }
 }

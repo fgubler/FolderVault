@@ -57,6 +57,20 @@ class AppSettingsRepositoryTest : StringSpec({
         rootFolderName = "FolderVault_two",
     )
 
+    "notifyOnBackupCompletion defaults to disabled" {
+        val repo = AppSettingsRepository(newDataStore())
+
+        repo.settings.first().notifyOnBackupCompletion shouldBe false
+    }
+
+    "notifyOnBackupCompletion survives a write/read round-trip" {
+        val repo = AppSettingsRepository(newDataStore())
+
+        repo.update { it.copy(notifyOnBackupCompletion = true) }
+
+        repo.settings.first().notifyOnBackupCompletion shouldBe true
+    }
+
     "cloudRoots survive a write/read round-trip" {
         val repo = AppSettingsRepository(newDataStore())
 

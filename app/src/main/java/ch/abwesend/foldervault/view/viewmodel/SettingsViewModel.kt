@@ -67,6 +67,9 @@ internal class SettingsViewModel(
         update { it.copy(anonymousErrorReports = enabled) }
     }
 
+    fun setNotifyOnBackupCompletion(enabled: Boolean) =
+        update { it.copy(notifyOnBackupCompletion = enabled) }
+
     fun setShowOnboarding(show: Boolean) = update { it.copy(showOnboarding = show) }
 
     fun dismissExportResult() {

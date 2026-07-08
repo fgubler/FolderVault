@@ -1,8 +1,10 @@
 package ch.abwesend.foldervault.infrastructure.backup
 
+import ch.abwesend.foldervault.domain.cloud.CloudNotFoundException
 import ch.abwesend.foldervault.domain.cloud.ICloudStorageProvider
 import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.model.RetentionPolicy
+import ch.abwesend.foldervault.domain.result.BinaryResult
 import ch.abwesend.foldervault.domain.result.ErrorResult
 import ch.abwesend.foldervault.domain.result.SuccessResult
 import ch.abwesend.foldervault.infrastructure.room.dao.UploadedFileIndexDao
@@ -60,7 +62,7 @@ class RetentionManager(
         for (entry in pending) {
             val cloudFileId = entry.pendingDeletionCloudFileId ?: continue
             val deleteResult = cloudProvider.deleteFile(cloudFileId)
-            if (deleteResult is SuccessResult) {
+            if (isGone(deleteResult)) {
                 uploadedFileIndexDao.clearPendingDeletion(entry.id)
             } else {
                 log.warning(
@@ -73,12 +75,22 @@ class RetentionManager(
 
     private suspend fun deleteCloudAndIndex(cloudFileId: String, indexId: Long) {
         val deleteResult = cloudProvider.deleteFile(cloudFileId)
-        if (deleteResult is ErrorResult) {
+        if (!isGone(deleteResult)) {
             log.warning(
                 "Retention: failed to delete cloud file $cloudFileId" +
-                    " — removing index entry anyway: ${deleteResult.error}"
+                    " — removing index entry anyway: ${(deleteResult as ErrorResult).error}"
             )
         }
         uploadedFileIndexDao.deleteById(indexId)
     }
+
+    /**
+     * True when the cloud file is confirmed gone: either the delete succeeded, or Drive
+     * reported a 404 ([CloudNotFoundException]) for an already-removed file. Treating 404 as
+     * success keeps deletions idempotent so a file removed out-of-band (manually in Drive or by
+     * a race) does not leave a marker that is re-fetched and re-"deleted" on every run.
+     */
+    private fun isGone(deleteResult: BinaryResult<Unit, Exception>): Boolean =
+        deleteResult is SuccessResult ||
+            (deleteResult is ErrorResult && deleteResult.error is CloudNotFoundException)
 }

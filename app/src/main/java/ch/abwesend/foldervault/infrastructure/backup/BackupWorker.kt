@@ -25,6 +25,14 @@ class BackupWorker(
 
     companion object {
         const val KEY_CONFIG_ID = "configId"
+
+        /**
+         * Input-data flag marking a run as a charging-only fallback. When such a run hits its
+         * time budget, its continuation must re-enqueue as a fallback (forced charging constraint,
+         * dedicated unique name) rather than a plain one-time run whose config has
+         * `requiresCharging = false`. See [BackupContinuationScheduler].
+         */
+        const val KEY_IS_CHARGING_FALLBACK = "isChargingFallback"
         const val WORK_NAME_PREFIX = "foldervault_backup_"
         const val ONE_TIME_WORK_NAME_PREFIX = "foldervault_backup_one_time_"
         const val CHARGING_FALLBACK_WORK_NAME_PREFIX = "foldervault_backup_charging_fallback_"
@@ -52,6 +60,7 @@ class BackupWorker(
 
     override suspend fun doWork(): Result {
         val configId = inputData.getString(KEY_CONFIG_ID)
+        val isChargingFallback = inputData.getBoolean(KEY_IS_CHARGING_FALLBACK, false)
         val fallbackRunId = UUID.randomUUID().toString()
 
         return errorHandler.doWorkWithErrorHandling(
@@ -87,14 +96,16 @@ class BackupWorker(
             when (result) {
                 is RunResult.Success -> {
                     if (result.summary.hitTimeBudget) {
-                        // Made progress but ran out of time — re-enqueue for the next slot.
-                        // Reuse the config's network policy so a Wi-Fi-only backup never spills
-                        // over onto mobile data on the continuation run.
+                        // Made progress but ran out of time — re-enqueue for the next slot. A
+                        // charging-fallback run re-enqueues as a fallback so it keeps its charging
+                        // constraint and dedicated name; all others re-enqueue as one-time work.
                         logger.info("Run hit time budget with progress; re-enqueueing for config $id")
-                        BackupScheduler(applicationContext).scheduleOneTime(
-                            id,
-                            config.networkPolicy,
-                            config.requiresCharging,
+                        BackupContinuationScheduler.scheduleContinuation(
+                            scheduler = BackupScheduler(applicationContext),
+                            configId = id,
+                            networkPolicy = config.networkPolicy,
+                            requiresCharging = config.requiresCharging,
+                            isChargingFallback = isChargingFallback,
                         )
                         Result.success() // not retry() — we don't want backoff accumulation
                     } else {

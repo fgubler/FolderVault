@@ -7,6 +7,47 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-08 — Review fix Task 2: charging fallback keeps its constraint across continuations
+
+### What was requested
+Fix code-review finding 1 (`review.md`): when a run hits the time budget, `BackupWorker.doWork()`
+re-enqueued via `scheduleOneTime(id, config.networkPolicy, config.requiresCharging)`. For a
+charging-fallback run, `config.requiresCharging` is `false` by definition, so the continuation
+silently lost the charging constraint AND moved from the fallback unique name to the one-time
+name — the fallback protected only the first ~8-minute window, exactly where large backlogs need
+it most.
+
+### What was done
+- **Mark fallback runs.** `BackupWorker.KEY_IS_CHARGING_FALLBACK` input-data flag, set in
+  `BackupScheduler.scheduleChargingFallback`. `doWork()` reads it once at the top.
+- **Extracted continuation decision.** New `BackupContinuationScheduler.scheduleContinuation(...)`
+  (testable in isolation): a charging-fallback run re-enqueues via `scheduleChargingFallback`
+  (forced charging constraint + dedicated name); every other run re-enqueues via `scheduleOneTime`
+  carrying the config's own `requiresCharging`. `doWork()` now delegates to it. Because
+  `scheduleChargingFallback` always re-sets the flag, a fallback that hits the budget repeatedly
+  stays a fallback across every continuation.
+- **KEEP-vs-REPLACE decision.** `scheduleChargingFallback` gained `replaceExisting: Boolean = false`.
+  The continuation is enqueued from *within* the still-running fallback worker, which still holds
+  the unique name (RUNNING is uncompleted work), so `ExistingWorkPolicy.KEEP` would silently
+  swallow it. The continuation therefore passes `replaceExisting = true` → `REPLACE`. This
+  self-replace supersedes the run that is already wrapping up (its DB row is already committed as
+  `INITIAL_SYNC_IN_PROGRESS`, and the fallback trigger only fires from `BackupRunner`'s
+  cancellation catch which has already returned — so no spurious CANCELLED row or re-trigger). The
+  trigger path (`ChargingFallbackTrigger`) keeps the default `KEEP`, so duplicate fallbacks while
+  one is pending are still no-ops.
+- **Tests.** New `BackupContinuationSchedulerTest`: a fallback continuation calls
+  `scheduleChargingFallback(replaceExisting = true)` and never `scheduleOneTime`; a normal
+  continuation calls `scheduleOneTime` with the config's charging preference and never the
+  fallback. Updated the hand-written `FakeBackupScheduler` in `DatabaseRecoveryServiceTest` for the
+  new signature.
+
+### Verified
+`./gradlew assembleDebug`, `./gradlew test`, `./gradlew detekt` all green.
+
+### Decisions carried forward
+- `scheduleChargingFallback` is now dual-mode: KEEP for the trigger (dedupe pending fallbacks),
+  REPLACE for a self-continuation. The charging constraint survives arbitrarily many continuations.
+
 ## 2026-07-08 — Review fix Task 1: separate WorkManager unique-work names for one-time runs
 
 ### What was requested

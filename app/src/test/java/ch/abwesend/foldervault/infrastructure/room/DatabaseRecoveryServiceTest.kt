@@ -170,7 +170,11 @@ private class FakeBackupScheduler : IBackupScheduler {
         globalDefault: BackupSchedule,
     ) = Unit
 
-    override fun scheduleChargingFallback(configId: String, networkPolicy: NetworkPolicy) = Unit
+    override fun scheduleChargingFallback(
+        configId: String,
+        networkPolicy: NetworkPolicy,
+        replaceExisting: Boolean,
+    ) = Unit
 
     override fun cancel(configId: String) = Unit
 

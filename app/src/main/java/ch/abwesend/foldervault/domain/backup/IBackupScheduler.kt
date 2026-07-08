@@ -30,8 +30,14 @@ interface IBackupScheduler {
      *
      * Uses [androidx.work.ExistingWorkPolicy.KEEP], so repeated invocations while an earlier
      * fallback is still pending are no-ops.
+     *
+     * When [replaceExisting] is true, uses [androidx.work.ExistingWorkPolicy.REPLACE] instead.
+     * This is required for a time-budget continuation enqueued from *within* the still-running
+     * fallback worker: that worker still holds the unique name (RUNNING is uncompleted work), so
+     * KEEP would silently swallow the continuation. REPLACE re-queues the next fallback slot,
+     * superseding the run that is already wrapping up.
      */
-    fun scheduleChargingFallback(configId: String, networkPolicy: NetworkPolicy)
+    fun scheduleChargingFallback(configId: String, networkPolicy: NetworkPolicy, replaceExisting: Boolean = false)
 
     fun cancel(configId: String)
 

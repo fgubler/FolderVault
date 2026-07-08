@@ -95,18 +95,28 @@ class BackupScheduler(private val context: Context) : IBackupScheduler {
 
     /**
      * Charging-only fallback: forces [Constraints.setRequiresCharging] and uses a dedicated
-     * unique-work name so it never displaces the config's periodic / one-time runs.
-     * [ExistingWorkPolicy.KEEP] means we no-op if a fallback for this config is still pending.
+     * unique-work name so it never displaces the config's periodic / one-time runs. The
+     * [BackupWorker.KEY_IS_CHARGING_FALLBACK] flag lets a continuation of this run re-enqueue
+     * itself as a fallback (keeping the charging constraint) rather than a plain one-time run.
+     *
+     * [ExistingWorkPolicy.KEEP] means we no-op if a fallback for this config is still pending —
+     * except when [replaceExisting] is true (a continuation from within the running fallback
+     * worker), which must use [ExistingWorkPolicy.REPLACE] or KEEP would swallow it.
      */
-    override fun scheduleChargingFallback(configId: String, networkPolicy: NetworkPolicy) {
+    override fun scheduleChargingFallback(configId: String, networkPolicy: NetworkPolicy, replaceExisting: Boolean) {
         try {
             val request = OneTimeWorkRequestBuilder<BackupWorker>()
                 .setConstraints(buildConstraints(networkPolicy, requiresCharging = true))
-                .setInputData(workDataOf(BackupWorker.KEY_CONFIG_ID to configId))
+                .setInputData(
+                    workDataOf(
+                        BackupWorker.KEY_CONFIG_ID to configId,
+                        BackupWorker.KEY_IS_CHARGING_FALLBACK to true,
+                    )
+                )
                 .build()
             workManager.enqueueUniqueWork(
                 BackupWorker.chargingFallbackWorkName(configId),
-                ExistingWorkPolicy.KEEP,
+                if (replaceExisting) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP,
                 request,
             )
             log.info("Enqueued charging-only fallback backup for config $configId")

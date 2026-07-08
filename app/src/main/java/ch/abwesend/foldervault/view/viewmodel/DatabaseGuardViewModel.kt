@@ -1,6 +1,5 @@
 package ch.abwesend.foldervault.view.viewmodel
 
-import android.net.Uri
 import androidx.lifecycle.viewModelScope
 import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
@@ -42,6 +41,10 @@ internal class DatabaseGuardViewModel(
     private val _userMessage = MutableStateFlow<UiText?>(null)
     val userMessage: StateFlow<UiText?> = _userMessage.asStateFlow()
 
+    /** Outcome of the last log-file export, or `null` while no result is pending display. */
+    private val _exportResult = MutableStateFlow<Boolean?>(null)
+    val exportResult: StateFlow<Boolean?> = _exportResult.asStateFlow()
+
     init {
         verifyDatabase()
     }
@@ -74,13 +77,14 @@ internal class DatabaseGuardViewModel(
         }
     }
 
-    fun exportTodayLogFile(uri: Uri) {
+    fun exportTodayLogFile(destinationUri: String) {
         safeLaunch {
-            val exported = withContext(dispatchers.io) { logExporter.exportTodayLog(uri.toString()) }
-            _userMessage.value = UiText.Resource(
-                if (exported) R.string.export_log_success else R.string.export_log_failed,
-            )
+            _exportResult.value = withContext(dispatchers.io) { logExporter.exportTodayLog(destinationUri) }
         }
+    }
+
+    fun dismissExportResult() {
+        _exportResult.value = null
     }
 
     fun dismissUserMessage() {

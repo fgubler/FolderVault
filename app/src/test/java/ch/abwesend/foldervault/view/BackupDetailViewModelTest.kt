@@ -15,6 +15,7 @@ import ch.abwesend.foldervault.view.viewmodel.BackupDetailViewModel
 import io.kotest.core.spec.IsolationMode
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.shouldBe
+import io.mockk.coVerifyOrder
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
@@ -88,10 +89,10 @@ class BackupDetailViewModelTest : StringSpec({
         scheduler: IBackupScheduler = mockk(relaxed = true) {
             every { observeIsRunning(configId) } returns MutableStateFlow(isRunning)
         },
-    ): Pair<BackupDetailViewModel, IBackupScheduler> {
-        val configRepo = mockk<IBackupConfigRepository> {
+        configRepo: IBackupConfigRepository = mockk {
             every { getById(configId) } returns flowOf(config)
-        }
+        },
+    ): Pair<BackupDetailViewModel, IBackupScheduler> {
         val messageRepo = mockk<IBackupMessageRepository> {
             every { getUndismissed(configId) } returns flowOf(emptyList())
             every { getUnreadCountBySeverity(configId, any()) } returns flowOf(0)
@@ -360,6 +361,28 @@ class BackupDetailViewModelTest : StringSpec({
         // The Wi-Fi override carries through: the run drops both constraints for this one time.
         verify(exactly = 1) { scheduler.scheduleOneTime(configId, NetworkPolicy.ANY, false) }
         vm.showChargingOverridePrompt.value shouldBe false
+        job.cancel()
+    }
+
+    "pausing persists the pause flag before cancelling scheduled work" {
+        val configId = "cfg-17"
+        val config = makeConfig(configId, isPaused = false)
+        val configRepo = mockk<IBackupConfigRepository>(relaxed = true) {
+            every { getById(configId) } returns flowOf(config)
+        }
+        val (vm, scheduler) = buildVm(configId, config, configRepo = configRepo)
+        val job = vm.config.launchIn(CoroutineScope(testDispatcher))
+
+        vm.togglePause()
+
+        // Cancelling makes the in-flight worker re-fetch the config to decide whether a
+        // charging-only fallback may still be scheduled — the pause flag must already be
+        // persisted by then, or the worker races the write and re-enqueues work for the
+        // config the user just paused.
+        coVerifyOrder {
+            configRepo.setPaused(configId, true)
+            scheduler.cancel(configId)
+        }
         job.cancel()
     }
 })

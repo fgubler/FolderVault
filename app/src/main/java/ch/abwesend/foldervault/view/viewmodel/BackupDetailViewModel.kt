@@ -161,6 +161,11 @@ class BackupDetailViewModel(
     fun togglePause() = safeLaunch {
         val current = config.value ?: return@safeLaunch
         val newPaused = !current.isPaused
+        // The pause flag must be persisted BEFORE touching the scheduler: cancelling an in-flight
+        // worker makes it re-fetch the config to decide whether a charging-only fallback may be
+        // scheduled, and it must observe the new flag — cancelling first would race that re-fetch
+        // and could enqueue a fallback (plus its info message) for a config the user just paused.
+        configRepo.setPaused(configId, newPaused)
         if (newPaused) {
             scheduler.cancel(configId)
         } else {
@@ -173,7 +178,6 @@ class BackupDetailViewModel(
                 globalDefault = globalDefault,
             )
         }
-        configRepo.setPaused(configId, newPaused)
     }
 
     fun checkPassword(candidate: String) = safeLaunch {

@@ -7,6 +7,61 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-08 — Third review round (fresh `review/develop.md`) + fixes for findings 1, 3, 4
+
+### What was requested
+Full re-review of `develop` vs `master` (excluding `fable-review.md`), then fix findings 1, 3, 4.
+Finding 2 was withdrawn: the global default schedule is *by design* only a pre-selection for new
+configs (already implemented — the add/edit picker excludes `USE_GLOBAL_DEFAULT` since `84b22c5`
+and persists concrete values); changing it must never affect existing configs.
+
+### What was done
+- **Finding 1 (pause race)**: `BackupDetailViewModel.togglePause` now persists the pause flag
+  *before* calling the scheduler — cancelling first raced the cancelled worker's config re-fetch
+  in `BackupRunner`, which could enqueue a charging fallback (+ info message) for a config the
+  user just paused. Ordering pinned by a new `coVerifyOrder` test in `BackupDetailViewModelTest`
+  (`buildVm` gained an optional `configRepo` parameter).
+- **Findings 3 + 4**: fixes were applied (NonCancellable prune in `BackupRunner`'s `finally`;
+  no-eviction KDoc note on `PerConfigRunLock`) and then reverted at the user's request — both
+  findings are marked `ignored` in `review/develop.md` and will not be re-raised.
+- Residual note kept in `review/develop.md`: legacy configs persisted with `USE_GLOBAL_DEFAULT`
+  (pre-`84b22c5`) still *follow* the global default via `BackupScheduler`'s resolution — a
+  one-time migration would allow deleting that machinery.
+
+### Verification
+- `./gradlew assembleDebug compileDebugUnitTestKotlin detekt` green in the sandbox; the new
+  ViewModel test is MockK-based, so the suite needs `! ./gradlew test` outside it.
+
+## 2026-07-08 — Second round of branch review fixes (`review/develop.md`, DEV-1…DEV-9)
+
+### What was requested
+Fix all findings from the `develop`-vs-`master` review in `review/develop.md`.
+
+### What was done
+- **DEV-1 (pause hole)**: `BackupWorker.doWork` skips paused configs with `Result.success()`;
+  `ChargingFallbackTrigger.maybeSchedule` skips paused configs, and `BackupRunner`'s
+  cancellation path re-fetches the config so a mid-run pause is visible to the trigger.
+- **DEV-2 (unbounded retries)**: new `WorkerErrorHandler.retryOrGiveUp(runAttemptCount)` caps
+  both the `SkippedConcurrentRun` and `AuthLost` retry loops at `MAX_RETRY_COUNT`.
+- **DEV-3 (DI)**: `BackupWorker` injects `IBackupScheduler` instead of constructing
+  `BackupScheduler(applicationContext)` for continuations.
+- **DEV-4 (untested lock)**: per-config tryLock/skip/unlock-in-finally extracted into
+  `PerConfigRunLock`; new `PerConfigRunLockTest` (pure coroutines, sandbox-runnable) pins
+  concurrent-skip, per-key independence, and release on completion/exception/cancellation.
+- **DEV-6 (sentinel runId)**: `runId`/`summary` moved into a new `RunResult.Completed`
+  intermediate sealed class; `SkippedConcurrentRun` became a member-less `data object` and
+  `BackupWorker` gates notification logic on `result is RunResult.Completed`.
+- **DEV-5/8/9 (docs & wording)**: `scheduleOneTime` KDoc covers both continuation origins;
+  charging-override dialog reworded + normal-schedule reassurance added; work-name-prefix
+  aliasing + rename/migration cost documented on the constants.
+- **DEV-7 (stale prompt state)**: `pendingNetworkPolicy` is nullable, reset on confirm/dismiss;
+  a stray confirm logs an error and schedules nothing (two new ViewModel tests).
+- Review doc statuses updated to `fixed` with per-finding notes.
+
+### Verification
+- `./gradlew assembleDebug detekt` green; `PerConfigRunLockTest` + `WorkerErrorHandlerTest`
+  (10 tests) run green in the sandbox. MockK-based suites need `! ./gradlew test` outside it.
+
 ## 2026-07-08 — Branch review fixes: scheduler cancel scope, continuation policy, run serialization
 
 ### What was requested

@@ -68,7 +68,12 @@ class BackupScheduler(private val context: Context) : IBackupScheduler {
         }
     }
 
-    /** Enqueues a one-time "back up now" run; replaces any already-queued one-time run. */
+    /**
+     * Enqueues a one-time "back up now" run; replaces any already-queued one-time run.
+     * Uses a dedicated unique-work name ([BackupWorker.oneTimeWorkName]) so the
+     * [ExistingWorkPolicy.REPLACE] here can never cancel the config's periodic schedule
+     * (which lives under [BackupWorker.workName] in the same WorkManager unique-name namespace).
+     */
     override fun scheduleOneTime(configId: String, networkPolicy: NetworkPolicy, requiresCharging: Boolean) {
         try {
             val request = OneTimeWorkRequestBuilder<BackupWorker>()
@@ -76,7 +81,7 @@ class BackupScheduler(private val context: Context) : IBackupScheduler {
                 .setInputData(workDataOf(BackupWorker.KEY_CONFIG_ID to configId))
                 .build()
             workManager.enqueueUniqueWork(
-                BackupWorker.workName(configId),
+                BackupWorker.oneTimeWorkName(configId),
                 ExistingWorkPolicy.REPLACE,
                 request,
             )
@@ -119,6 +124,7 @@ class BackupScheduler(private val context: Context) : IBackupScheduler {
     override fun cancel(configId: String) {
         try {
             workManager.cancelUniqueWork(BackupWorker.workName(configId))
+            workManager.cancelUniqueWork(BackupWorker.oneTimeWorkName(configId))
             workManager.cancelUniqueWork(BackupWorker.chargingFallbackWorkName(configId))
             log.info("Cancelled all backup work for config $configId")
         } catch (e: CancellationException) {
@@ -141,10 +147,11 @@ class BackupScheduler(private val context: Context) : IBackupScheduler {
     }
 
     override fun observeIsRunning(configId: String): Flow<Boolean> {
-        val primary = workManager.getWorkInfosForUniqueWorkFlow(BackupWorker.workName(configId))
+        val periodic = workManager.getWorkInfosForUniqueWorkFlow(BackupWorker.workName(configId))
+        val oneTime = workManager.getWorkInfosForUniqueWorkFlow(BackupWorker.oneTimeWorkName(configId))
         val fallback = workManager.getWorkInfosForUniqueWorkFlow(BackupWorker.chargingFallbackWorkName(configId))
-        return combine(primary, fallback) { primaryInfos, fallbackInfos ->
-            (primaryInfos + fallbackInfos).any { it.state == WorkInfo.State.RUNNING }
+        return combine(periodic, oneTime, fallback) { periodicInfos, oneTimeInfos, fallbackInfos ->
+            (periodicInfos + oneTimeInfos + fallbackInfos).any { it.state == WorkInfo.State.RUNNING }
         }.distinctUntilChanged()
     }
 

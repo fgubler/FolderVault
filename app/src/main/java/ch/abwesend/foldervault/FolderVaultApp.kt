@@ -2,6 +2,7 @@ package ch.abwesend.foldervault
 
 import android.app.Application
 import ch.abwesend.foldervault.di.appModule
+import ch.abwesend.foldervault.domain.backup.IBackupScheduler
 import ch.abwesend.foldervault.domain.logging.ITelemetryToggle
 import ch.abwesend.foldervault.domain.logging.LoggerProvider
 import ch.abwesend.foldervault.domain.logging.logger
@@ -11,6 +12,7 @@ import ch.abwesend.foldervault.infrastructure.backup.BackupNotificationManager
 import ch.abwesend.foldervault.infrastructure.logging.CrashlyticsSink
 import ch.abwesend.foldervault.infrastructure.logging.LocalLogSink
 import ch.abwesend.foldervault.infrastructure.logging.PrivateLogger
+import ch.abwesend.foldervault.infrastructure.room.dao.BackupConfigDao
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupRunDao
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,6 +36,45 @@ class FolderVaultApp : Application() {
         get<BackupNotificationManager>().createNotificationChannels()
         applyInitialTelemetrySettings()
         sweepStaleRunningBackupRuns()
+        reRegisterPeriodicBackups()
+    }
+
+    /**
+     * Re-registers periodic WorkManager jobs for every non-paused backup config on app start.
+     * Safety net: the schedule is only ever (re-)registered from the config save / resume paths,
+     * so any event that clears a config's periodic work without going through those paths — a
+     * REPLACE enqueue that landed on the shared unique name in older builds, WorkManager dropping
+     * work after a force-stop, etc. — would otherwise leave the backup silently unscheduled until
+     * the user next edits it. [IBackupScheduler.schedulePeriodicIfNeeded] uses
+     * [androidx.work.ExistingPeriodicWorkPolicy.UPDATE], so this is idempotent for configs that
+     * are already scheduled and a no-op (cancel) for `MANUAL_ONLY` ones.
+     *
+     * Must not crash on a broken database — like [sweepStaleRunningBackupRuns], this is an early
+     * background access and a failure here must not pre-empt the database-error screen.
+     */
+    private fun reRegisterPeriodicBackups() {
+        val configDao = get<BackupConfigDao>()
+        val scheduler = get<IBackupScheduler>()
+        val settingsRepo = get<IAppSettingsRepository>()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val globalDefault = settingsRepo.settings.first().defaultSchedule
+                configDao.getAll().first()
+                    .filterNot { it.isPaused }
+                    .forEach { config ->
+                        scheduler.schedulePeriodicIfNeeded(
+                            configId = config.id,
+                            schedule = config.schedule,
+                            networkPolicy = config.networkPolicy,
+                            requiresCharging = config.requiresCharging,
+                            globalDefault = globalDefault,
+                        )
+                    }
+            } catch (e: Exception) {
+                e.rethrowCancellation()
+                logger.warning("Could not re-register periodic backups on startup — database unavailable?", e)
+            }
+        }
     }
 
     /**

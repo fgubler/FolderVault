@@ -7,6 +7,50 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-08 — Review fix Task 1: separate WorkManager unique-work names for one-time runs
+
+### What was requested
+Fix code-review finding 5 (`review.md`): `BackupScheduler.scheduleOneTime` enqueued one-time work
+under the SAME unique name as the periodic schedule (`BackupWorker.workName`) with
+`ExistingWorkPolicy.REPLACE`. WorkManager shares one unique-name namespace across periodic and
+one-time work, so every manual "back up now" and every time-budget continuation could permanently
+cancel the config's periodic schedule — and nothing re-registered periodic work at app startup.
+The user pre-decided the outcome ("skip the web-search: use unique names for one-time runs"), so
+the verification step was skipped and the rename applied directly.
+
+### What was done
+- **Dedicated one-time name.** `BackupWorker.oneTimeWorkName(configId)` (prefix
+  `foldervault_backup_one_time_`) alongside the existing periodic `workName` and
+  `chargingFallbackWorkName`. `scheduleOneTime` now enqueues under this name, so its REPLACE can
+  never touch the periodic schedule. The time-budget continuation in `BackupWorker.doWork()`
+  already routes through `scheduleOneTime`, so it inherits the fix.
+- **Concurrency guard moved into `BackupRunner`.** With one-time and periodic now under distinct
+  names, WorkManager no longer serializes them. Added a process-wide per-configId `Mutex`
+  (`perConfigLocks`) in the `BackupRunner` singleton; `runBackup` acquires it with `withLock` and
+  delegates to a new private `runBackupExclusive`. A second run for the same config waits for the
+  first (matching the serial-upload design); `withLock` is inline, so the lock releases on normal
+  completion, cancellation, and error alike. Chosen over a WorkInfo state check because it needs
+  no self-exclusion logic and can't race a still-starting worker.
+- **`cancel` / `observeIsRunning` cover all three names** (periodic + one-time + charging fallback).
+- **Startup safety net.** `FolderVaultApp.reRegisterPeriodicBackups()` re-registers periodic work
+  for every non-paused config on app start via `schedulePeriodicIfNeeded` (which uses
+  `ExistingPeriodicWorkPolicy.UPDATE` → idempotent). Guards against a broken DB like the existing
+  `sweepStaleRunningBackupRuns`.
+- **Tests.** New `BackupWorkNameTest` (pure, sandbox-runnable) asserts the three unique-work names
+  are distinct, prefixed, and per-config. The scheduler's WorkManager wiring itself is only
+  exercisable under Robolectric.
+- Detekt: removed the now-stale `LongMethod` baseline entry for `runBackup` and moved the
+  suppression inline onto `runBackupExclusive`.
+
+### Verified
+`./gradlew assembleDebug`, `./gradlew test`, `./gradlew detekt` all green.
+
+### Decisions carried forward
+- Manual/periodic/fallback runs each have their own WorkManager unique name; the in-process
+  per-config mutex is now the sole guarantee that two runs of one config never overlap.
+- Tasks 2–4 from `review.md` (fallback constraint on continuation, charging override prompt,
+  fallback message-log row) are not yet done — stopped here for review per CLAUDE.md.
+
 ## 2026-07-07 — Opt-in completion notification after each finished backup run
 
 ### What was requested

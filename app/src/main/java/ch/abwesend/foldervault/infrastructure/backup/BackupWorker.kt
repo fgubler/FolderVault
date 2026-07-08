@@ -26,6 +26,7 @@ class BackupWorker(
     companion object {
         const val KEY_CONFIG_ID = "configId"
         const val WORK_NAME_PREFIX = "foldervault_backup_"
+        const val ONE_TIME_WORK_NAME_PREFIX = "foldervault_backup_one_time_"
         const val CHARGING_FALLBACK_WORK_NAME_PREFIX = "foldervault_backup_charging_fallback_"
         private const val RUN_BUDGET_MINUTES = 8L
         private const val DEADLINE_BUFFER_SECONDS = 30L
@@ -34,7 +35,18 @@ class BackupWorker(
         private const val RUN_BUDGET_MS = RUN_BUDGET_MINUTES * MS_PER_MINUTE // 8 minutes (leave 2 min buffer)
         private const val DEADLINE_BUFFER_MS = DEADLINE_BUFFER_SECONDS * MS_PER_SECOND // stop 30s before deadline
 
+        /** Unique-work name for the config's *periodic* schedule. */
         fun workName(configId: String) = "$WORK_NAME_PREFIX$configId"
+
+        /**
+         * Unique-work name for one-time runs ("back up now" + time-budget continuations). Kept
+         * separate from [workName] so a one-time [ExistingWorkPolicy.REPLACE] enqueue can never
+         * cancel the config's periodic schedule (WorkManager shares one unique-name namespace
+         * across periodic and one-time work).
+         */
+        fun oneTimeWorkName(configId: String) = "$ONE_TIME_WORK_NAME_PREFIX$configId"
+
+        /** Unique-work name for the charging-only fallback run. */
         fun chargingFallbackWorkName(configId: String) = "$CHARGING_FALLBACK_WORK_NAME_PREFIX$configId"
     }
 

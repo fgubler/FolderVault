@@ -3,6 +3,5 @@
   <ManuallySuppressedIssues/>
   <CurrentIssues>
     <ID>InvalidPackageDeclaration:ExampleUnitTest.kt$package ch.abwesend.foldervault</ID>
-    <ID>LongMethod:BackupRunner.kt$BackupRunner$@Suppress("CyclomaticComplexMethod", "ReturnCount") suspend fun runBackup(configId: String, deadline: Instant? = null): RunResult</ID>
   </CurrentIssues>
 </SmellBaseline>

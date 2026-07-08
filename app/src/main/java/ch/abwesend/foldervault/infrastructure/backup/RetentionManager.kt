@@ -51,9 +51,18 @@ class RetentionManager(
     }
 
     /**
-     * Retries the cloud-delete for any row that committed a CHANGED_OVERWRITE upload but
-     * failed to delete the predecessor object. Idempotent: Drive returning 404 for an
-     * already-gone file is treated as a success and the marker is cleared.
+     * Retries the cloud-delete for any row carrying a [pendingDeletionCloudFileId] marker.
+     * Two producers share this mechanism, distinguished by whether the marked object is the
+     * row's own [cloudFileId]:
+     * - **Overwrite predecessor** (marker != own `cloudFileId`): a CHANGED_OVERWRITE upload that
+     *   failed to delete its predecessor object. The row is still the current version, so only
+     *   the marker is cleared once the object is gone.
+     * - **Retention** (marker == own `cloudFileId`): [deleteCloudAndIndex] could not delete the
+     *   row's own object, so it kept the row instead of orphaning the file. Once the object is
+     *   gone the whole row is dropped.
+     *
+     * Idempotent: Drive returning 404 for an already-gone file is treated as a success (see
+     * [isGone]).
      */
     suspend fun reapPendingDeletions(configId: String) {
         val pending = uploadedFileIndexDao.getPendingDeletions(configId)
@@ -63,7 +72,11 @@ class RetentionManager(
             val cloudFileId = entry.pendingDeletionCloudFileId ?: continue
             val deleteResult = cloudProvider.deleteFile(cloudFileId)
             if (isGone(deleteResult)) {
-                uploadedFileIndexDao.clearPendingDeletion(entry.id)
+                if (cloudFileId == entry.cloudFileId) {
+                    uploadedFileIndexDao.deleteById(entry.id)
+                } else {
+                    uploadedFileIndexDao.clearPendingDeletion(entry.id)
+                }
             } else {
                 log.warning(
                     "Reap: failed to delete $cloudFileId (row ${entry.id}) — will retry next run: " +
@@ -75,13 +88,18 @@ class RetentionManager(
 
     private suspend fun deleteCloudAndIndex(cloudFileId: String, indexId: Long) {
         val deleteResult = cloudProvider.deleteFile(cloudFileId)
-        if (!isGone(deleteResult)) {
+        if (isGone(deleteResult)) {
+            uploadedFileIndexDao.deleteById(indexId)
+        } else {
+            // Do NOT drop the row: without it, nothing records that the cloud object exists and it
+            // is orphaned in Drive forever. Instead mark the row's own object pending so the
+            // end-of-run reaper retries the delete and only then removes the row.
             log.warning(
                 "Retention: failed to delete cloud file $cloudFileId" +
-                    " — removing index entry anyway: ${(deleteResult as ErrorResult).error}"
+                    " — keeping index entry and marking for reap: ${(deleteResult as ErrorResult).error}"
             )
+            uploadedFileIndexDao.markPendingDeletion(indexId, cloudFileId)
         }
-        uploadedFileIndexDao.deleteById(indexId)
     }
 
     /**

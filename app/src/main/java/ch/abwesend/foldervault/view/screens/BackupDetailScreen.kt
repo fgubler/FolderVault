@@ -105,6 +105,7 @@ fun BackupDetailScreen(
     val isRunning by viewModel.isRunning.collectAsState()
     val unexpectedError by viewModel.unexpectedError.collectAsState()
     val showMeteredOverridePrompt by viewModel.showMeteredOverridePrompt.collectAsState()
+    val showChargingOverridePrompt by viewModel.showChargingOverridePrompt.collectAsState()
     val currentOnDelete by rememberUpdatedState(onDelete)
 
     UnexpectedErrorDialog(error = unexpectedError, onDismiss = viewModel::dismissUnexpectedError)
@@ -122,6 +123,7 @@ fun BackupDetailScreen(
         showDeleteDialog = showDeleteDialog,
         showPasswordDialog = showPasswordDialog,
         showMeteredOverridePrompt = showMeteredOverridePrompt,
+        showChargingOverridePrompt = showChargingOverridePrompt,
         passwordCheckResult = passwordCheckResult,
         onDeleteConfirm = {
             showDeleteDialog = false
@@ -135,6 +137,8 @@ fun BackupDetailScreen(
         },
         onMeteredOverrideConfirm = viewModel::confirmMeteredOverride,
         onMeteredOverrideDismiss = viewModel::dismissMeteredOverride,
+        onChargingOverrideConfirm = viewModel::confirmChargingOverride,
+        onChargingOverrideDismiss = viewModel::dismissChargingOverride,
     )
 
     Scaffold(
@@ -498,6 +502,7 @@ private fun BackupDetailDialogs(
     showDeleteDialog: Boolean,
     showPasswordDialog: Boolean,
     showMeteredOverridePrompt: Boolean,
+    showChargingOverridePrompt: Boolean,
     passwordCheckResult: Boolean?,
     onDeleteConfirm: () -> Unit,
     onDeleteDismiss: () -> Unit,
@@ -505,6 +510,8 @@ private fun BackupDetailDialogs(
     onPasswordDismiss: () -> Unit,
     onMeteredOverrideConfirm: () -> Unit,
     onMeteredOverrideDismiss: () -> Unit,
+    onChargingOverrideConfirm: () -> Unit,
+    onChargingOverrideDismiss: () -> Unit,
 ) {
     if (showDeleteDialog) {
         DeleteConfirmDialog(onConfirm = onDeleteConfirm, onDismiss = onDeleteDismiss)
@@ -522,6 +529,12 @@ private fun BackupDetailDialogs(
             onDismiss = onMeteredOverrideDismiss,
         )
     }
+    if (showChargingOverridePrompt) {
+        ChargingOverrideDialog(
+            onConfirm = onChargingOverrideConfirm,
+            onDismiss = onChargingOverrideDismiss,
+        )
+    }
 }
 
 @Composable
@@ -530,6 +543,28 @@ private fun MeteredOverrideDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) 
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.dialog_metered_override_title)) },
         text = { Text(stringResource(R.string.dialog_metered_override_body)) },
+        confirmButton = {
+            Button(onClick = onConfirm) {
+                Text(stringResource(R.string.button_back_up_anyway))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.button_cancel)) }
+        },
+    )
+}
+
+/**
+ * Warns that a charging-only backup was triggered while the device is unplugged. "Back up anyway"
+ * runs this once without the charging requirement; cancelling starts nothing (the normal schedule
+ * still runs the backup once the device is charging).
+ */
+@Composable
+private fun ChargingOverrideDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.dialog_charging_override_title)) },
+        text = { Text(stringResource(R.string.dialog_charging_override_body)) },
         confirmButton = {
             Button(onClick = onConfirm) {
                 Text(stringResource(R.string.button_back_up_anyway))
@@ -666,5 +701,13 @@ private fun BackupDetailPreview() {
             onDismissAll = {},
             onMarkRead = {},
         )
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun ChargingOverrideDialogPreview() {
+    FolderVaultTheme {
+        ChargingOverrideDialog(onConfirm = {}, onDismiss = {})
     }
 }

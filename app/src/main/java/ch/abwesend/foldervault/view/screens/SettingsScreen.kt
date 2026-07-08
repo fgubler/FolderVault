@@ -57,6 +57,7 @@ import ch.abwesend.foldervault.domain.system.BackgroundRestrictionStatus
 import ch.abwesend.foldervault.ui.theme.FolderVaultTheme
 import ch.abwesend.foldervault.view.components.EnumDropdown
 import ch.abwesend.foldervault.view.components.InfoIconButton
+import ch.abwesend.foldervault.view.components.LogExportResultDialog
 import ch.abwesend.foldervault.view.components.UnexpectedErrorDialog
 import ch.abwesend.foldervault.view.viewmodel.SettingsViewModel
 import org.koin.androidx.compose.koinViewModel
@@ -84,7 +85,7 @@ internal fun SettingsScreen(
     }
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("text/plain"),
-    ) { uri -> if (uri != null) viewModel.exportTodayLogFile(uri) }
+    ) { uri -> if (uri != null) viewModel.exportTodayLogFile(uri.toString()) }
 
     LifecycleResumeEffect(Unit) {
         viewModel.refreshBackgroundRestrictions()
@@ -92,12 +93,7 @@ internal fun SettingsScreen(
     }
 
     UnexpectedErrorDialog(error = unexpectedError, onDismiss = viewModel::dismissUnexpectedError)
-    exportResult?.let { message ->
-        UnexpectedErrorDialog(
-            error = message,
-            onDismiss = viewModel::dismissExportResult,
-        )
-    }
+    LogExportResultDialog(success = exportResult, onDismiss = viewModel::dismissExportResult)
 
     Scaffold(
         modifier = modifier,

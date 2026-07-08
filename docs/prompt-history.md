@@ -7,6 +7,77 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-08 — Charging-fallback review fixes: manual-run charging warning + message-log visibility
+
+### What was requested
+Fix findings 3 and 4 from the charging-only backup code review (`review.md`): (3) make the
+charging fallback visible in the message log, and (4) warn the user when they tap "Back up now"
+on a charging-only config while the device is not plugged in (mirroring the existing metered /
+Wi-Fi override prompt).
+
+### What was done (Task 4 — message-log visibility)
+- New `MessageType.CHARGING_FALLBACK_SCHEDULED(notifies = false, R.string.msg_charging_fallback_scheduled)`.
+- `ChargingFallbackTrigger.maybeSchedule` now also takes `backupMessageDao` + `runId` and writes
+  one INFO `BackupMessage` via `coalesceInsert` at the moment the fallback is enqueued — still
+  inside `BackupRunner`'s `NonCancellable` cancellation block. `messageText = null` so the row
+  resolves its text from `type.labelResId` at display time (keeps the trigger free of a `Context`).
+- `ChargingFallbackTriggerTest`: added the message DAO + runId to every call; asserts the message
+  is inserted exactly once when the streak fires and never otherwise.
+
+### What was done (Task 3 — manual-run charging warning)
+- New `IChargingStateChecker` (domain/system) + `AndroidChargingStateChecker`
+  (`BatteryManager.isCharging`), wired in `AppModule`. UI-hint only — the WorkManager charging
+  constraint remains the real gate.
+- `BackupDetailViewModel`: `showChargingOverridePrompt` state; `confirmChargingOverride` (run this
+  once with `requiresCharging = false`) and `dismissChargingOverride` (cancel — schedules nothing).
+  The metered and charging prompts resolve **sequentially** — the charging check runs only after
+  the Wi-Fi prompt is settled, so the two dialogs never stack; the chosen network policy carries
+  through via `pendingNetworkPolicy`.
+- `BackupDetailScreen`: `ChargingOverrideDialog` (Back up anyway / Cancel) mirroring
+  `MeteredOverrideDialog`, plus a `@Preview` for the new dialog.
+- New strings: `dialog_charging_override_title/body` (reuses the shared `button_back_up_anyway` /
+  `button_cancel`).
+- `BackupDetailViewModelTest`: 5 new cases (prompt shown when unplugged; immediate schedule when
+  charging; confirm; dismiss; and the metered→charging sequential combination).
+
+### Decisions
+- The charging dialog mirrors the metered one exactly: confirm→"Back up anyway" (run once without
+  the charging constraint), dismiss / back / scrim→"Cancel" (schedules nothing — the normal
+  periodic schedule still runs the backup once the device is charging). No "wait for charging"
+  option, per review feedback.
+- The fallback log row uses `messageText = null` + `MessageItem`'s existing `?: type.labelResId`
+  fallback rather than resolving the string in the trigger — no `Context` needed there.
+
+### Verified
+- `./gradlew assembleDebug` ✅, `./gradlew detekt` ✅, `./gradlew test` ✅ (incl. Konsist).
+  `BackupDetailViewModelTest` 13/13, `ChargingFallbackTriggerTest` 6/6.
+- No `screenshotTest` source set exists (CPST disabled), so the screenshot sight-loop could not be
+  run; the new dialog has a `@Preview` for when CPST is enabled.
+
+## 2026-07-08 — Log-export result dialog no longer titled "Unexpected error"
+
+### What was requested
+On `DatabaseErrorScreen`, the dialog confirming a *successful* log-file export was shown with
+the title "Unexpected error" (it reused `UnexpectedErrorDialog`). A success needs a fitting
+title like "Export successful". The same misuse existed on `SettingsScreen`.
+
+### What was done
+- New `LogExportResultDialog(success: Boolean?, onDismiss)` component: title
+  `dialog_export_log_success_title` ("Export successful") or `dialog_export_log_failed_title`
+  ("Export failed"), body reuses the existing `export_log_success` / `export_log_failed` strings.
+- `DatabaseGuardViewModel` and `SettingsViewModel` now expose the export outcome as
+  `exportResult: StateFlow<Boolean?>` (+ `dismissExportResult()`) instead of a pre-baked
+  `UiText`; the dialog derives title and body from the boolean.
+- `exportTodayLogFile` now takes the destination URI as `String` (the screens call
+  `uri.toString()`): the ViewModel only forwards it to `ILogExporter`, and dropping
+  `android.net.Uri` keeps the ViewModel testable in plain-JVM Kotest without Robolectric.
+- Tests (hand-written fakes): export success/failure exposure and dismissal in
+  `DatabaseGuardViewModelTest`.
+
+### Verified
+`assembleDebug`, `detekt`, and the filtered `DatabaseGuardViewModelTest` run green in the
+sandbox; full `./gradlew test` (MockK/Robolectric) left to the user.
+
 ## 2026-07-08 — Review fix Task 2: charging fallback keeps its constraint across continuations
 
 ### What was requested

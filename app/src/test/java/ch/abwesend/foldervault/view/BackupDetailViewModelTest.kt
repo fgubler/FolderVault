@@ -10,6 +10,7 @@ import ch.abwesend.foldervault.domain.model.ChangedFilePolicy
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.model.RetentionPolicy
 import ch.abwesend.foldervault.domain.network.INetworkConnectivityChecker
+import ch.abwesend.foldervault.domain.system.IChargingStateChecker
 import ch.abwesend.foldervault.view.viewmodel.BackupDetailViewModel
 import io.kotest.core.spec.IsolationMode
 import io.kotest.core.spec.style.StringSpec
@@ -41,6 +42,7 @@ class BackupDetailViewModelTest : StringSpec({
         id: String,
         isPaused: Boolean,
         networkPolicy: NetworkPolicy = NetworkPolicy.WIFI_ONLY,
+        requiresCharging: Boolean = false,
     ) = BackupConfig(
         id = id,
         displayName = "Test",
@@ -56,7 +58,7 @@ class BackupDetailViewModelTest : StringSpec({
         encryptionSaltBase64 = null,
         retentionPolicy = RetentionPolicy.KeepAll,
         networkPolicy = networkPolicy,
-        requiresCharging = false,
+        requiresCharging = requiresCharging,
         createdAt = 0L,
         lastRunAt = null,
         lastRunStatus = BackupRunStatus.IDLE,
@@ -73,14 +75,16 @@ class BackupDetailViewModelTest : StringSpec({
     /**
      * Spins up a [BackupDetailViewModel] with sensible defaults: a config repo returning [config],
      * a message repo that surfaces nothing, a relaxed scheduler whose isRunning state defaults to
-     * [isRunning], and a connectivity checker that reports [onUnmetered]. Encryption + settings
-     * repos are unused in these tests so they are bare [mockk]s.
+     * [isRunning], a connectivity checker that reports [onUnmetered], and a charging checker that
+     * reports [isCharging]. Encryption + settings repos are unused in these tests so they are bare
+     * [mockk]s.
      */
     fun buildVm(
         configId: String,
         config: BackupConfig?,
         isRunning: Boolean = false,
         onUnmetered: Boolean = true,
+        isCharging: Boolean = true,
         scheduler: IBackupScheduler = mockk(relaxed = true) {
             every { observeIsRunning(configId) } returns MutableStateFlow(isRunning)
         },
@@ -95,6 +99,9 @@ class BackupDetailViewModelTest : StringSpec({
         val connectivity = mockk<INetworkConnectivityChecker> {
             every { isOnUnmeteredNetwork() } returns onUnmetered
         }
+        val charging = mockk<IChargingStateChecker> {
+            every { isCharging() } returns isCharging
+        }
         val vm = BackupDetailViewModel(
             configId = configId,
             configRepo = configRepo,
@@ -103,6 +110,7 @@ class BackupDetailViewModelTest : StringSpec({
             encryptionRepo = mockk(),
             settingsRepo = mockk(),
             connectivityChecker = connectivity,
+            chargingChecker = charging,
         )
         return vm to scheduler
     }
@@ -224,6 +232,100 @@ class BackupDetailViewModelTest : StringSpec({
 
         verify(exactly = 0) { scheduler.scheduleOneTime(any(), any(), any()) }
         vm.showMeteredOverridePrompt.value shouldBe false
+        job.cancel()
+    }
+
+    "backUpNow on charging-only config while unplugged shows the charging prompt and does not schedule" {
+        val configId = "cfg-9"
+        val (vm, scheduler) = buildVm(
+            configId,
+            makeConfig(configId, isPaused = false, networkPolicy = NetworkPolicy.ANY, requiresCharging = true),
+            isCharging = false,
+        )
+        val job = vm.config.launchIn(CoroutineScope(testDispatcher))
+
+        vm.backUpNow()
+
+        verify(exactly = 0) { scheduler.scheduleOneTime(any(), any(), any()) }
+        vm.showChargingOverridePrompt.value shouldBe true
+        job.cancel()
+    }
+
+    "backUpNow on charging-only config while charging schedules immediately with charging kept" {
+        val configId = "cfg-10"
+        val (vm, scheduler) = buildVm(
+            configId,
+            makeConfig(configId, isPaused = false, networkPolicy = NetworkPolicy.ANY, requiresCharging = true),
+            isCharging = true,
+        )
+        val job = vm.config.launchIn(CoroutineScope(testDispatcher))
+
+        vm.backUpNow()
+
+        verify(exactly = 1) { scheduler.scheduleOneTime(configId, NetworkPolicy.ANY, true) }
+        vm.showChargingOverridePrompt.value shouldBe false
+        job.cancel()
+    }
+
+    "confirmChargingOverride schedules without the charging requirement and dismisses the prompt" {
+        val configId = "cfg-11"
+        val (vm, scheduler) = buildVm(
+            configId,
+            makeConfig(configId, isPaused = false, networkPolicy = NetworkPolicy.ANY, requiresCharging = true),
+            isCharging = false,
+        )
+        val job = vm.config.launchIn(CoroutineScope(testDispatcher))
+
+        vm.backUpNow()
+        vm.confirmChargingOverride()
+
+        verify(exactly = 1) { scheduler.scheduleOneTime(configId, NetworkPolicy.ANY, false) }
+        vm.showChargingOverridePrompt.value shouldBe false
+        job.cancel()
+    }
+
+    "dismissChargingOverride clears the prompt without scheduling" {
+        val configId = "cfg-13"
+        val (vm, scheduler) = buildVm(
+            configId,
+            makeConfig(configId, isPaused = false, networkPolicy = NetworkPolicy.ANY, requiresCharging = true),
+            isCharging = false,
+        )
+        val job = vm.config.launchIn(CoroutineScope(testDispatcher))
+
+        vm.backUpNow()
+        vm.dismissChargingOverride()
+
+        verify(exactly = 0) { scheduler.scheduleOneTime(any(), any(), any()) }
+        vm.showChargingOverridePrompt.value shouldBe false
+        job.cancel()
+    }
+
+    "metered then charging prompts resolve sequentially without stacking" {
+        val configId = "cfg-14"
+        val (vm, scheduler) = buildVm(
+            configId,
+            makeConfig(configId, isPaused = false, networkPolicy = NetworkPolicy.WIFI_ONLY, requiresCharging = true),
+            onUnmetered = false,
+            isCharging = false,
+        )
+        val job = vm.config.launchIn(CoroutineScope(testDispatcher))
+
+        vm.backUpNow()
+        // First only the Wi-Fi prompt shows; the charging prompt stays hidden.
+        vm.showMeteredOverridePrompt.value shouldBe true
+        vm.showChargingOverridePrompt.value shouldBe false
+
+        vm.confirmMeteredOverride()
+        // Wi-Fi prompt closes and hands off to the charging prompt; nothing scheduled yet.
+        vm.showMeteredOverridePrompt.value shouldBe false
+        vm.showChargingOverridePrompt.value shouldBe true
+        verify(exactly = 0) { scheduler.scheduleOneTime(any(), any(), any()) }
+
+        vm.confirmChargingOverride()
+        // The Wi-Fi override carries through: the run drops both constraints for this one time.
+        verify(exactly = 1) { scheduler.scheduleOneTime(configId, NetworkPolicy.ANY, false) }
+        vm.showChargingOverridePrompt.value shouldBe false
         job.cancel()
     }
 })

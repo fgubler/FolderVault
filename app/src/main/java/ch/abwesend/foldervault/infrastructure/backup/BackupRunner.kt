@@ -211,7 +211,7 @@ class BackupRunner(
                     summary = summary,
                     completedNormally = false,
                 )
-                ChargingFallbackTrigger.maybeSchedule(config, backupRunDao, scheduler)
+                ChargingFallbackTrigger.maybeSchedule(config, backupRunDao, scheduler, backupMessageDao, runId)
             }
             throw e
         } catch (e: Exception) {

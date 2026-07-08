@@ -17,6 +17,7 @@ import ch.abwesend.foldervault.domain.network.INetworkConnectivityChecker
 import ch.abwesend.foldervault.domain.restore.IRestoreEngine
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
 import ch.abwesend.foldervault.domain.system.IBackgroundRestrictionChecker
+import ch.abwesend.foldervault.domain.system.IChargingStateChecker
 import ch.abwesend.foldervault.infrastructure.backup.BackupConfigRepository
 import ch.abwesend.foldervault.infrastructure.backup.BackupMessageRepository
 import ch.abwesend.foldervault.infrastructure.backup.BackupNotificationManager
@@ -36,6 +37,7 @@ import ch.abwesend.foldervault.infrastructure.room.FolderVaultDatabase
 import ch.abwesend.foldervault.infrastructure.room.RoomDatabaseFileAccess
 import ch.abwesend.foldervault.infrastructure.settings.AppSettingsRepository
 import ch.abwesend.foldervault.infrastructure.system.AndroidBackgroundRestrictionChecker
+import ch.abwesend.foldervault.infrastructure.system.AndroidChargingStateChecker
 import ch.abwesend.foldervault.view.viewmodel.AddEditBackupViewModel
 import ch.abwesend.foldervault.view.viewmodel.BackupDetailViewModel
 import ch.abwesend.foldervault.view.viewmodel.BackupRunHistoryViewModel
@@ -82,6 +84,7 @@ val appModule = module {
     single { BackupNotificationManager(androidContext(), get(), get(), get()) }
     single<IBackupScheduler> { BackupScheduler(androidContext()) }
     single<INetworkConnectivityChecker> { AndroidNetworkConnectivityChecker(androidContext()) }
+    single<IChargingStateChecker> { AndroidChargingStateChecker(androidContext()) }
     single<IBackgroundRestrictionChecker> { AndroidBackgroundRestrictionChecker(androidContext()) }
 
     // Backup pipeline
@@ -127,6 +130,7 @@ val appModule = module {
             encryptionRepo = get(),
             settingsRepo = get(),
             connectivityChecker = get(),
+            chargingChecker = get(),
         )
     }
     viewModel { params ->

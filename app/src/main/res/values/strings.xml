@@ -234,7 +234,7 @@
     <string name="dialog_metered_override_title">You\'re not on Wi-Fi</string>
     <string name="dialog_metered_override_body">This backup is set to run on Wi-Fi only, but your phone isn\'t currently connected to Wi-Fi. Backing up now will use mobile data.</string>
     <string name="dialog_charging_override_title">Device isn\'t charging</string>
-    <string name="dialog_charging_override_body">This backup is set to run only while charging, but your phone isn\'t plugged in right now. Backing up now will run this one time without charging.</string>
+    <string name="dialog_charging_override_body">This backup is set to run only while charging, but your phone isn\'t plugged in right now. Backing up now will run this once without waiting for the charger. Scheduled backups will still wait until the device is charging.</string>
 
     <!-- Settings screen -->
     <string name="settings_title">Settings</string>

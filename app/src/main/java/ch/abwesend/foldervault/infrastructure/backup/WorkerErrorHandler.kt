@@ -9,6 +9,21 @@ class WorkerErrorHandler {
         const val MAX_RETRY_COUNT = 20
     }
 
+    /**
+     * Returns [Result.retry] while the worker still has attempts left, [Result.failure] once
+     * [runAttemptCount] (see [androidx.work.ListenableWorker.getRunAttemptCount]) reaches
+     * [MAX_RETRY_COUNT]. Retryable conditions (auth lost, concurrent run in flight) are expected
+     * to resolve within a few attempts — a cap keeps a condition that never resolves (e.g. a hung
+     * in-flight run holding the per-config lock) from retrying forever with growing backoff.
+     */
+    fun retryOrGiveUp(runAttemptCount: Int): Result =
+        if (runAttemptCount >= MAX_RETRY_COUNT) {
+            logger.warning("Giving up after $runAttemptCount attempts")
+            Result.failure()
+        } else {
+            Result.retry()
+        }
+
     suspend fun doWorkWithErrorHandling(
         workDescription: String,
         onFatalError: suspend (String) -> Unit = {},

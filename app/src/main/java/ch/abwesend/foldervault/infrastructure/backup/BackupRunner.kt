@@ -35,37 +35,41 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.time.Instant
 import java.util.Base64
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.SecretKey
 
 sealed class RunResult {
-    abstract val runId: String
-    abstract val summary: RunSummary
-    data class Success(override val summary: RunSummary, override val runId: String) : RunResult()
-    data class AuthLost(override val summary: RunSummary, override val runId: String) : RunResult()
+    /**
+     * A run that actually executed and committed a run row — only these results carry a real
+     * [runId] and [summary]. Kept as an intermediate type so callers must prove (via a type
+     * check the compiler enforces) that a run happened before touching either member.
+     */
+    sealed class Completed : RunResult() {
+        abstract val runId: String
+        abstract val summary: RunSummary
+    }
+
+    data class Success(override val summary: RunSummary, override val runId: String) : Completed()
+    data class AuthLost(override val summary: RunSummary, override val runId: String) : Completed()
     data class FatalError(
         val error: Exception,
         override val summary: RunSummary,
         override val runId: String,
-    ) : RunResult()
+    ) : Completed()
 
     /**
      * Another run of the same config was already executing, so this one did nothing — no run row
-     * was created ([runId] is a placeholder). The caller should retry once the in-flight run has
-     * finished (e.g. via [androidx.work.ListenableWorker.Result.retry]) rather than block: waiting
-     * inside a worker would burn its OS execution window while its deadline keeps ticking.
+     * was created, hence no runId or summary exist. The caller should retry once the in-flight
+     * run has finished (e.g. via [androidx.work.ListenableWorker.Result.retry]) rather than
+     * block: waiting inside a worker would burn its OS execution window while its deadline keeps
+     * ticking.
      */
-    data class SkippedConcurrentRun(
-        override val summary: RunSummary = RunSummary(),
-        override val runId: String = "",
-    ) : RunResult()
+    data object SkippedConcurrentRun : RunResult()
 }
 
 class BackupRunner(
@@ -83,37 +87,25 @@ class BackupRunner(
 ) {
     private val log get() = logger
 
-    /**
-     * Per-config locks that serialize runs of the same backup. Since one-time and periodic work
-     * now live under distinct WorkManager unique-work names, WorkManager no longer prevents a
-     * manual "back up now" from executing concurrently with a periodic run of the same config.
-     * Both workers run in this app process against the same [BackupRunner] singleton, so a
-     * process-wide [Mutex] per configId restores the original "never run the same backup twice at
-     * once" guarantee. A second run does not wait for the lock (see [runBackup]) — blocking would
-     * silently consume the second worker's OS execution window while its deadline keeps ticking.
-     */
-    private val perConfigLocks = ConcurrentHashMap<String, Mutex>()
+    /** Serializes runs of the same config — see [PerConfigRunLock] for the full rationale. */
+    private val runLock = PerConfigRunLock()
 
     /**
      * Runs a backup for [configId], serialized per config: only one run per config executes at a
-     * time (see [perConfigLocks]). When another run of the same config is already executing, this
-     * returns [RunResult.SkippedConcurrentRun] immediately instead of waiting — the caller retries
-     * later with a fresh deadline and execution window. The lock is released on normal completion,
-     * cancellation, and error alike (the `finally` unlocks even when the body throws).
+     * time (see [PerConfigRunLock]). When another run of the same config is already executing,
+     * this returns [RunResult.SkippedConcurrentRun] immediately instead of waiting — the caller
+     * retries later with a fresh deadline and execution window.
      */
-    suspend fun runBackup(configId: String, deadline: Instant? = null): RunResult {
-        val lock = perConfigLocks.computeIfAbsent(configId) { Mutex() }
-        return if (lock.tryLock()) {
-            try {
-                runBackupExclusive(configId, deadline)
-            } finally {
-                lock.unlock()
-            }
-        } else {
-            log.info("Backup for config $configId is already running — skipping this concurrent run")
-            RunResult.SkippedConcurrentRun()
+    suspend fun runBackup(configId: String, deadline: Instant? = null): RunResult =
+        runLock.withLockOrElse(
+            key = configId,
+            onBusy = {
+                log.info("Backup for config $configId is already running — skipping this concurrent run")
+                RunResult.SkippedConcurrentRun
+            },
+        ) {
+            runBackupExclusive(configId, deadline)
         }
-    }
 
     @Suppress("CyclomaticComplexMethod", "ReturnCount", "LongMethod")
     private suspend fun runBackupExclusive(configId: String, deadline: Instant?): RunResult {
@@ -231,7 +223,18 @@ class BackupRunner(
                     summary = summary,
                     completedNormally = false,
                 )
-                ChargingFallbackTrigger.maybeSchedule(config, backupRunDao, scheduler, backupMessageDao, runId)
+                // Re-fetch the config: pausing mid-run is a common cause of this very
+                // cancellation, and the entity loaded at run start would not see the new
+                // pause flag (the trigger skips paused configs).
+                backupConfigDao.getByIdOnce(config.id)?.let { currentConfig ->
+                    ChargingFallbackTrigger.maybeSchedule(
+                        config = currentConfig,
+                        backupRunDao = backupRunDao,
+                        scheduler = scheduler,
+                        backupMessageDao = backupMessageDao,
+                        runId = runId,
+                    )
+                }
             }
             throw e
         } catch (e: Exception) {

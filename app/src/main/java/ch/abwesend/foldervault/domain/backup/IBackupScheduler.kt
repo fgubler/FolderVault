@@ -13,10 +13,13 @@ interface IBackupScheduler {
      *
      * A plain invocation replaces any already-queued one-time run
      * ([androidx.work.ExistingWorkPolicy.REPLACE]). A time-budget continuation
-     * ([asContinuation]) instead uses [androidx.work.ExistingWorkPolicy.APPEND_OR_REPLACE]:
-     * it is enqueued from *within* the still-running one-time worker that holds this unique
-     * name, and REPLACE would cancel that worker mid-completion. APPEND_OR_REPLACE queues the
-     * continuation to run after the current run finishes.
+     * ([asContinuation]) instead uses [androidx.work.ExistingWorkPolicy.APPEND_OR_REPLACE],
+     * because the enqueueing worker may be either kind: a continuation enqueued from a
+     * still-running *one-time* worker holds this very unique name, so REPLACE would cancel
+     * that worker mid-completion; one enqueued from a *periodic* worker (which holds the
+     * separate periodic name) simply appends to whatever pending one-time chain exists, or
+     * starts a fresh one. APPEND_OR_REPLACE queues the continuation to run after the current
+     * run finishes in both cases.
      */
     fun scheduleOneTime(
         configId: String,

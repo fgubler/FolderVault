@@ -3,6 +3,7 @@ package ch.abwesend.foldervault.infrastructure.backup
 import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import ch.abwesend.foldervault.domain.backup.IBackupScheduler
 import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.model.MessageSeverity
 import ch.abwesend.foldervault.domain.model.MessageType
@@ -21,6 +22,7 @@ class BackupWorker(
     private val backupConfigDao: BackupConfigDao by injectAnywhere()
     private val backupMessageDao: BackupMessageDao by injectAnywhere()
     private val notificationManager: BackupNotificationManager by injectAnywhere()
+    private val scheduler: IBackupScheduler by injectAnywhere()
     private val errorHandler = WorkerErrorHandler()
 
     companion object {
@@ -33,6 +35,14 @@ class BackupWorker(
          * `requiresCharging = false`. See [BackupContinuationScheduler].
          */
         const val KEY_IS_CHARGING_FALLBACK = "isChargingFallback"
+
+        /**
+         * NOTE: [WORK_NAME_PREFIX] is a strict prefix of the other two, so a config id that
+         * happens to start with `one_time_` / `charging_fallback_` would alias another config's
+         * one-time / fallback name. Purely theoretical with UUID config ids — and NOT worth
+         * fixing by renaming: existing installs' scheduled work lives under these names, and a
+         * rename would orphan it (never cancelled, never replaced).
+         */
         const val WORK_NAME_PREFIX = "foldervault_backup_"
         const val ONE_TIME_WORK_NAME_PREFIX = "foldervault_backup_one_time_"
         const val CHARGING_FALLBACK_WORK_NAME_PREFIX = "foldervault_backup_charging_fallback_"
@@ -72,11 +82,20 @@ class BackupWorker(
             val config = backupConfigDao.getByIdOnce(id)
                 ?: return@doWorkWithErrorHandling Result.success() // config deleted, nothing to do
 
+            // A paused config must never run, no matter which path enqueued the work (periodic
+            // schedule, continuation, or a charging fallback that slipped in while pausing
+            // cancelled an in-flight run). Success, not retry — the work is intentionally inert
+            // until the user resumes, which re-registers the schedule.
+            if (config.isPaused) {
+                logger.info("Backup config $id is paused; skipping this run")
+                return@doWorkWithErrorHandling Result.success()
+            }
+
             val deadline = Instant.now().plusMillis(RUN_BUDGET_MS - DEADLINE_BUFFER_MS)
             val result = backupRunner.runBackup(id, deadline)
 
             // A skipped run did nothing and has no run row — no notifications to derive from it.
-            if (result !is RunResult.SkippedConcurrentRun) {
+            if (result is RunResult.Completed) {
                 notificationManager.postProblemNotificationIfNeeded(
                     configId = id,
                     configName = config.displayName,
@@ -104,7 +123,7 @@ class BackupWorker(
                         // constraint and dedicated name; all others re-enqueue as one-time work.
                         logger.info("Run hit time budget with progress; re-enqueueing for config $id")
                         BackupContinuationScheduler.scheduleContinuation(
-                            scheduler = BackupScheduler(applicationContext),
+                            scheduler = scheduler,
                             configId = id,
                             networkPolicy = config.networkPolicy,
                             requiresCharging = config.requiresCharging,
@@ -118,7 +137,7 @@ class BackupWorker(
                 }
                 is RunResult.AuthLost -> {
                     logger.warning("Backup run for $id lost auth; retrying with WorkManager backoff")
-                    Result.retry()
+                    errorHandler.retryOrGiveUp(runAttemptCount)
                 }
                 is RunResult.FatalError -> {
                     logger.error("Backup run for $id failed fatally", result.error)
@@ -127,9 +146,10 @@ class BackupWorker(
                 is RunResult.SkippedConcurrentRun -> {
                     // Manual + periodic overlap: another run of this config is executing right
                     // now. Retry with backoff instead of waiting — the in-flight run will have
-                    // finished by then, and this worker gets a fresh deadline.
+                    // finished by then, and this worker gets a fresh deadline. Capped so a hung
+                    // in-flight run cannot keep this worker retrying forever.
                     logger.info("Backup for $id is already running; retrying later")
-                    Result.retry()
+                    errorHandler.retryOrGiveUp(runAttemptCount)
                 }
             }
         }

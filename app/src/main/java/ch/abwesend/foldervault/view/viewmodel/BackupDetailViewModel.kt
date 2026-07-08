@@ -7,6 +7,7 @@ import ch.abwesend.foldervault.domain.backup.IBackupConfigRepository
 import ch.abwesend.foldervault.domain.backup.IBackupMessageRepository
 import ch.abwesend.foldervault.domain.backup.IBackupScheduler
 import ch.abwesend.foldervault.domain.crypto.IEncryptionRepository
+import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.model.MessageSeverity
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.network.INetworkConnectivityChecker
@@ -78,9 +79,12 @@ class BackupDetailViewModel(
     /**
      * The network policy chosen for the run currently awaiting the charging decision. Captured
      * when the charging prompt opens (it is `ANY` if the user just overrode the Wi-Fi prompt,
-     * otherwise the config's own policy) and re-applied once that prompt is resolved.
+     * otherwise the config's own policy), re-applied once that prompt is confirmed, and reset to
+     * `null` when the prompt resolves either way — non-null exactly while the prompt is open, so
+     * a path that confirms without having opened the prompt fails loudly instead of silently
+     * running with a stale policy.
      */
-    private var pendingNetworkPolicy: NetworkPolicy = NetworkPolicy.WIFI_ONLY
+    private var pendingNetworkPolicy: NetworkPolicy? = null
 
     /**
      * Triggered by the "Back up now" button. If the config is Wi-Fi-only and the device is
@@ -139,14 +143,19 @@ class BackupDetailViewModel(
     fun confirmChargingOverride() {
         _showChargingOverridePrompt.value = false
         val current = config.value
-        if (current != null && !current.isPaused && !isRunning.value) {
-            scheduler.scheduleOneTime(configId, pendingNetworkPolicy, requiresCharging = false)
+        val networkPolicy = pendingNetworkPolicy
+        pendingNetworkPolicy = null
+        if (networkPolicy == null) {
+            logger.error("Charging override confirmed but no prompt captured a network policy")
+        } else if (current != null && !current.isPaused && !isRunning.value) {
+            scheduler.scheduleOneTime(configId, networkPolicy, requiresCharging = false)
         }
     }
 
     /** Dismisses the charging warning without starting a backup. */
     fun dismissChargingOverride() {
         _showChargingOverridePrompt.value = false
+        pendingNetworkPolicy = null
     }
 
     fun togglePause() = safeLaunch {

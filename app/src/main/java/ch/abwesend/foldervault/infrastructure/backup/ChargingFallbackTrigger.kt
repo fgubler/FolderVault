@@ -18,7 +18,9 @@ import ch.abwesend.foldervault.infrastructure.room.entity.BackupMessageEntity
  * The fallback fires only when [BackupConfigEntity.requiresCharging] is `false` AND the most
  * recent [CANCELLATION_STREAK_THRESHOLD] runs (including the one that just cancelled) were all
  * cancelled. Configs already pinned to charging need no additional fallback — their periodic
- * schedule already carries that constraint.
+ * schedule already carries that constraint. Paused configs never get a fallback either:
+ * pausing mid-run cancels the in-flight worker, and that very cancellation must not re-enqueue
+ * work for the config the user just paused.
  */
 internal object ChargingFallbackTrigger {
 
@@ -43,7 +45,7 @@ internal object ChargingFallbackTrigger {
         backupMessageDao: BackupMessageDao,
         runId: String,
     ) {
-        if (config.requiresCharging) return
+        if (config.requiresCharging || config.isPaused) return
         val recent = backupRunDao.getRecentStatuses(config.id, CANCELLATION_STREAK_THRESHOLD)
         val streakReached = recent.size >= CANCELLATION_STREAK_THRESHOLD &&
             recent.all { it == BackupRunStatus.CANCELLED }

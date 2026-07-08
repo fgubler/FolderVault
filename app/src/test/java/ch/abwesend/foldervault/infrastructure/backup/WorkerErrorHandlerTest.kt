@@ -50,4 +50,18 @@ class WorkerErrorHandlerTest : StringSpec({
         result shouldBe Result.failure()
         fatalCallbackCalled shouldBe true
     }
+
+    "retryOrGiveUp retries while attempts remain" {
+        val handler = WorkerErrorHandler()
+
+        handler.retryOrGiveUp(runAttemptCount = 0) shouldBe Result.retry()
+        handler.retryOrGiveUp(runAttemptCount = WorkerErrorHandler.MAX_RETRY_COUNT - 1) shouldBe Result.retry()
+    }
+
+    "retryOrGiveUp fails once the retry cap is reached" {
+        val handler = WorkerErrorHandler()
+
+        handler.retryOrGiveUp(runAttemptCount = WorkerErrorHandler.MAX_RETRY_COUNT) shouldBe Result.failure()
+        handler.retryOrGiveUp(runAttemptCount = WorkerErrorHandler.MAX_RETRY_COUNT + 1) shouldBe Result.failure()
+    }
 })

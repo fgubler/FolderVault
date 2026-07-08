@@ -34,7 +34,9 @@ class ChargingFallbackTriggerTest : StringSpec({
         id: String = "cfg-1",
         requiresCharging: Boolean = false,
         networkPolicy: NetworkPolicy = NetworkPolicy.WIFI_ONLY,
+        isPaused: Boolean = false,
     ) = BackupConfigEntity(
+        isPaused = isPaused,
         id = id,
         displayName = "Test",
         sourceTreeUri = "",
@@ -153,6 +155,21 @@ class ChargingFallbackTriggerTest : StringSpec({
 
         runTest { ChargingFallbackTrigger.maybeSchedule(config, dao, scheduler, messageDao, "run-C") }
 
+        coVerify(exactly = 0) { scheduler.scheduleChargingFallback(any(), any(), any()) }
+        coVerify(exactly = 0) { messageDao.coalesceInsert(any()) }
+    }
+
+    "does not schedule when the config is paused" {
+        val config = makeConfig(id = "cfg-P", isPaused = true)
+        val dao = mockk<BackupRunDao>()
+        val scheduler = makeScheduler()
+        val messageDao = mockk<BackupMessageDao>(relaxed = true)
+
+        runTest { ChargingFallbackTrigger.maybeSchedule(config, dao, scheduler, messageDao, "run-P") }
+
+        // Pausing mid-run cancels the in-flight worker; that cancellation lands here and must
+        // not re-enqueue work for the config the user just paused.
+        coVerify(exactly = 0) { dao.getRecentStatuses(any(), any()) }
         coVerify(exactly = 0) { scheduler.scheduleChargingFallback(any(), any(), any()) }
         coVerify(exactly = 0) { messageDao.coalesceInsert(any()) }
     }

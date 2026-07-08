@@ -301,6 +301,40 @@ class BackupDetailViewModelTest : StringSpec({
         job.cancel()
     }
 
+    "confirmChargingOverride without an open prompt schedules nothing" {
+        val configId = "cfg-15"
+        val (vm, scheduler) = buildVm(
+            configId,
+            makeConfig(configId, isPaused = false, networkPolicy = NetworkPolicy.ANY, requiresCharging = true),
+            isCharging = false,
+        )
+        val job = vm.config.launchIn(CoroutineScope(testDispatcher))
+
+        // No backUpNow() first — nothing captured a network policy, so a stray confirm
+        // (e.g. from a future UI path that forgets to open the prompt) must not schedule.
+        vm.confirmChargingOverride()
+
+        verify(exactly = 0) { scheduler.scheduleOneTime(any(), any(), any()) }
+        job.cancel()
+    }
+
+    "dismissChargingOverride clears the pending policy so a later stray confirm schedules nothing" {
+        val configId = "cfg-16"
+        val (vm, scheduler) = buildVm(
+            configId,
+            makeConfig(configId, isPaused = false, networkPolicy = NetworkPolicy.ANY, requiresCharging = true),
+            isCharging = false,
+        )
+        val job = vm.config.launchIn(CoroutineScope(testDispatcher))
+
+        vm.backUpNow()
+        vm.dismissChargingOverride()
+        vm.confirmChargingOverride()
+
+        verify(exactly = 0) { scheduler.scheduleOneTime(any(), any(), any()) }
+        job.cancel()
+    }
+
     "metered then charging prompts resolve sequentially without stacking" {
         val configId = "cfg-14"
         val (vm, scheduler) = buildVm(

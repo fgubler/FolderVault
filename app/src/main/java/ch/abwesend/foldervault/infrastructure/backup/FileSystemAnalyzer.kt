@@ -46,8 +46,9 @@ class FileSystemAnalyzer(
         fileSizeLimitBytes: Long,
         runId: String,
         folderCache: FolderPathCache,
+        summary: RunSummary,
     ): Int {
-        val fileInfoList = collectFileInfos(config)
+        val fileInfoList = collectFileInfos(config, summary)
         // Collect into two lists first to avoid a producer/consumer deadlock: if we sent normal
         // and oversized tasks interleaved and the oversized channel (cap=8) filled up, the producer
         // would block before closing the normal channel, while the consumer was blocked waiting for
@@ -61,11 +62,11 @@ class FileSystemAnalyzer(
         return fileInfoList.size
     }
 
-    private suspend fun collectFileInfos(config: BackupConfigEntity): List<LocalFileInfo> =
+    private suspend fun collectFileInfos(config: BackupConfigEntity, summary: RunSummary): List<LocalFileInfo> =
         withContext(dispatchers.io) {
             val results = mutableListOf<LocalFileInfo>()
             val treeUri = Uri.parse(config.sourceTreeUri)
-            ScopedStorageHelper.walkTree(context, treeUri) { relativePath, file ->
+            val accessible = ScopedStorageHelper.walkTree(context, treeUri) { relativePath, file ->
                 results.add(
                     LocalFileInfo(
                         relativePath = relativePath,
@@ -74,6 +75,10 @@ class FileSystemAnalyzer(
                         mtime = file.lastModified().takeIf { it != 0L },
                     )
                 )
+            }
+            if (!accessible) {
+                log.warning("Source folder for config ${config.id} is inaccessible (deleted or permission revoked)")
+                summary.sourceFolderInaccessible = true
             }
             results
         }

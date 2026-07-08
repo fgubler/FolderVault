@@ -61,9 +61,10 @@ class RestoreEngine(
             ?: return@withContext RestoreResult.Failure("Cannot access output folder")
 
         val files = mutableListOf<SourceFileEntry>()
-        ScopedStorageHelper.walkTree(context, Uri.parse(sourceUri)) { relPath, doc ->
+        val accessible = ScopedStorageHelper.walkTree(context, Uri.parse(sourceUri)) { relPath, doc ->
             files.add(SourceFileEntry(relPath, doc))
         }
+        if (!accessible) return@withContext RestoreResult.Failure("Cannot access source folder")
 
         if (files.isEmpty()) return@withContext RestoreResult.Success(0, 0, 0, 0)
 

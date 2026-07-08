@@ -3,9 +3,9 @@
 # CPST (com.android.compose.screenshot) pins to a specific AGP major.
 # Verify CPST alpha compatibility with AGP 9.x before committing; downgrade to
 # 8.13.x if no compatible alpha exists.
-agp = "9.1.1"
+agp = "9.2.1"
 kotlin = "2.2.10"
-ksp = "2.2.10-2.0.2"                    # MUST track the Kotlin version exactly
+ksp = "2.3.2"                    # MUST track the Kotlin version exactly
 coreKtx = "1.18.0"
 lifecycle = "2.10.0"           # 2.10+ required for lifecycle-viewmodel-navigation3 (per-NavEntry VM scoping)
 activityCompose = "1.13.0"
@@ -18,7 +18,7 @@ navigation3 = "1.0.0"
 kotlinxSerialization = "1.8.0"          # Nav3 typed routes + crypto/JSON payloads
 
 # ── Persistence / background / DI ────────────────────────────────────────────
-room = "2.7.0"
+room = "2.7.2"
 datastore = "1.1.1"
 workManager = "2.10.0"
 koin = "4.0.0"                          # koin-android + koin-androidx-compose + koin-workmanager

@@ -73,6 +73,7 @@ class BackupNotificationManager(
                 if (result.summary.hitTimeBudget) null else BackupRunOutcome.SUCCESS
             is RunResult.AuthLost -> null
             is RunResult.FatalError -> BackupRunOutcome.FAILURE
+            is RunResult.SkippedConcurrentRun -> null // nothing ran, nothing to announce
         }
 
         private val NOTIFYING_TYPES = MessageType.entries.filter { it.notifies }

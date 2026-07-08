@@ -4,19 +4,22 @@ import ch.abwesend.foldervault.domain.backup.IBackupScheduler
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import io.kotest.core.spec.IsolationMode
 import io.kotest.core.spec.style.StringSpec
+import io.mockk.coVerify
 import io.mockk.mockk
 import io.mockk.verify
 
 /**
  * Unit tests for the time-budget continuation decision: a charging-only fallback run must keep
  * its charging constraint (and dedicated unique name) across continuations, while every other
- * run continues as a plain one-time run carrying the config's own charging preference.
+ * run continues as a plain one-time run carrying the config's own charging preference. Both
+ * paths must flag the enqueue as a continuation so the scheduler appends after (rather than
+ * replaces, i.e. cancels) the still-running worker.
  */
 class BackupContinuationSchedulerTest : StringSpec({
 
     isolationMode = IsolationMode.InstancePerTest
 
-    "a charging-fallback continuation re-enqueues as a fallback with REPLACE" {
+    "a charging-fallback continuation re-enqueues as a fallback continuation" {
         val scheduler = mockk<IBackupScheduler>(relaxed = true)
 
         BackupContinuationScheduler.scheduleContinuation(
@@ -27,10 +30,10 @@ class BackupContinuationSchedulerTest : StringSpec({
             isChargingFallback = true,
         )
 
-        verify(exactly = 1) {
-            scheduler.scheduleChargingFallback("cfg-1", NetworkPolicy.WIFI_ONLY, replaceExisting = true)
+        coVerify(exactly = 1) {
+            scheduler.scheduleChargingFallback("cfg-1", NetworkPolicy.WIFI_ONLY, asContinuation = true)
         }
-        verify(exactly = 0) { scheduler.scheduleOneTime(any(), any(), any()) }
+        verify(exactly = 0) { scheduler.scheduleOneTime(any(), any(), any(), any()) }
     }
 
     "a normal continuation re-enqueues as one-time work, keeping the config's charging preference" {
@@ -45,8 +48,8 @@ class BackupContinuationSchedulerTest : StringSpec({
         )
 
         verify(exactly = 1) {
-            scheduler.scheduleOneTime("cfg-2", NetworkPolicy.ANY, requiresCharging = true)
+            scheduler.scheduleOneTime("cfg-2", NetworkPolicy.ANY, requiresCharging = true, asContinuation = true)
         }
-        verify(exactly = 0) { scheduler.scheduleChargingFallback(any(), any(), any()) }
+        coVerify(exactly = 0) { scheduler.scheduleChargingFallback(any(), any(), any()) }
     }
 })

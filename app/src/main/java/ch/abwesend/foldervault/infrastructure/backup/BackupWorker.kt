@@ -75,22 +75,25 @@ class BackupWorker(
             val deadline = Instant.now().plusMillis(RUN_BUDGET_MS - DEADLINE_BUFFER_MS)
             val result = backupRunner.runBackup(id, deadline)
 
-            notificationManager.postProblemNotificationIfNeeded(
-                configId = id,
-                configName = config.displayName,
-                runId = result.runId,
-            )
-
-            // Cancelled runs never reach this point (the CancellationException propagates), and
-            // non-terminal results (retry / continuation) map to null — so only a truly finished
-            // run can produce a completion notification.
-            BackupNotificationManager.completionOutcomeOf(result)?.let { outcome ->
-                notificationManager.postCompletionNotificationIfEnabled(
+            // A skipped run did nothing and has no run row — no notifications to derive from it.
+            if (result !is RunResult.SkippedConcurrentRun) {
+                notificationManager.postProblemNotificationIfNeeded(
                     configId = id,
                     configName = config.displayName,
-                    outcome = outcome,
-                    filesUploaded = result.summary.filesUploaded,
+                    runId = result.runId,
                 )
+
+                // Cancelled runs never reach this point (the CancellationException propagates), and
+                // non-terminal results (retry / continuation) map to null — so only a truly finished
+                // run can produce a completion notification.
+                BackupNotificationManager.completionOutcomeOf(result)?.let { outcome ->
+                    notificationManager.postCompletionNotificationIfEnabled(
+                        configId = id,
+                        configName = config.displayName,
+                        outcome = outcome,
+                        filesUploaded = result.summary.filesUploaded,
+                    )
+                }
             }
 
             when (result) {
@@ -120,6 +123,13 @@ class BackupWorker(
                 is RunResult.FatalError -> {
                     logger.error("Backup run for $id failed fatally", result.error)
                     Result.failure()
+                }
+                is RunResult.SkippedConcurrentRun -> {
+                    // Manual + periodic overlap: another run of this config is executing right
+                    // now. Retry with backoff instead of waiting — the in-flight run will have
+                    // finished by then, and this worker gets a fresh deadline.
+                    logger.info("Backup for $id is already running; retrying later")
+                    Result.retry()
                 }
             }
         }

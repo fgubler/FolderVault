@@ -36,7 +36,6 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -55,6 +54,17 @@ sealed class RunResult {
         val error: Exception,
         override val summary: RunSummary,
         override val runId: String,
+    ) : RunResult()
+
+    /**
+     * Another run of the same config was already executing, so this one did nothing — no run row
+     * was created ([runId] is a placeholder). The caller should retry once the in-flight run has
+     * finished (e.g. via [androidx.work.ListenableWorker.Result.retry]) rather than block: waiting
+     * inside a worker would burn its OS execution window while its deadline keeps ticking.
+     */
+    data class SkippedConcurrentRun(
+        override val summary: RunSummary = RunSummary(),
+        override val runId: String = "",
     ) : RunResult()
 }
 
@@ -79,20 +89,30 @@ class BackupRunner(
      * manual "back up now" from executing concurrently with a periodic run of the same config.
      * Both workers run in this app process against the same [BackupRunner] singleton, so a
      * process-wide [Mutex] per configId restores the original "never run the same backup twice at
-     * once" guarantee. A second run waits for the first to finish rather than racing it — matching
-     * the pipeline's serial-upload design. Collisions are rare (a manual tap during a scheduled
-     * run), so the brief wait is acceptable.
+     * once" guarantee. A second run does not wait for the lock (see [runBackup]) — blocking would
+     * silently consume the second worker's OS execution window while its deadline keeps ticking.
      */
     private val perConfigLocks = ConcurrentHashMap<String, Mutex>()
 
     /**
      * Runs a backup for [configId], serialized per config: only one run per config executes at a
-     * time (see [perConfigLocks]). The lock is released on normal completion, cancellation, and
-     * error alike ([withLock] is inline, so its `finally` unlocks even when the body throws).
+     * time (see [perConfigLocks]). When another run of the same config is already executing, this
+     * returns [RunResult.SkippedConcurrentRun] immediately instead of waiting — the caller retries
+     * later with a fresh deadline and execution window. The lock is released on normal completion,
+     * cancellation, and error alike (the `finally` unlocks even when the body throws).
      */
     suspend fun runBackup(configId: String, deadline: Instant? = null): RunResult {
         val lock = perConfigLocks.computeIfAbsent(configId) { Mutex() }
-        return lock.withLock { runBackupExclusive(configId, deadline) }
+        return if (lock.tryLock()) {
+            try {
+                runBackupExclusive(configId, deadline)
+            } finally {
+                lock.unlock()
+            }
+        } else {
+            log.info("Backup for config $configId is already running — skipping this concurrent run")
+            RunResult.SkippedConcurrentRun()
+        }
     }
 
     @Suppress("CyclomaticComplexMethod", "ReturnCount", "LongMethod")

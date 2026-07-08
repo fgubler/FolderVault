@@ -7,6 +7,42 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-08 — Branch review fixes: scheduler cancel scope, continuation policy, run serialization
+
+### What was requested
+Review the `develop` branch against `master` (code-review skill; findings in `review/develop.md`),
+then fix all six findings.
+
+### What was done
+- **[Blocking] MANUAL_ONLY cancel scope**: `BackupScheduler.schedulePeriodicIfNeeded` no longer
+  calls the full `cancel()` when the resolved schedule is `MANUAL_ONLY` — a new private
+  `cancelPeriodic()` cancels only `BackupWorker.workName`. Previously, the app-start safety net
+  (`reRegisterPeriodicBackups`) silently destroyed pending one-time runs, time-budget
+  continuations, and charging fallbacks of manual-only configs on every start. `cancel()` is now
+  documented as pause/delete-only.
+- **Continuation enqueue policy**: `replaceExisting` → `asContinuation` on `scheduleOneTime` and
+  `scheduleChargingFallback`; continuations use `ExistingWorkPolicy.APPEND_OR_REPLACE` so they are
+  appended after the still-running worker (which holds the unique name) instead of REPLACE
+  cancelling that worker mid-completion.
+- **Run serialization without blocking**: `BackupRunner.runBackup` uses `Mutex.tryLock()` instead
+  of `withLock`; a colliding run returns the new `RunResult.SkippedConcurrentRun`, which
+  `BackupWorker` maps to `Result.retry()` (fresh deadline + OS execution window on retry) and
+  excludes from notifications (`completionOutcomeOf` → null).
+- **Fallback message accuracy**: `scheduleChargingFallback` is now suspend and returns whether it
+  actually enqueued (pre-check of pending work via the WorkInfo flow); `ChargingFallbackTrigger`
+  writes the `CHARGING_FALLBACK_SCHEDULED` INFO message only then, so an ongoing cancel streak no
+  longer accumulates misleading rows while a fallback is already pending.
+- **Convention**: all three app-start coroutine launches in `FolderVaultApp` use
+  `get<IDispatchers>().io` instead of hard-coded `Dispatchers.IO`.
+- **Tests**: `ChargingFallbackTriggerTest` verifications pass `any()` for the new third parameter
+  (default-argument blind spot) and stub the Boolean return via a `makeScheduler()` helper; new
+  test for the already-pending → no-message case; `BackupContinuationSchedulerTest` +
+  `DatabaseRecoveryServiceTest` fake updated to the new signatures.
+
+### Verification
+`assembleDebug`, `compileDebugUnitTestKotlin`, `detekt` green in-session; full `./gradlew test`
+run outside the sandbox pending (MockK cannot run inside it).
+
 ## 2026-07-08 — Charging-fallback review fixes: manual-run charging warning + message-log visibility
 
 ### What was requested

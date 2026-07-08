@@ -3,6 +3,7 @@ package ch.abwesend.foldervault
 import android.app.Application
 import ch.abwesend.foldervault.di.appModule
 import ch.abwesend.foldervault.domain.backup.IBackupScheduler
+import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.logging.ITelemetryToggle
 import ch.abwesend.foldervault.domain.logging.LoggerProvider
 import ch.abwesend.foldervault.domain.logging.logger
@@ -15,7 +16,6 @@ import ch.abwesend.foldervault.infrastructure.logging.PrivateLogger
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupConfigDao
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupRunDao
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.koin.android.ext.android.get
@@ -47,7 +47,8 @@ class FolderVaultApp : Application() {
      * work after a force-stop, etc. — would otherwise leave the backup silently unscheduled until
      * the user next edits it. [IBackupScheduler.schedulePeriodicIfNeeded] uses
      * [androidx.work.ExistingPeriodicWorkPolicy.UPDATE], so this is idempotent for configs that
-     * are already scheduled and a no-op (cancel) for `MANUAL_ONLY` ones.
+     * are already scheduled; for `MANUAL_ONLY` ones it cancels only the periodic slot, leaving
+     * pending one-time runs, continuations, and charging-only fallbacks untouched.
      *
      * Must not crash on a broken database — like [sweepStaleRunningBackupRuns], this is an early
      * background access and a failure here must not pre-empt the database-error screen.
@@ -56,7 +57,7 @@ class FolderVaultApp : Application() {
         val configDao = get<BackupConfigDao>()
         val scheduler = get<IBackupScheduler>()
         val settingsRepo = get<IAppSettingsRepository>()
-        CoroutineScope(Dispatchers.IO).launch {
+        CoroutineScope(get<IDispatchers>().io).launch {
             try {
                 val globalDefault = settingsRepo.settings.first().defaultSchedule
                 configDao.getAll().first()
@@ -89,7 +90,7 @@ class FolderVaultApp : Application() {
      */
     private fun sweepStaleRunningBackupRuns() {
         val dao = get<BackupRunDao>()
-        CoroutineScope(Dispatchers.IO).launch {
+        CoroutineScope(get<IDispatchers>().io).launch {
             try {
                 val now = System.currentTimeMillis()
                 val updated = dao.markStaleRunningAsCancelled(
@@ -115,7 +116,7 @@ class FolderVaultApp : Application() {
     private fun applyInitialTelemetrySettings() {
         val toggle = get<ITelemetryToggle>()
         val settingsRepo = get<IAppSettingsRepository>()
-        CoroutineScope(Dispatchers.IO).launch {
+        CoroutineScope(get<IDispatchers>().io).launch {
             toggle.setEnabled(settingsRepo.settings.first().anonymousErrorReports)
         }
     }

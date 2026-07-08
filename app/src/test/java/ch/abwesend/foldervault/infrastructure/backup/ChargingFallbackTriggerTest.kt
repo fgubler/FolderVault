@@ -62,10 +62,19 @@ class ChargingFallbackTriggerTest : StringSpec({
         lastRunCompletedNormally = false,
     )
 
+    /**
+     * Relaxed scheduler mock whose [IBackupScheduler.scheduleChargingFallback] reports
+     * [newlyScheduled] — `true` mimics a fresh enqueue, `false` a no-op because a fallback
+     * was already pending (a relaxed mock would default the Boolean to `false` silently).
+     */
+    fun makeScheduler(newlyScheduled: Boolean = true) = mockk<IBackupScheduler>(relaxed = true) {
+        coEvery { scheduleChargingFallback(any(), any(), any()) } returns newlyScheduled
+    }
+
     "schedules fallback when the last N runs were all cancelled" {
         val config = makeConfig(id = "cfg-A", networkPolicy = NetworkPolicy.WIFI_ONLY)
         val dao = mockk<BackupRunDao>()
-        val scheduler = mockk<IBackupScheduler>(relaxed = true)
+        val scheduler = makeScheduler()
         val messageDao = mockk<BackupMessageDao>(relaxed = true)
         coEvery {
             dao.getRecentStatuses("cfg-A", ChargingFallbackTrigger.CANCELLATION_STREAK_THRESHOLD)
@@ -73,13 +82,15 @@ class ChargingFallbackTriggerTest : StringSpec({
 
         runTest { ChargingFallbackTrigger.maybeSchedule(config, dao, scheduler, messageDao, "run-A") }
 
-        coVerify(exactly = 1) { scheduler.scheduleChargingFallback("cfg-A", NetworkPolicy.WIFI_ONLY) }
+        coVerify(exactly = 1) {
+            scheduler.scheduleChargingFallback("cfg-A", NetworkPolicy.WIFI_ONLY, asContinuation = false)
+        }
     }
 
     "writes exactly one info message when the fallback is scheduled" {
         val config = makeConfig(id = "cfg-A2", networkPolicy = NetworkPolicy.WIFI_ONLY)
         val dao = mockk<BackupRunDao>()
-        val scheduler = mockk<IBackupScheduler>(relaxed = true)
+        val scheduler = makeScheduler()
         val messageDao = mockk<BackupMessageDao>(relaxed = true)
         coEvery {
             dao.getRecentStatuses("cfg-A2", ChargingFallbackTrigger.CANCELLATION_STREAK_THRESHOLD)
@@ -98,10 +109,27 @@ class ChargingFallbackTriggerTest : StringSpec({
         }
     }
 
+    "does not write a message when a fallback was already pending" {
+        val config = makeConfig(id = "cfg-A3", networkPolicy = NetworkPolicy.WIFI_ONLY)
+        val dao = mockk<BackupRunDao>()
+        val scheduler = makeScheduler(newlyScheduled = false)
+        val messageDao = mockk<BackupMessageDao>(relaxed = true)
+        coEvery {
+            dao.getRecentStatuses("cfg-A3", ChargingFallbackTrigger.CANCELLATION_STREAK_THRESHOLD)
+        } returns List(ChargingFallbackTrigger.CANCELLATION_STREAK_THRESHOLD) { BackupRunStatus.CANCELLED }
+
+        runTest { ChargingFallbackTrigger.maybeSchedule(config, dao, scheduler, messageDao, "run-A3") }
+
+        // The trigger still asks the scheduler, but a KEEP no-op must not claim "fallback
+        // scheduled" in the message log — that is exactly the row the user already has.
+        coVerify(exactly = 1) { scheduler.scheduleChargingFallback("cfg-A3", NetworkPolicy.WIFI_ONLY, any()) }
+        coVerify(exactly = 0) { messageDao.coalesceInsert(any()) }
+    }
+
     "does not schedule when at least one recent run succeeded" {
         val config = makeConfig(id = "cfg-B")
         val dao = mockk<BackupRunDao>()
-        val scheduler = mockk<IBackupScheduler>(relaxed = true)
+        val scheduler = makeScheduler()
         val messageDao = mockk<BackupMessageDao>(relaxed = true)
         coEvery {
             dao.getRecentStatuses("cfg-B", ChargingFallbackTrigger.CANCELLATION_STREAK_THRESHOLD)
@@ -109,14 +137,14 @@ class ChargingFallbackTriggerTest : StringSpec({
 
         runTest { ChargingFallbackTrigger.maybeSchedule(config, dao, scheduler, messageDao, "run-B") }
 
-        coVerify(exactly = 0) { scheduler.scheduleChargingFallback(any(), any()) }
+        coVerify(exactly = 0) { scheduler.scheduleChargingFallback(any(), any(), any()) }
         coVerify(exactly = 0) { messageDao.coalesceInsert(any()) }
     }
 
     "does not schedule when fewer than threshold rows exist" {
         val config = makeConfig(id = "cfg-C")
         val dao = mockk<BackupRunDao>()
-        val scheduler = mockk<IBackupScheduler>(relaxed = true)
+        val scheduler = makeScheduler()
         val messageDao = mockk<BackupMessageDao>(relaxed = true)
         // Only 2 rows total — this is the config's first-ever cancel-streak; give it more time.
         coEvery {
@@ -125,14 +153,14 @@ class ChargingFallbackTriggerTest : StringSpec({
 
         runTest { ChargingFallbackTrigger.maybeSchedule(config, dao, scheduler, messageDao, "run-C") }
 
-        coVerify(exactly = 0) { scheduler.scheduleChargingFallback(any(), any()) }
+        coVerify(exactly = 0) { scheduler.scheduleChargingFallback(any(), any(), any()) }
         coVerify(exactly = 0) { messageDao.coalesceInsert(any()) }
     }
 
     "does not schedule when the config already requires charging" {
         val config = makeConfig(id = "cfg-D", requiresCharging = true)
         val dao = mockk<BackupRunDao>()
-        val scheduler = mockk<IBackupScheduler>(relaxed = true)
+        val scheduler = makeScheduler()
         val messageDao = mockk<BackupMessageDao>(relaxed = true)
 
         runTest { ChargingFallbackTrigger.maybeSchedule(config, dao, scheduler, messageDao, "run-D") }
@@ -140,14 +168,14 @@ class ChargingFallbackTriggerTest : StringSpec({
         // We must not even query the DAO when the config already requires charging —
         // that would waste I/O for a decision that's already determined.
         coVerify(exactly = 0) { dao.getRecentStatuses(any(), any()) }
-        coVerify(exactly = 0) { scheduler.scheduleChargingFallback(any(), any()) }
+        coVerify(exactly = 0) { scheduler.scheduleChargingFallback(any(), any(), any()) }
         coVerify(exactly = 0) { messageDao.coalesceInsert(any()) }
     }
 
     "passes through the config's network policy so the fallback stays Wi-Fi-only when set" {
         val config = makeConfig(id = "cfg-E", networkPolicy = NetworkPolicy.ANY)
         val dao = mockk<BackupRunDao>()
-        val scheduler = mockk<IBackupScheduler>(relaxed = true)
+        val scheduler = makeScheduler()
         val messageDao = mockk<BackupMessageDao>(relaxed = true)
         coEvery {
             dao.getRecentStatuses("cfg-E", ChargingFallbackTrigger.CANCELLATION_STREAK_THRESHOLD)
@@ -155,6 +183,6 @@ class ChargingFallbackTriggerTest : StringSpec({
 
         runTest { ChargingFallbackTrigger.maybeSchedule(config, dao, scheduler, messageDao, "run-E") }
 
-        coVerify(exactly = 1) { scheduler.scheduleChargingFallback("cfg-E", NetworkPolicy.ANY) }
+        coVerify(exactly = 1) { scheduler.scheduleChargingFallback("cfg-E", NetworkPolicy.ANY, any()) }
     }
 })

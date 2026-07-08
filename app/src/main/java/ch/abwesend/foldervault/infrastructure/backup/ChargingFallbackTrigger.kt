@@ -31,8 +31,10 @@ internal object ChargingFallbackTrigger {
     /**
      * @param runId the run that just cancelled, used to coalesce the info message so a single
      *   triggering run never produces more than one "fallback scheduled" row.
-     * @param backupMessageDao sink for the audit message written when the fallback fires, so the
-     *   mechanism is visible on the backup detail screen's message log.
+     * @param backupMessageDao sink for the audit message written when the fallback fires. Only
+     *   written when the scheduler actually enqueued new work — while a fallback is already
+     *   pending, further cancelled runs in the streak must not accumulate rows claiming a
+     *   fallback was scheduled when nothing new happened.
      */
     suspend fun maybeSchedule(
         config: BackupConfigEntity,
@@ -50,20 +52,22 @@ internal object ChargingFallbackTrigger {
                 "Cancellation streak of $CANCELLATION_STREAK_THRESHOLD reached for config ${config.id}; " +
                     "enqueueing charging-only fallback",
             )
-            scheduler.scheduleChargingFallback(config.id, config.networkPolicy)
-            backupMessageDao.coalesceInsert(
-                BackupMessageEntity(
-                    backupConfigId = config.id,
-                    runId = runId,
-                    timestamp = System.currentTimeMillis(),
-                    severity = MessageSeverity.INFO,
-                    type = MessageType.CHARGING_FALLBACK_SCHEDULED,
-                    messageText = null,
-                    formatArgs = emptyList(),
-                    relativePath = null,
-                    readAt = null,
-                ),
-            )
+            val newlyScheduled = scheduler.scheduleChargingFallback(config.id, config.networkPolicy)
+            if (newlyScheduled) {
+                backupMessageDao.coalesceInsert(
+                    BackupMessageEntity(
+                        backupConfigId = config.id,
+                        runId = runId,
+                        timestamp = System.currentTimeMillis(),
+                        severity = MessageSeverity.INFO,
+                        type = MessageType.CHARGING_FALLBACK_SCHEDULED,
+                        messageText = null,
+                        formatArgs = emptyList(),
+                        relativePath = null,
+                        readAt = null,
+                    ),
+                )
+            }
         }
     }
 }

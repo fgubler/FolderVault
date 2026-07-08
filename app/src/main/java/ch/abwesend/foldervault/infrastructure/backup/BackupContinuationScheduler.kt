@@ -20,10 +20,14 @@ internal object BackupContinuationScheduler {
      * a fallback, which forces the charging constraint and keeps the dedicated name. All other
      * runs re-enqueue as a normal one-time run, preserving the config's own charging preference.
      *
+     * Both paths pass `asContinuation = true` so the scheduler appends the continuation after the
+     * still-running worker (which holds the target unique name) instead of replacing — and thereby
+     * cancelling — it.
+     *
      * [networkPolicy] is reused so a Wi-Fi-only backup never spills over onto mobile data on the
      * continuation run.
      */
-    fun scheduleContinuation(
+    suspend fun scheduleContinuation(
         scheduler: IBackupScheduler,
         configId: String,
         networkPolicy: NetworkPolicy,
@@ -31,9 +35,9 @@ internal object BackupContinuationScheduler {
         isChargingFallback: Boolean,
     ) {
         if (isChargingFallback) {
-            scheduler.scheduleChargingFallback(configId, networkPolicy, replaceExisting = true)
+            scheduler.scheduleChargingFallback(configId, networkPolicy, asContinuation = true)
         } else {
-            scheduler.scheduleOneTime(configId, networkPolicy, requiresCharging)
+            scheduler.scheduleOneTime(configId, networkPolicy, requiresCharging, asContinuation = true)
         }
     }
 }

@@ -91,6 +91,7 @@
     <string name="msg_quota_exceeded">Google Drive storage quota exceeded — backup stopped.</string>
     <string name="msg_unreliable_timestamps">File timestamps are unreliable. Some unchanged files may be re-checked.</string>
     <string name="msg_rate_limited">Upload was rate-limited. Backup will continue in the next run.</string>
+    <string name="msg_charging_fallback_scheduled">Several backup runs were interrupted. The next attempt will wait until the device is charging so it can finish undisturbed.</string>
     <string name="msg_generic_info">Info</string>
     <string name="msg_generic_warning">Warning</string>
     <string name="msg_generic_error">Error</string>
@@ -232,6 +233,8 @@
     <string name="button_back_up_anyway">Back up anyway</string>
     <string name="dialog_metered_override_title">You\'re not on Wi-Fi</string>
     <string name="dialog_metered_override_body">This backup is set to run on Wi-Fi only, but your phone isn\'t currently connected to Wi-Fi. Backing up now will use mobile data.</string>
+    <string name="dialog_charging_override_title">Device isn\'t charging</string>
+    <string name="dialog_charging_override_body">This backup is set to run only while charging, but your phone isn\'t plugged in right now. Backing up now will run this once without waiting for the charger. Scheduled backups will still wait until the device is charging.</string>
 
     <!-- Settings screen -->
     <string name="settings_title">Settings</string>
@@ -267,6 +270,8 @@
     <string name="info_background_data_body">When Data Saver is on, Android blocks background data for apps while you are on mobile data. Backups that are allowed to use mobile data then have to wait until you are on Wi-Fi. If you allow unrestricted data usage for FolderVault, those backups can run anyway.\n\nBackups set to Wi-Fi only are not affected by this.</string>
     <string name="button_show_onboarding">Show onboarding again</string>
     <string name="button_export_today_log">Export today\'s logfile</string>
+    <string name="dialog_export_log_success_title">Export successful</string>
+    <string name="dialog_export_log_failed_title">Export failed</string>
     <string name="export_log_success">Logfile exported</string>
     <string name="export_log_failed">Could not export logfile</string>
 

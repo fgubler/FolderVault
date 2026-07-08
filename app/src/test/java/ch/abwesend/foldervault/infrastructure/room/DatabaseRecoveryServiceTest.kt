@@ -160,7 +160,12 @@ private class FakeBackupScheduler : IBackupScheduler {
     var cancelAllCalls = 0
         private set
 
-    override fun scheduleOneTime(configId: String, networkPolicy: NetworkPolicy, requiresCharging: Boolean) = Unit
+    override fun scheduleOneTime(
+        configId: String,
+        networkPolicy: NetworkPolicy,
+        requiresCharging: Boolean,
+        asContinuation: Boolean,
+    ) = Unit
 
     override fun schedulePeriodicIfNeeded(
         configId: String,
@@ -170,7 +175,11 @@ private class FakeBackupScheduler : IBackupScheduler {
         globalDefault: BackupSchedule,
     ) = Unit
 
-    override fun scheduleChargingFallback(configId: String, networkPolicy: NetworkPolicy) = Unit
+    override suspend fun scheduleChargingFallback(
+        configId: String,
+        networkPolicy: NetworkPolicy,
+        asContinuation: Boolean,
+    ) = true
 
     override fun cancel(configId: String) = Unit
 

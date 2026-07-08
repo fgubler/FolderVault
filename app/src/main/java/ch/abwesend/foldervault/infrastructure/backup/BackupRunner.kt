@@ -44,15 +44,32 @@ import java.util.UUID
 import javax.crypto.SecretKey
 
 sealed class RunResult {
-    abstract val runId: String
-    abstract val summary: RunSummary
-    data class Success(override val summary: RunSummary, override val runId: String) : RunResult()
-    data class AuthLost(override val summary: RunSummary, override val runId: String) : RunResult()
+    /**
+     * A run that actually executed and committed a run row — only these results carry a real
+     * [runId] and [summary]. Kept as an intermediate type so callers must prove (via a type
+     * check the compiler enforces) that a run happened before touching either member.
+     */
+    sealed class Completed : RunResult() {
+        abstract val runId: String
+        abstract val summary: RunSummary
+    }
+
+    data class Success(override val summary: RunSummary, override val runId: String) : Completed()
+    data class AuthLost(override val summary: RunSummary, override val runId: String) : Completed()
     data class FatalError(
         val error: Exception,
         override val summary: RunSummary,
         override val runId: String,
-    ) : RunResult()
+    ) : Completed()
+
+    /**
+     * Another run of the same config was already executing, so this one did nothing — no run row
+     * was created, hence no runId or summary exist. The caller should retry once the in-flight
+     * run has finished (e.g. via [androidx.work.ListenableWorker.Result.retry]) rather than
+     * block: waiting inside a worker would burn its OS execution window while its deadline keeps
+     * ticking.
+     */
+    data object SkippedConcurrentRun : RunResult()
 }
 
 class BackupRunner(
@@ -70,8 +87,28 @@ class BackupRunner(
 ) {
     private val log get() = logger
 
-    @Suppress("CyclomaticComplexMethod", "ReturnCount")
-    suspend fun runBackup(configId: String, deadline: Instant? = null): RunResult {
+    /** Serializes runs of the same config — see [PerConfigRunLock] for the full rationale. */
+    private val runLock = PerConfigRunLock()
+
+    /**
+     * Runs a backup for [configId], serialized per config: only one run per config executes at a
+     * time (see [PerConfigRunLock]). When another run of the same config is already executing,
+     * this returns [RunResult.SkippedConcurrentRun] immediately instead of waiting — the caller
+     * retries later with a fresh deadline and execution window.
+     */
+    suspend fun runBackup(configId: String, deadline: Instant? = null): RunResult =
+        runLock.withLockOrElse(
+            key = configId,
+            onBusy = {
+                log.info("Backup for config $configId is already running — skipping this concurrent run")
+                RunResult.SkippedConcurrentRun
+            },
+        ) {
+            runBackupExclusive(configId, deadline)
+        }
+
+    @Suppress("CyclomaticComplexMethod", "ReturnCount", "LongMethod")
+    private suspend fun runBackupExclusive(configId: String, deadline: Instant?): RunResult {
         val runId = UUID.randomUUID().toString()
         val config = backupConfigDao.getByIdOnce(configId)
             ?: return RunResult.FatalError(
@@ -186,7 +223,18 @@ class BackupRunner(
                     summary = summary,
                     completedNormally = false,
                 )
-                ChargingFallbackTrigger.maybeSchedule(config, backupRunDao, scheduler)
+                // Re-fetch the config: pausing mid-run is a common cause of this very
+                // cancellation, and the entity loaded at run start would not see the new
+                // pause flag (the trigger skips paused configs).
+                backupConfigDao.getByIdOnce(config.id)?.let { currentConfig ->
+                    ChargingFallbackTrigger.maybeSchedule(
+                        config = currentConfig,
+                        backupRunDao = backupRunDao,
+                        scheduler = scheduler,
+                        backupMessageDao = backupMessageDao,
+                        runId = runId,
+                    )
+                }
             }
             throw e
         } catch (e: Exception) {

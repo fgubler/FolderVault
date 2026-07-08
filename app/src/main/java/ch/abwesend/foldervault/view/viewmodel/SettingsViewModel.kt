@@ -1,8 +1,6 @@
 package ch.abwesend.foldervault.view.viewmodel
 
-import android.net.Uri
 import androidx.lifecycle.viewModelScope
-import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.logging.ILogExporter
 import ch.abwesend.foldervault.domain.logging.ITelemetryToggle
@@ -32,8 +30,9 @@ internal class SettingsViewModel(
     val settings: StateFlow<AppSettings> = settingsRepo.settings
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AppSettings())
 
-    private val _exportResult = MutableStateFlow<UiText?>(null)
-    val exportResult: StateFlow<UiText?> = _exportResult.asStateFlow()
+    /** Outcome of the last log-file export, or `null` while no result is pending display. */
+    private val _exportResult = MutableStateFlow<Boolean?>(null)
+    val exportResult: StateFlow<Boolean?> = _exportResult.asStateFlow()
 
     private val _backgroundRestrictions = MutableStateFlow(BackgroundRestrictionStatus())
     val backgroundRestrictions: StateFlow<BackgroundRestrictionStatus> = _backgroundRestrictions.asStateFlow()
@@ -76,12 +75,9 @@ internal class SettingsViewModel(
         _exportResult.value = null
     }
 
-    fun exportTodayLogFile(uri: Uri) {
+    fun exportTodayLogFile(destinationUri: String) {
         safeLaunch {
-            val exported = withContext(dispatchers.io) { logExporter.exportTodayLog(uri.toString()) }
-            _exportResult.value = UiText.Resource(
-                if (exported) R.string.export_log_success else R.string.export_log_failed,
-            )
+            _exportResult.value = withContext(dispatchers.io) { logExporter.exportTodayLog(destinationUri) }
         }
     }
 

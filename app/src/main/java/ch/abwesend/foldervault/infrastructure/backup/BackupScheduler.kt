@@ -18,6 +18,7 @@ import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -41,7 +42,7 @@ class BackupScheduler(private val context: Context) : IBackupScheduler {
     ) {
         val resolved = if (schedule == BackupSchedule.USE_GLOBAL_DEFAULT) globalDefault else schedule
         if (resolved == BackupSchedule.MANUAL_ONLY) {
-            cancel(configId)
+            cancelPeriodic(configId)
             return
         }
         try {
@@ -68,19 +69,33 @@ class BackupScheduler(private val context: Context) : IBackupScheduler {
         }
     }
 
-    /** Enqueues a one-time "back up now" run; replaces any already-queued one-time run. */
-    override fun scheduleOneTime(configId: String, networkPolicy: NetworkPolicy, requiresCharging: Boolean) {
+    /**
+     * Enqueues a one-time "back up now" run; replaces any already-queued one-time run.
+     * Uses a dedicated unique-work name ([BackupWorker.oneTimeWorkName]) so the
+     * [ExistingWorkPolicy.REPLACE] here can never cancel the config's periodic schedule
+     * (which lives under [BackupWorker.workName] in the same WorkManager unique-name namespace).
+     *
+     * A time-budget continuation ([asContinuation]) uses [ExistingWorkPolicy.APPEND_OR_REPLACE]
+     * instead: it is enqueued from *within* the still-running worker that holds this unique name,
+     * and REPLACE would cancel that worker before it could report its own result.
+     */
+    override fun scheduleOneTime(
+        configId: String,
+        networkPolicy: NetworkPolicy,
+        requiresCharging: Boolean,
+        asContinuation: Boolean,
+    ) {
         try {
             val request = OneTimeWorkRequestBuilder<BackupWorker>()
                 .setConstraints(buildConstraints(networkPolicy, requiresCharging))
                 .setInputData(workDataOf(BackupWorker.KEY_CONFIG_ID to configId))
                 .build()
             workManager.enqueueUniqueWork(
-                BackupWorker.workName(configId),
-                ExistingWorkPolicy.REPLACE,
+                BackupWorker.oneTimeWorkName(configId),
+                if (asContinuation) ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.REPLACE,
                 request,
             )
-            log.info("Enqueued one-time backup for config $configId")
+            log.info("Enqueued one-time backup for config $configId (asContinuation=$asContinuation)")
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -90,41 +105,89 @@ class BackupScheduler(private val context: Context) : IBackupScheduler {
 
     /**
      * Charging-only fallback: forces [Constraints.setRequiresCharging] and uses a dedicated
-     * unique-work name so it never displaces the config's periodic / one-time runs.
-     * [ExistingWorkPolicy.KEEP] means we no-op if a fallback for this config is still pending.
+     * unique-work name so it never displaces the config's periodic / one-time runs. The
+     * [BackupWorker.KEY_IS_CHARGING_FALLBACK] flag lets a continuation of this run re-enqueue
+     * itself as a fallback (keeping the charging constraint) rather than a plain one-time run.
+     *
+     * A plain trigger pre-checks for pending fallback work and no-ops (returning `false`) when
+     * one exists; the enqueue itself still uses [ExistingWorkPolicy.KEEP] so a lost race between
+     * two concurrent triggers stays harmless. A continuation ([asContinuation]) skips the
+     * pre-check and uses [ExistingWorkPolicy.APPEND_OR_REPLACE]: it is enqueued from *within*
+     * the still-running fallback worker, which holds the unique name — KEEP would swallow it,
+     * REPLACE would cancel the calling worker itself.
      */
-    override fun scheduleChargingFallback(configId: String, networkPolicy: NetworkPolicy) {
-        try {
+    override suspend fun scheduleChargingFallback(
+        configId: String,
+        networkPolicy: NetworkPolicy,
+        asContinuation: Boolean,
+    ): Boolean = try {
+        if (!asContinuation && hasPendingChargingFallback(configId)) {
+            log.info("Charging-only fallback for config $configId already pending — nothing to enqueue")
+            false
+        } else {
             val request = OneTimeWorkRequestBuilder<BackupWorker>()
                 .setConstraints(buildConstraints(networkPolicy, requiresCharging = true))
-                .setInputData(workDataOf(BackupWorker.KEY_CONFIG_ID to configId))
+                .setInputData(
+                    workDataOf(
+                        BackupWorker.KEY_CONFIG_ID to configId,
+                        BackupWorker.KEY_IS_CHARGING_FALLBACK to true,
+                    )
+                )
                 .build()
             workManager.enqueueUniqueWork(
                 BackupWorker.chargingFallbackWorkName(configId),
-                ExistingWorkPolicy.KEEP,
+                if (asContinuation) ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.KEEP,
                 request,
             )
             log.info("Enqueued charging-only fallback backup for config $configId")
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            log.error("Failed to enqueue charging-only fallback for config $configId", e)
+            true
         }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        log.error("Failed to enqueue charging-only fallback for config $configId", e)
+        false
     }
+
+    /** Whether unfinished (enqueued, running, or blocked) fallback work exists for [configId]. */
+    private suspend fun hasPendingChargingFallback(configId: String): Boolean =
+        workManager.getWorkInfosForUniqueWorkFlow(BackupWorker.chargingFallbackWorkName(configId))
+            .first()
+            .any { !it.state.isFinished }
 
     /**
      * Cancels all work (periodic + one-time + charging-only fallback) for this config.
-     * Call before deleting a config.
+     * Call before deleting or when pausing a config — NOT when a schedule merely resolves to
+     * manual-only (that must leave pending one-time / fallback work alone, see [cancelPeriodic]).
      */
     override fun cancel(configId: String) {
         try {
             workManager.cancelUniqueWork(BackupWorker.workName(configId))
+            workManager.cancelUniqueWork(BackupWorker.oneTimeWorkName(configId))
             workManager.cancelUniqueWork(BackupWorker.chargingFallbackWorkName(configId))
             log.info("Cancelled all backup work for config $configId")
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             log.error("Failed to cancel backup work for config $configId", e)
+        }
+    }
+
+    /**
+     * Cancels only the config's *periodic* schedule, leaving pending one-time runs, time-budget
+     * continuations, and charging-only fallbacks untouched. Used when the resolved schedule is
+     * manual-only: [schedulePeriodicIfNeeded] manages the periodic slot exclusively, and is also
+     * called blindly for every config on app start — a full [cancel] there would silently destroy
+     * pending manual work.
+     */
+    private fun cancelPeriodic(configId: String) {
+        try {
+            workManager.cancelUniqueWork(BackupWorker.workName(configId))
+            log.info("Cancelled periodic backup work for config $configId")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.error("Failed to cancel periodic backup work for config $configId", e)
         }
     }
 
@@ -141,10 +204,11 @@ class BackupScheduler(private val context: Context) : IBackupScheduler {
     }
 
     override fun observeIsRunning(configId: String): Flow<Boolean> {
-        val primary = workManager.getWorkInfosForUniqueWorkFlow(BackupWorker.workName(configId))
+        val periodic = workManager.getWorkInfosForUniqueWorkFlow(BackupWorker.workName(configId))
+        val oneTime = workManager.getWorkInfosForUniqueWorkFlow(BackupWorker.oneTimeWorkName(configId))
         val fallback = workManager.getWorkInfosForUniqueWorkFlow(BackupWorker.chargingFallbackWorkName(configId))
-        return combine(primary, fallback) { primaryInfos, fallbackInfos ->
-            (primaryInfos + fallbackInfos).any { it.state == WorkInfo.State.RUNNING }
+        return combine(periodic, oneTime, fallback) { periodicInfos, oneTimeInfos, fallbackInfos ->
+            (periodicInfos + oneTimeInfos + fallbackInfos).any { it.state == WorkInfo.State.RUNNING }
         }.distinctUntilChanged()
     }
 

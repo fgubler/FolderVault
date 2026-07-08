@@ -7,6 +7,253 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-08 — Third review round (fresh `review/develop.md`) + fixes for findings 1, 3, 4
+
+### What was requested
+Full re-review of `develop` vs `master` (excluding `fable-review.md`), then fix findings 1, 3, 4.
+Finding 2 was withdrawn: the global default schedule is *by design* only a pre-selection for new
+configs (already implemented — the add/edit picker excludes `USE_GLOBAL_DEFAULT` since `84b22c5`
+and persists concrete values); changing it must never affect existing configs.
+
+### What was done
+- **Finding 1 (pause race)**: `BackupDetailViewModel.togglePause` now persists the pause flag
+  *before* calling the scheduler — cancelling first raced the cancelled worker's config re-fetch
+  in `BackupRunner`, which could enqueue a charging fallback (+ info message) for a config the
+  user just paused. Ordering pinned by a new `coVerifyOrder` test in `BackupDetailViewModelTest`
+  (`buildVm` gained an optional `configRepo` parameter).
+- **Findings 3 + 4**: fixes were applied (NonCancellable prune in `BackupRunner`'s `finally`;
+  no-eviction KDoc note on `PerConfigRunLock`) and then reverted at the user's request — both
+  findings are marked `ignored` in `review/develop.md` and will not be re-raised.
+- Residual note kept in `review/develop.md`: legacy configs persisted with `USE_GLOBAL_DEFAULT`
+  (pre-`84b22c5`) still *follow* the global default via `BackupScheduler`'s resolution — a
+  one-time migration would allow deleting that machinery.
+
+### Verification
+- `./gradlew assembleDebug compileDebugUnitTestKotlin detekt` green in the sandbox; the new
+  ViewModel test is MockK-based, so the suite needs `! ./gradlew test` outside it.
+
+## 2026-07-08 — Second round of branch review fixes (`review/develop.md`, DEV-1…DEV-9)
+
+### What was requested
+Fix all findings from the `develop`-vs-`master` review in `review/develop.md`.
+
+### What was done
+- **DEV-1 (pause hole)**: `BackupWorker.doWork` skips paused configs with `Result.success()`;
+  `ChargingFallbackTrigger.maybeSchedule` skips paused configs, and `BackupRunner`'s
+  cancellation path re-fetches the config so a mid-run pause is visible to the trigger.
+- **DEV-2 (unbounded retries)**: new `WorkerErrorHandler.retryOrGiveUp(runAttemptCount)` caps
+  both the `SkippedConcurrentRun` and `AuthLost` retry loops at `MAX_RETRY_COUNT`.
+- **DEV-3 (DI)**: `BackupWorker` injects `IBackupScheduler` instead of constructing
+  `BackupScheduler(applicationContext)` for continuations.
+- **DEV-4 (untested lock)**: per-config tryLock/skip/unlock-in-finally extracted into
+  `PerConfigRunLock`; new `PerConfigRunLockTest` (pure coroutines, sandbox-runnable) pins
+  concurrent-skip, per-key independence, and release on completion/exception/cancellation.
+- **DEV-6 (sentinel runId)**: `runId`/`summary` moved into a new `RunResult.Completed`
+  intermediate sealed class; `SkippedConcurrentRun` became a member-less `data object` and
+  `BackupWorker` gates notification logic on `result is RunResult.Completed`.
+- **DEV-5/8/9 (docs & wording)**: `scheduleOneTime` KDoc covers both continuation origins;
+  charging-override dialog reworded + normal-schedule reassurance added; work-name-prefix
+  aliasing + rename/migration cost documented on the constants.
+- **DEV-7 (stale prompt state)**: `pendingNetworkPolicy` is nullable, reset on confirm/dismiss;
+  a stray confirm logs an error and schedules nothing (two new ViewModel tests).
+- Review doc statuses updated to `fixed` with per-finding notes.
+
+### Verification
+- `./gradlew assembleDebug detekt` green; `PerConfigRunLockTest` + `WorkerErrorHandlerTest`
+  (10 tests) run green in the sandbox. MockK-based suites need `! ./gradlew test` outside it.
+
+## 2026-07-08 — Branch review fixes: scheduler cancel scope, continuation policy, run serialization
+
+### What was requested
+Review the `develop` branch against `master` (code-review skill; findings in `review/develop.md`),
+then fix all six findings.
+
+### What was done
+- **[Blocking] MANUAL_ONLY cancel scope**: `BackupScheduler.schedulePeriodicIfNeeded` no longer
+  calls the full `cancel()` when the resolved schedule is `MANUAL_ONLY` — a new private
+  `cancelPeriodic()` cancels only `BackupWorker.workName`. Previously, the app-start safety net
+  (`reRegisterPeriodicBackups`) silently destroyed pending one-time runs, time-budget
+  continuations, and charging fallbacks of manual-only configs on every start. `cancel()` is now
+  documented as pause/delete-only.
+- **Continuation enqueue policy**: `replaceExisting` → `asContinuation` on `scheduleOneTime` and
+  `scheduleChargingFallback`; continuations use `ExistingWorkPolicy.APPEND_OR_REPLACE` so they are
+  appended after the still-running worker (which holds the unique name) instead of REPLACE
+  cancelling that worker mid-completion.
+- **Run serialization without blocking**: `BackupRunner.runBackup` uses `Mutex.tryLock()` instead
+  of `withLock`; a colliding run returns the new `RunResult.SkippedConcurrentRun`, which
+  `BackupWorker` maps to `Result.retry()` (fresh deadline + OS execution window on retry) and
+  excludes from notifications (`completionOutcomeOf` → null).
+- **Fallback message accuracy**: `scheduleChargingFallback` is now suspend and returns whether it
+  actually enqueued (pre-check of pending work via the WorkInfo flow); `ChargingFallbackTrigger`
+  writes the `CHARGING_FALLBACK_SCHEDULED` INFO message only then, so an ongoing cancel streak no
+  longer accumulates misleading rows while a fallback is already pending.
+- **Convention**: all three app-start coroutine launches in `FolderVaultApp` use
+  `get<IDispatchers>().io` instead of hard-coded `Dispatchers.IO`.
+- **Tests**: `ChargingFallbackTriggerTest` verifications pass `any()` for the new third parameter
+  (default-argument blind spot) and stub the Boolean return via a `makeScheduler()` helper; new
+  test for the already-pending → no-message case; `BackupContinuationSchedulerTest` +
+  `DatabaseRecoveryServiceTest` fake updated to the new signatures.
+
+### Verification
+`assembleDebug`, `compileDebugUnitTestKotlin`, `detekt` green in-session; full `./gradlew test`
+run outside the sandbox pending (MockK cannot run inside it).
+
+## 2026-07-08 — Charging-fallback review fixes: manual-run charging warning + message-log visibility
+
+### What was requested
+Fix findings 3 and 4 from the charging-only backup code review (`review.md`): (3) make the
+charging fallback visible in the message log, and (4) warn the user when they tap "Back up now"
+on a charging-only config while the device is not plugged in (mirroring the existing metered /
+Wi-Fi override prompt).
+
+### What was done (Task 4 — message-log visibility)
+- New `MessageType.CHARGING_FALLBACK_SCHEDULED(notifies = false, R.string.msg_charging_fallback_scheduled)`.
+- `ChargingFallbackTrigger.maybeSchedule` now also takes `backupMessageDao` + `runId` and writes
+  one INFO `BackupMessage` via `coalesceInsert` at the moment the fallback is enqueued — still
+  inside `BackupRunner`'s `NonCancellable` cancellation block. `messageText = null` so the row
+  resolves its text from `type.labelResId` at display time (keeps the trigger free of a `Context`).
+- `ChargingFallbackTriggerTest`: added the message DAO + runId to every call; asserts the message
+  is inserted exactly once when the streak fires and never otherwise.
+
+### What was done (Task 3 — manual-run charging warning)
+- New `IChargingStateChecker` (domain/system) + `AndroidChargingStateChecker`
+  (`BatteryManager.isCharging`), wired in `AppModule`. UI-hint only — the WorkManager charging
+  constraint remains the real gate.
+- `BackupDetailViewModel`: `showChargingOverridePrompt` state; `confirmChargingOverride` (run this
+  once with `requiresCharging = false`) and `dismissChargingOverride` (cancel — schedules nothing).
+  The metered and charging prompts resolve **sequentially** — the charging check runs only after
+  the Wi-Fi prompt is settled, so the two dialogs never stack; the chosen network policy carries
+  through via `pendingNetworkPolicy`.
+- `BackupDetailScreen`: `ChargingOverrideDialog` (Back up anyway / Cancel) mirroring
+  `MeteredOverrideDialog`, plus a `@Preview` for the new dialog.
+- New strings: `dialog_charging_override_title/body` (reuses the shared `button_back_up_anyway` /
+  `button_cancel`).
+- `BackupDetailViewModelTest`: 5 new cases (prompt shown when unplugged; immediate schedule when
+  charging; confirm; dismiss; and the metered→charging sequential combination).
+
+### Decisions
+- The charging dialog mirrors the metered one exactly: confirm→"Back up anyway" (run once without
+  the charging constraint), dismiss / back / scrim→"Cancel" (schedules nothing — the normal
+  periodic schedule still runs the backup once the device is charging). No "wait for charging"
+  option, per review feedback.
+- The fallback log row uses `messageText = null` + `MessageItem`'s existing `?: type.labelResId`
+  fallback rather than resolving the string in the trigger — no `Context` needed there.
+
+### Verified
+- `./gradlew assembleDebug` ✅, `./gradlew detekt` ✅, `./gradlew test` ✅ (incl. Konsist).
+  `BackupDetailViewModelTest` 13/13, `ChargingFallbackTriggerTest` 6/6.
+- No `screenshotTest` source set exists (CPST disabled), so the screenshot sight-loop could not be
+  run; the new dialog has a `@Preview` for when CPST is enabled.
+
+## 2026-07-08 — Log-export result dialog no longer titled "Unexpected error"
+
+### What was requested
+On `DatabaseErrorScreen`, the dialog confirming a *successful* log-file export was shown with
+the title "Unexpected error" (it reused `UnexpectedErrorDialog`). A success needs a fitting
+title like "Export successful". The same misuse existed on `SettingsScreen`.
+
+### What was done
+- New `LogExportResultDialog(success: Boolean?, onDismiss)` component: title
+  `dialog_export_log_success_title` ("Export successful") or `dialog_export_log_failed_title`
+  ("Export failed"), body reuses the existing `export_log_success` / `export_log_failed` strings.
+- `DatabaseGuardViewModel` and `SettingsViewModel` now expose the export outcome as
+  `exportResult: StateFlow<Boolean?>` (+ `dismissExportResult()`) instead of a pre-baked
+  `UiText`; the dialog derives title and body from the boolean.
+- `exportTodayLogFile` now takes the destination URI as `String` (the screens call
+  `uri.toString()`): the ViewModel only forwards it to `ILogExporter`, and dropping
+  `android.net.Uri` keeps the ViewModel testable in plain-JVM Kotest without Robolectric.
+- Tests (hand-written fakes): export success/failure exposure and dismissal in
+  `DatabaseGuardViewModelTest`.
+
+### Verified
+`assembleDebug`, `detekt`, and the filtered `DatabaseGuardViewModelTest` run green in the
+sandbox; full `./gradlew test` (MockK/Robolectric) left to the user.
+
+## 2026-07-08 — Review fix Task 2: charging fallback keeps its constraint across continuations
+
+### What was requested
+Fix code-review finding 1 (`review.md`): when a run hits the time budget, `BackupWorker.doWork()`
+re-enqueued via `scheduleOneTime(id, config.networkPolicy, config.requiresCharging)`. For a
+charging-fallback run, `config.requiresCharging` is `false` by definition, so the continuation
+silently lost the charging constraint AND moved from the fallback unique name to the one-time
+name — the fallback protected only the first ~8-minute window, exactly where large backlogs need
+it most.
+
+### What was done
+- **Mark fallback runs.** `BackupWorker.KEY_IS_CHARGING_FALLBACK` input-data flag, set in
+  `BackupScheduler.scheduleChargingFallback`. `doWork()` reads it once at the top.
+- **Extracted continuation decision.** New `BackupContinuationScheduler.scheduleContinuation(...)`
+  (testable in isolation): a charging-fallback run re-enqueues via `scheduleChargingFallback`
+  (forced charging constraint + dedicated name); every other run re-enqueues via `scheduleOneTime`
+  carrying the config's own `requiresCharging`. `doWork()` now delegates to it. Because
+  `scheduleChargingFallback` always re-sets the flag, a fallback that hits the budget repeatedly
+  stays a fallback across every continuation.
+- **KEEP-vs-REPLACE decision.** `scheduleChargingFallback` gained `replaceExisting: Boolean = false`.
+  The continuation is enqueued from *within* the still-running fallback worker, which still holds
+  the unique name (RUNNING is uncompleted work), so `ExistingWorkPolicy.KEEP` would silently
+  swallow it. The continuation therefore passes `replaceExisting = true` → `REPLACE`. This
+  self-replace supersedes the run that is already wrapping up (its DB row is already committed as
+  `INITIAL_SYNC_IN_PROGRESS`, and the fallback trigger only fires from `BackupRunner`'s
+  cancellation catch which has already returned — so no spurious CANCELLED row or re-trigger). The
+  trigger path (`ChargingFallbackTrigger`) keeps the default `KEEP`, so duplicate fallbacks while
+  one is pending are still no-ops.
+- **Tests.** New `BackupContinuationSchedulerTest`: a fallback continuation calls
+  `scheduleChargingFallback(replaceExisting = true)` and never `scheduleOneTime`; a normal
+  continuation calls `scheduleOneTime` with the config's charging preference and never the
+  fallback. Updated the hand-written `FakeBackupScheduler` in `DatabaseRecoveryServiceTest` for the
+  new signature.
+
+### Verified
+`./gradlew assembleDebug`, `./gradlew test`, `./gradlew detekt` all green.
+
+### Decisions carried forward
+- `scheduleChargingFallback` is now dual-mode: KEEP for the trigger (dedupe pending fallbacks),
+  REPLACE for a self-continuation. The charging constraint survives arbitrarily many continuations.
+
+## 2026-07-08 — Review fix Task 1: separate WorkManager unique-work names for one-time runs
+
+### What was requested
+Fix code-review finding 5 (`review.md`): `BackupScheduler.scheduleOneTime` enqueued one-time work
+under the SAME unique name as the periodic schedule (`BackupWorker.workName`) with
+`ExistingWorkPolicy.REPLACE`. WorkManager shares one unique-name namespace across periodic and
+one-time work, so every manual "back up now" and every time-budget continuation could permanently
+cancel the config's periodic schedule — and nothing re-registered periodic work at app startup.
+The user pre-decided the outcome ("skip the web-search: use unique names for one-time runs"), so
+the verification step was skipped and the rename applied directly.
+
+### What was done
+- **Dedicated one-time name.** `BackupWorker.oneTimeWorkName(configId)` (prefix
+  `foldervault_backup_one_time_`) alongside the existing periodic `workName` and
+  `chargingFallbackWorkName`. `scheduleOneTime` now enqueues under this name, so its REPLACE can
+  never touch the periodic schedule. The time-budget continuation in `BackupWorker.doWork()`
+  already routes through `scheduleOneTime`, so it inherits the fix.
+- **Concurrency guard moved into `BackupRunner`.** With one-time and periodic now under distinct
+  names, WorkManager no longer serializes them. Added a process-wide per-configId `Mutex`
+  (`perConfigLocks`) in the `BackupRunner` singleton; `runBackup` acquires it with `withLock` and
+  delegates to a new private `runBackupExclusive`. A second run for the same config waits for the
+  first (matching the serial-upload design); `withLock` is inline, so the lock releases on normal
+  completion, cancellation, and error alike. Chosen over a WorkInfo state check because it needs
+  no self-exclusion logic and can't race a still-starting worker.
+- **`cancel` / `observeIsRunning` cover all three names** (periodic + one-time + charging fallback).
+- **Startup safety net.** `FolderVaultApp.reRegisterPeriodicBackups()` re-registers periodic work
+  for every non-paused config on app start via `schedulePeriodicIfNeeded` (which uses
+  `ExistingPeriodicWorkPolicy.UPDATE` → idempotent). Guards against a broken DB like the existing
+  `sweepStaleRunningBackupRuns`.
+- **Tests.** New `BackupWorkNameTest` (pure, sandbox-runnable) asserts the three unique-work names
+  are distinct, prefixed, and per-config. The scheduler's WorkManager wiring itself is only
+  exercisable under Robolectric.
+- Detekt: removed the now-stale `LongMethod` baseline entry for `runBackup` and moved the
+  suppression inline onto `runBackupExclusive`.
+
+### Verified
+`./gradlew assembleDebug`, `./gradlew test`, `./gradlew detekt` all green.
+
+### Decisions carried forward
+- Manual/periodic/fallback runs each have their own WorkManager unique name; the in-process
+  per-config mutex is now the sole guarantee that two runs of one config never overlap.
+- Tasks 2–4 from `review.md` (fallback constraint on continuation, charging override prompt,
+  fallback message-log row) are not yet done — stopped here for review per CLAUDE.md.
+
 ## 2026-07-07 — Opt-in completion notification after each finished backup run
 
 ### What was requested

@@ -40,12 +40,14 @@ class DatabaseGuardViewModelTest : StringSpec({
         override val main = testDispatcher
         override val mainImmediate = testDispatcher
     }
-    val logExporter = object : ILogExporter {
-        override fun exportTodayLog(destinationUri: String): Boolean = true
+    fun makeLogExporter(result: Boolean = true) = object : ILogExporter {
+        override fun exportTodayLog(destinationUri: String): Boolean = result
     }
 
-    fun makeViewModel(service: IDatabaseRecoveryService) =
-        DatabaseGuardViewModel(service, logExporter, dispatchers)
+    fun makeViewModel(
+        service: IDatabaseRecoveryService,
+        logExporter: ILogExporter = makeLogExporter(),
+    ) = DatabaseGuardViewModel(service, logExporter, dispatchers)
 
     "state becomes Healthy when the database opens" {
         val vm = makeViewModel(FakeDatabaseRecoveryService(verifyResults = listOf(SuccessResult(Unit))))
@@ -108,6 +110,35 @@ class DatabaseGuardViewModelTest : StringSpec({
 
         vm.state.value shouldBe DatabaseGuardState.Error
         vm.userMessage.value.shouldNotBeNull()
+    }
+
+    "successful log export exposes a success result" {
+        val vm = makeViewModel(FakeDatabaseRecoveryService(), makeLogExporter(result = true))
+
+        vm.exportTodayLogFile("content://logs/today.log")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.exportResult.value shouldBe true
+    }
+
+    "failed log export exposes a failure result" {
+        val vm = makeViewModel(FakeDatabaseRecoveryService(), makeLogExporter(result = false))
+
+        vm.exportTodayLogFile("content://logs/today.log")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.exportResult.value shouldBe false
+    }
+
+    "dismissExportResult clears the export result" {
+        val vm = makeViewModel(FakeDatabaseRecoveryService(), makeLogExporter(result = true))
+        vm.exportTodayLogFile("content://logs/today.log")
+        testDispatcher.scheduler.advanceUntilIdle()
+        vm.exportResult.value.shouldNotBeNull()
+
+        vm.dismissExportResult()
+
+        vm.exportResult.value.shouldBeNull()
     }
 
     "dismissUserMessage clears the user message" {

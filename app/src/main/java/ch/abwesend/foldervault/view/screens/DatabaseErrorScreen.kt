@@ -37,6 +37,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.ui.theme.FolderVaultTheme
+import ch.abwesend.foldervault.view.components.LogExportResultDialog
 import ch.abwesend.foldervault.view.components.UnexpectedErrorDialog
 import ch.abwesend.foldervault.view.viewmodel.DatabaseGuardViewModel
 
@@ -52,13 +53,15 @@ internal fun DatabaseErrorScreen(
     modifier: Modifier = Modifier,
 ) {
     val userMessage by viewModel.userMessage.collectAsState()
+    val exportResult by viewModel.exportResult.collectAsState()
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("text/plain"),
-    ) { uri -> if (uri != null) viewModel.exportTodayLogFile(uri) }
+    ) { uri -> if (uri != null) viewModel.exportTodayLogFile(uri.toString()) }
 
     userMessage?.let { message ->
         UnexpectedErrorDialog(error = message, onDismiss = viewModel::dismissUserMessage)
     }
+    LogExportResultDialog(success = exportResult, onDismiss = viewModel::dismissExportResult)
 
     DatabaseErrorContent(
         onRetry = viewModel::verifyDatabase,

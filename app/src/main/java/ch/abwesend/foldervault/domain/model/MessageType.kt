@@ -13,6 +13,7 @@ enum class MessageType(val notifies: Boolean, @StringRes val labelResId: Int) {
     QUOTA_EXCEEDED(notifies = true, R.string.msg_quota_exceeded),
     UNRELIABLE_TIMESTAMPS(notifies = false, R.string.msg_unreliable_timestamps),
     RATE_LIMITED(notifies = false, R.string.msg_rate_limited),
+    CHARGING_FALLBACK_SCHEDULED(notifies = false, R.string.msg_charging_fallback_scheduled),
     GENERIC_INFO(notifies = false, R.string.msg_generic_info),
     GENERIC_WARNING(notifies = false, R.string.msg_generic_warning),
     GENERIC_ERROR(notifies = true, R.string.msg_generic_error),

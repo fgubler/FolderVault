@@ -17,7 +17,11 @@
     "permissions": {
       "allow": [
         "Bash(./gradlew assembleDebug)",
-        "Bash(./gradlew testDebugUnitTest)"
+        "Bash(./gradlew testDebugUnitTest)",
+        "Bash(git diff*)",
+        "Bash(git log*)",
+        "Bash(git status)",
+        "Bash(git commit*)"
       ]
     },
     "network": {

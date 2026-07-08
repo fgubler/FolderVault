@@ -109,8 +109,8 @@ jobs:
 
       - name: Get version name and code
         run: |
-          VERSION_NAME=$(grep "versionName" app/build.gradle.kts | grep -oP '(?<="\")(?:[^"\\]|\\.)+(?="\")')
-          VERSION_CODE=$(grep "versionCode" app/build.gradle.kts | grep -oP '(?<=\=\s)\d+')
+          VERSION_NAME=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts)
+          VERSION_CODE=$(grep -oP 'versionCode\s*=\s*\K\d+' app/build.gradle.kts)
           echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
           echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_ENV
 

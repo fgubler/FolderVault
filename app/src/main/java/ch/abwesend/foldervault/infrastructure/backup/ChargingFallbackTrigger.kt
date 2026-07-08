@@ -3,8 +3,12 @@ package ch.abwesend.foldervault.infrastructure.backup
 import ch.abwesend.foldervault.domain.backup.IBackupScheduler
 import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.model.BackupRunStatus
+import ch.abwesend.foldervault.domain.model.MessageSeverity
+import ch.abwesend.foldervault.domain.model.MessageType
+import ch.abwesend.foldervault.infrastructure.room.dao.BackupMessageDao
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupRunDao
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupConfigEntity
+import ch.abwesend.foldervault.infrastructure.room.entity.BackupMessageEntity
 
 /**
  * Decides whether to enqueue a charging-only fallback run for a config that just had a
@@ -14,7 +18,9 @@ import ch.abwesend.foldervault.infrastructure.room.entity.BackupConfigEntity
  * The fallback fires only when [BackupConfigEntity.requiresCharging] is `false` AND the most
  * recent [CANCELLATION_STREAK_THRESHOLD] runs (including the one that just cancelled) were all
  * cancelled. Configs already pinned to charging need no additional fallback — their periodic
- * schedule already carries that constraint.
+ * schedule already carries that constraint. Paused configs never get a fallback either:
+ * pausing mid-run cancels the in-flight worker, and that very cancellation must not re-enqueue
+ * work for the config the user just paused.
  */
 internal object ChargingFallbackTrigger {
 
@@ -24,12 +30,22 @@ internal object ChargingFallbackTrigger {
      */
     const val CANCELLATION_STREAK_THRESHOLD = 3
 
+    /**
+     * @param runId the run that just cancelled, used to coalesce the info message so a single
+     *   triggering run never produces more than one "fallback scheduled" row.
+     * @param backupMessageDao sink for the audit message written when the fallback fires. Only
+     *   written when the scheduler actually enqueued new work — while a fallback is already
+     *   pending, further cancelled runs in the streak must not accumulate rows claiming a
+     *   fallback was scheduled when nothing new happened.
+     */
     suspend fun maybeSchedule(
         config: BackupConfigEntity,
         backupRunDao: BackupRunDao,
         scheduler: IBackupScheduler,
+        backupMessageDao: BackupMessageDao,
+        runId: String,
     ) {
-        if (config.requiresCharging) return
+        if (config.requiresCharging || config.isPaused) return
         val recent = backupRunDao.getRecentStatuses(config.id, CANCELLATION_STREAK_THRESHOLD)
         val streakReached = recent.size >= CANCELLATION_STREAK_THRESHOLD &&
             recent.all { it == BackupRunStatus.CANCELLED }
@@ -38,7 +54,22 @@ internal object ChargingFallbackTrigger {
                 "Cancellation streak of $CANCELLATION_STREAK_THRESHOLD reached for config ${config.id}; " +
                     "enqueueing charging-only fallback",
             )
-            scheduler.scheduleChargingFallback(config.id, config.networkPolicy)
+            val newlyScheduled = scheduler.scheduleChargingFallback(config.id, config.networkPolicy)
+            if (newlyScheduled) {
+                backupMessageDao.coalesceInsert(
+                    BackupMessageEntity(
+                        backupConfigId = config.id,
+                        runId = runId,
+                        timestamp = System.currentTimeMillis(),
+                        severity = MessageSeverity.INFO,
+                        type = MessageType.CHARGING_FALLBACK_SCHEDULED,
+                        messageText = null,
+                        formatArgs = emptyList(),
+                        relativePath = null,
+                        readAt = null,
+                    ),
+                )
+            }
         }
     }
 }

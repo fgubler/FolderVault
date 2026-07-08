@@ -1,5 +1,8 @@
 # FolderVault — working conventions for Claude Code
 
+## Skills
+- For any reviewing-task, use the "code-review" skill.
+
 ## Build & verify commands
 ```bash
 ./gradlew assembleDebug          # compile

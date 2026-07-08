@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.crypto.IFvc1Cipher
+import ch.abwesend.foldervault.domain.logging.FileNameRedactor
 import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.restore.IRestoreEngine
 import ch.abwesend.foldervault.domain.restore.RestoreCollisionPolicy
@@ -112,7 +113,7 @@ class RestoreEngine(
             context.contentResolver.openInputStream(source.uri)?.use(block) ?: false
         } catch (e: Exception) {
             e.rethrowCancellation()
-            logger.warning("Failed to open input stream for ${source.name}", e)
+            logger.warning("Failed to open input stream for ${FileNameRedactor.redact(source.name.orEmpty())}", e)
             false
         }
 
@@ -129,7 +130,10 @@ class RestoreEngine(
             } ?: false
         } catch (e: Exception) {
             e.rethrowCancellation()
-            logger.warning("Failed to open streams while restoring ${source.name}", e)
+            logger.warning(
+                "Failed to open streams while restoring ${FileNameRedactor.redact(source.name.orEmpty())}",
+                e,
+            )
             false
         }
 

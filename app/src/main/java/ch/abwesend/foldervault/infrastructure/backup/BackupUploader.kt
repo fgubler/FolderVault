@@ -10,6 +10,7 @@ import ch.abwesend.foldervault.domain.cloud.ICloudStorageProvider
 import ch.abwesend.foldervault.domain.cloud.UploadContent
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.crypto.IFvc1Cipher
+import ch.abwesend.foldervault.domain.logging.FileNameRedactor
 import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.model.MessageSeverity
 import ch.abwesend.foldervault.domain.model.MessageType
@@ -97,7 +98,10 @@ class BackupUploader(
 
         val folderResult = folderCache.ensurePath(config.cloudSubFolderId, folderPath)
         if (folderResult is ErrorResult) {
-            log.warning("Could not ensure remote folder for ${task.relativePath}: ${folderResult.error}")
+            log.warning(
+                "Could not ensure remote folder for ${FileNameRedactor.redactPath(task.relativePath)}: " +
+                    "${folderResult.error}"
+            )
             summary.filesFailed++
             return
         }
@@ -135,7 +139,9 @@ class BackupUploader(
             ) ?: return // auth-lost or quota — summary flags set; caller will skip subsequent tasks
 
             if (uploadResult is ErrorResult) {
-                log.warning("Upload failed for ${task.relativePath}: ${uploadResult.error}")
+                log.warning(
+                    "Upload failed for ${FileNameRedactor.redactPath(task.relativePath)}: ${uploadResult.error}"
+                )
                 summary.filesFailed++
                 emitMessage(config, runId, MessageSeverity.WARNING, MessageType.UPLOAD_FAILED)
                 return
@@ -217,7 +223,7 @@ class BackupUploader(
             true
         } catch (e: Exception) {
             e.rethrowCancellation()
-            log.warning("Failed to prepare local file for ${task.relativePath}", e)
+            log.warning("Failed to prepare local file for ${FileNameRedactor.redactPath(task.relativePath)}", e)
             false
         }
     }

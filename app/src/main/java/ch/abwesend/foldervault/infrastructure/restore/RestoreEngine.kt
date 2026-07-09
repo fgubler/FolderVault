@@ -43,6 +43,13 @@ class RestoreEngine(
 
     private data class SourceFileEntry(val relativePath: String, val documentFile: DocumentFile)
 
+    /** Outcome of resolving an output file: a deliberate skip, an unexpected failure, or a target. */
+    private sealed interface OutputResolution {
+        data class Resolved(val file: DocumentFile) : OutputResolution
+        object Skip : OutputResolution
+        object Failed : OutputResolution
+    }
+
     override suspend fun scanSourceFolder(sourceUri: String): RestoreScanResult =
         withContext(dispatchers.io) {
             var cryptCount = 0
@@ -91,24 +98,26 @@ class RestoreEngine(
 
             val isCrypt = entry.relativePath.endsWith(CRYPT_SUFFIX)
             val outputRelPath = RestorePathResolver.outputRelativePath(entry.relativePath, isCrypt)
-            val outputFile = resolveOutputFile(outputRoot, outputRelPath, collisionPolicy)
 
-            if (outputFile == null) {
-                skipped++
-                continue
-            }
+            when (val resolution = resolveOutputFile(outputRoot, outputRelPath, collisionPolicy)) {
+                is OutputResolution.Skip -> skipped++
+                is OutputResolution.Failed -> failed++
+                is OutputResolution.Resolved -> {
+                    val outputFile = resolution.file
+                    val success = if (isCrypt) {
+                        val key = keyFor(entry.documentFile, password, keyCache)
+                        key != null && decryptEntry(entry.documentFile, outputFile, key)
+                    } else {
+                        copyEntry(entry.documentFile, outputFile)
+                    }
 
-            val success = if (isCrypt) {
-                val key = keyFor(entry.documentFile, password, keyCache)
-                if (key == null) false else decryptEntry(entry.documentFile, outputFile, key)
-            } else {
-                copyEntry(entry.documentFile, outputFile)
-            }
-
-            if (success) {
-                if (isCrypt) decrypted++ else copied++
-            } else {
-                failed++
+                    if (success) {
+                        if (isCrypt) decrypted++ else copied++
+                    } else {
+                        deletePartialOutput(outputFile)
+                        failed++
+                    }
+                }
             }
         }
 
@@ -196,11 +205,18 @@ class RestoreEngine(
             null
         }
 
+    /**
+     * Resolves the concrete output [DocumentFile] for a source entry, applying [policy] on
+     * collision. Distinguishes three outcomes so the caller can count them correctly (BUG-7):
+     * [OutputResolution.Skip] (a deliberate SKIP), [OutputResolution.Failed] (an operation that
+     * should have worked but didn't — directory or file creation failed, or an OVERWRITE delete
+     * was rejected), and [OutputResolution.Resolved].
+     */
     private fun resolveOutputFile(
         outputRoot: DocumentFile,
         relPath: String,
         policy: RestoreCollisionPolicy,
-    ): DocumentFile? {
+    ): OutputResolution {
         val parts = relPath.split("/")
         val fileName = parts.last()
         val dirParts = parts.dropLast(1)
@@ -209,22 +225,37 @@ class RestoreEngine(
         for (part in dirParts) {
             dir = dir.findFile(part)?.takeIf { it.isDirectory }
                 ?: dir.createDirectory(part)
-                ?: return null
+                ?: return OutputResolution.Failed
         }
 
         val existing = dir.findFile(fileName)
         return when {
-            existing == null -> dir.createFile(MIME_OCTET_STREAM, fileName)
-            policy == RestoreCollisionPolicy.SKIP -> null
-            policy == RestoreCollisionPolicy.OVERWRITE -> {
-                existing.delete()
-                dir.createFile(MIME_OCTET_STREAM, fileName)
-            }
-            else -> {
-                val newName = RestorePathResolver.resolvedName(fileName, policy) ?: return null
-                dir.createFile(MIME_OCTET_STREAM, newName)
-            }
+            existing == null -> createOutput(dir, fileName)
+            policy == RestoreCollisionPolicy.SKIP -> OutputResolution.Skip
+            policy == RestoreCollisionPolicy.OVERWRITE ->
+                if (existing.delete()) createOutput(dir, fileName) else OutputResolution.Failed
+            else -> resolveWithSuffix(dir, fileName)
         }
+    }
+
+    private fun createOutput(dir: DocumentFile, name: String): OutputResolution =
+        dir.createFile(MIME_OCTET_STREAM, name)
+            ?.let { OutputResolution.Resolved(it) }
+            ?: OutputResolution.Failed
+
+    /**
+     * For [RestoreCollisionPolicy.RENAME_WITH_SUFFIX], loops `_restored`, `_restored_2`, … until a
+     * name that does not already exist is found, so a repeated restore does not silently collide
+     * with a previously restored copy (BUG-7).
+     */
+    private fun resolveWithSuffix(dir: DocumentFile, fileName: String): OutputResolution {
+        var index = 1
+        var candidate = RestorePathResolver.indexedRestoreName(fileName, index)
+        while (dir.findFile(candidate) != null) {
+            index++
+            candidate = RestorePathResolver.indexedRestoreName(fileName, index)
+        }
+        return createOutput(dir, candidate)
     }
 
     private fun decryptEntry(source: DocumentFile, output: DocumentFile, key: SecretKey): Boolean =
@@ -237,4 +268,22 @@ class RestoreEngine(
             input.copyTo(out)
             true
         }
+
+    /**
+     * Best-effort removal of a partially written output file after a failed decrypt/copy. Without
+     * this the user is left with a truncated plaintext file that is indistinguishable from a good
+     * one and counted only in `failed` (BUG-7).
+     */
+    private fun deletePartialOutput(output: DocumentFile) {
+        val deleted = try {
+            output.delete()
+        } catch (e: Exception) {
+            e.rethrowCancellation()
+            logger.warning("Failed to delete partial output ${FileNameRedactor.redact(output.name.orEmpty())}", e)
+            false
+        }
+        if (!deleted) {
+            logger.warning("Could not delete partial output ${FileNameRedactor.redact(output.name.orEmpty())}")
+        }
+    }
 }

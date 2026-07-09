@@ -9,11 +9,21 @@
     <!-- Optional: observe network state changes for scheduling hints -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!--
+        Android Auto Backup is disabled on purpose (BUG-11). The Room DB (foldervault.db) stores
+        each backup config's password encrypted with a non-exportable AndroidKeyStore key, plus
+        device-local SAF tree URIs and cloud-auth identifiers. None of that survives a move to
+        another device: the Keystore key is gone on the new device (so the password blob becomes
+        permanently undecryptable) and the SAF grants / auth are invalid there. Rather than
+        restore a database full of dead, misleading state - or leak account ids and the full file
+        index to Google's cloud backup unencrypted - we back up nothing at all. A returning user
+        re-creates their backup configs and pulls their files back via the in-app restore flow,
+        which only needs the backup password. That is why the dataExtractionRules /
+        fullBackupContent rule files were removed: they are ignored while allowBackup is false.
+    -->
     <application
         android:name=".FolderVaultApp"
-        android:allowBackup="true"
-        android:dataExtractionRules="@xml/data_extraction_rules"
-        android:fullBackupContent="@xml/backup_rules"
+        android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"

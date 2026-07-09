@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       # Set Current Date As Env Variable
       - name: Set current date as env variable
@@ -33,7 +33,7 @@ jobs:
         run: echo "repository_name=$(echo '${{ github.repository }}' | awk -F '/' '{print $2}')" >> $GITHUB_ENV
 
       - name: Set Up JDK
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
@@ -68,7 +68,7 @@ jobs:
       # 2. Releases are considered part of repository contents in GitHub's permission model
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       # Set Current Date As Env Variable
       - name: Set current date as env variable
@@ -79,7 +79,7 @@ jobs:
         run: echo "repository_name=$(echo '${{ github.repository }}' | awk -F '/' '{print $2}')" >> $GITHUB_ENV
 
       - name: Set Up JDK
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
@@ -91,6 +91,10 @@ jobs:
       - name: Create dummy google-services.json
         uses: ./.github/actions/setup-dummy-firebase-config
 
+      # The release build type intentionally has NO signingConfig: we do not keep a signing key
+      # in CI. assembleRelease therefore produces app-release-unsigned.apk, which must be signed
+      # locally (apksigner / Android Studio) before it can be installed. This is a deliberate
+      # trade-off, documented in the release notes below (BUG-13).
       - name: Build Release APK
         run: ./gradlew assembleRelease
 
@@ -151,7 +155,7 @@ jobs:
 
       - name: Create Draft Release with APKs
         if: env.TAG_EXISTS == 'false'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.VERSION_TAG }}
           name: Automated Release for v${{ env.VERSION_NAME }} (${{ env.VERSION_CODE }}) on ${{ env.date_today }}
@@ -162,6 +166,9 @@ jobs:
 
             ## APK Files
             This release contains the default release APK.
+
+            ⚠️ **The APK is unsigned.** No signing key is kept in CI, so `app-release-unsigned.apk`
+            must be signed locally (`apksigner` or Android Studio) before Android will install it.
           draft: true
           prerelease: false
           files: |

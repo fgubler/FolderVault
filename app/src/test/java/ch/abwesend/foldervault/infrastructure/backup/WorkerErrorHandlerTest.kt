@@ -64,4 +64,16 @@ class WorkerErrorHandlerTest : StringSpec({
         handler.retryOrGiveUp(runAttemptCount = WorkerErrorHandler.MAX_RETRY_COUNT) shouldBe Result.failure()
         handler.retryOrGiveUp(runAttemptCount = WorkerErrorHandler.MAX_RETRY_COUNT + 1) shouldBe Result.failure()
     }
+
+    "retryOrGiveUp honors a lower auth cap for auth loss" {
+        val handler = WorkerErrorHandler()
+        val authCap = WorkerErrorHandler.MAX_AUTH_RETRY_COUNT
+
+        handler.retryOrGiveUp(runAttemptCount = authCap - 1, maxRetryCount = authCap) shouldBe Result.retry()
+        handler.retryOrGiveUp(runAttemptCount = authCap, maxRetryCount = authCap) shouldBe Result.failure()
+    }
+
+    "the auth retry cap is lower than the general cap" {
+        (WorkerErrorHandler.MAX_AUTH_RETRY_COUNT < WorkerErrorHandler.MAX_RETRY_COUNT) shouldBe true
+    }
 })

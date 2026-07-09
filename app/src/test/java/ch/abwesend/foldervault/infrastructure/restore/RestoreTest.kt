@@ -110,4 +110,17 @@ class RestoreTest : StringSpec({
         RestorePathResolver.resolvedName(".hidden", RestoreCollisionPolicy.RENAME_WITH_SUFFIX) shouldBe
             ".hidden_restored"
     }
+
+    "indexedRestoreName index 1 matches the plain _restored suffix" {
+        RestorePathResolver.indexedRestoreName("report.pdf", 1) shouldBe "report_restored.pdf"
+    }
+
+    "indexedRestoreName numbers subsequent collisions before the extension" {
+        RestorePathResolver.indexedRestoreName("report.pdf", 2) shouldBe "report_restored_2.pdf"
+        RestorePathResolver.indexedRestoreName("report.pdf", 3) shouldBe "report_restored_3.pdf"
+    }
+
+    "indexedRestoreName numbers extension-less names by appending" {
+        RestorePathResolver.indexedRestoreName("README", 2) shouldBe "README_restored_2"
+    }
 })

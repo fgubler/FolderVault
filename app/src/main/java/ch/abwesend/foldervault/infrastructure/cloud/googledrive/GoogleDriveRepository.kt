@@ -7,6 +7,7 @@ import ch.abwesend.foldervault.domain.cloud.CloudTransientException
 import ch.abwesend.foldervault.domain.cloud.ICloudStorageProvider
 import ch.abwesend.foldervault.domain.cloud.UploadContent
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
+import ch.abwesend.foldervault.domain.logging.FileNameRedactor
 import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.result.BinaryResult
 import ch.abwesend.foldervault.domain.result.runCatchingAsResult
@@ -72,7 +73,8 @@ class GoogleDriveRepository(private val drive: Drive) : ICloudStorageProvider {
                             mimeType = FOLDER_MIME_TYPE
                         }
                         val folder = drive.files().create(metadata).setFields("id, name").execute()
-                        logger.info("Created Drive root folder: ${folder.name} (${folder.id})")
+                        val safeName = FileNameRedactor.redact(folder.name.orEmpty())
+                        logger.info("Created Drive root folder: $safeName (${folder.id})")
                         CloudFolder(id = folder.id, name = folder.name)
                     }
                 }
@@ -146,7 +148,8 @@ class GoogleDriveRepository(private val drive: Drive) : ICloudStorageProvider {
                             parents = listOf(parentId)
                         }
                         val created = drive.files().create(metadata).setFields("id, name").execute()
-                        logger.info("Created Drive child folder: ${created.name} (${created.id})")
+                        val safeName = FileNameRedactor.redact(created.name.orEmpty())
+                        logger.info("Created Drive child folder: $safeName (${created.id})")
                         CloudFolder(id = created.id, name = created.name)
                     }
                 }
@@ -205,7 +208,8 @@ class GoogleDriveRepository(private val drive: Drive) : ICloudStorageProvider {
                     content.length?.let { streamContent.length = it }
                     val uploaded = drive.files().create(metadata, streamContent)
                         .setFields("id, name").execute()
-                    logger.info("Uploaded file to Drive: ${uploaded.name} (${uploaded.id})")
+                    val safeName = FileNameRedactor.redact(uploaded.name.orEmpty())
+                    logger.info("Uploaded file to Drive: $safeName (${uploaded.id})")
                     CloudFile(
                         id = uploaded.id ?: error("Drive did not return file id"),
                         name = uploaded.name ?: remoteName,
@@ -240,8 +244,9 @@ class GoogleDriveRepository(private val drive: Drive) : ICloudStorageProvider {
             .filter { it.id !in excludeIds }
         val winner = candidates.maxByOrNull { it.createdTime?.value ?: 0L } ?: return null
         if (candidates.size > 1) {
+            val safeName = FileNameRedactor.redact(remoteName)
             logger.warning(
-                "uploadFile retry found ${candidates.size} candidate files for '$remoteName' in " +
+                "uploadFile retry found ${candidates.size} candidate files for '$safeName' in " +
                     "parent $parentId — picking newest (${winner.id}); older entries left in place."
             )
         }

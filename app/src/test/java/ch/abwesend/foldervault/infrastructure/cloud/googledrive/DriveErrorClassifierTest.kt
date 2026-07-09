@@ -2,6 +2,7 @@ package ch.abwesend.foldervault.infrastructure.cloud.googledrive
 
 import ch.abwesend.foldervault.domain.cloud.CloudAuthException
 import ch.abwesend.foldervault.domain.cloud.CloudNotFoundException
+import ch.abwesend.foldervault.domain.cloud.CloudPermanentException
 import ch.abwesend.foldervault.domain.cloud.CloudQuotaExceededException
 import ch.abwesend.foldervault.domain.cloud.CloudRateLimitException
 import ch.abwesend.foldervault.domain.cloud.CloudTransientException
@@ -63,6 +64,47 @@ class DriveErrorClassifierTest : StringSpec({
     "reason matching is case-insensitive" {
         DriveErrorClassifier.classifyByCodeAndReason(403, "StorageQuotaExceeded", RuntimeException())
             .shouldBeInstanceOf<CloudQuotaExceededException>()
+    }
+
+    // ── 403 permission handling (SEC-5) ───────────────────────────────────────
+
+    listOf(
+        "insufficientPermissions",
+        "appNotAuthorizedToFile",
+        "forbidden",
+        "accessNotConfigured",
+    ).forEach { reason ->
+        "403 $reason → CloudAuthException" {
+            DriveErrorClassifier.classifyByCodeAndReason(403, reason, RuntimeException())
+                .shouldBeInstanceOf<CloudAuthException>()
+        }
+    }
+
+    "403 permission reason matching is case-insensitive" {
+        DriveErrorClassifier.classifyByCodeAndReason(403, "InsufficientPermissions", RuntimeException())
+            .shouldBeInstanceOf<CloudAuthException>()
+    }
+
+    "403 with an unrecognised reason → CloudPermanentException (not retried)" {
+        DriveErrorClassifier.classifyByCodeAndReason(403, "somethingUnknown", RuntimeException())
+            .shouldBeInstanceOf<CloudPermanentException>()
+    }
+
+    // ── Other 4xx are permanent, not transient (SEC-5) ────────────────────────
+
+    "400 badRequest → CloudPermanentException" {
+        DriveErrorClassifier.classifyByCodeAndReason(400, "badRequest", RuntimeException())
+            .shouldBeInstanceOf<CloudPermanentException>()
+    }
+
+    "405 → CloudPermanentException" {
+        DriveErrorClassifier.classifyByCodeAndReason(405, "", RuntimeException())
+            .shouldBeInstanceOf<CloudPermanentException>()
+    }
+
+    "409 conflict → CloudPermanentException" {
+        DriveErrorClassifier.classifyByCodeAndReason(409, "conflict", RuntimeException())
+            .shouldBeInstanceOf<CloudPermanentException>()
     }
 
     // ── classify() passthrough and IO ─────────────────────────────────────────

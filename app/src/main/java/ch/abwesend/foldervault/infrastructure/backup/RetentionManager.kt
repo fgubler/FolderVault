@@ -1,8 +1,10 @@
 package ch.abwesend.foldervault.infrastructure.backup
 
+import ch.abwesend.foldervault.domain.cloud.CloudNotFoundException
 import ch.abwesend.foldervault.domain.cloud.ICloudStorageProvider
 import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.model.RetentionPolicy
+import ch.abwesend.foldervault.domain.result.BinaryResult
 import ch.abwesend.foldervault.domain.result.ErrorResult
 import ch.abwesend.foldervault.domain.result.SuccessResult
 import ch.abwesend.foldervault.infrastructure.room.dao.UploadedFileIndexDao
@@ -49,9 +51,18 @@ class RetentionManager(
     }
 
     /**
-     * Retries the cloud-delete for any row that committed a CHANGED_OVERWRITE upload but
-     * failed to delete the predecessor object. Idempotent: Drive returning 404 for an
-     * already-gone file is treated as a success and the marker is cleared.
+     * Retries the cloud-delete for any row carrying a [pendingDeletionCloudFileId] marker.
+     * Two producers share this mechanism, distinguished by whether the marked object is the
+     * row's own [cloudFileId]:
+     * - **Overwrite predecessor** (marker != own `cloudFileId`): a CHANGED_OVERWRITE upload that
+     *   failed to delete its predecessor object. The row is still the current version, so only
+     *   the marker is cleared once the object is gone.
+     * - **Retention** (marker == own `cloudFileId`): [deleteCloudAndIndex] could not delete the
+     *   row's own object, so it kept the row instead of orphaning the file. Once the object is
+     *   gone the whole row is dropped.
+     *
+     * Idempotent: Drive returning 404 for an already-gone file is treated as a success (see
+     * [isGone]).
      */
     suspend fun reapPendingDeletions(configId: String) {
         val pending = uploadedFileIndexDao.getPendingDeletions(configId)
@@ -60,8 +71,12 @@ class RetentionManager(
         for (entry in pending) {
             val cloudFileId = entry.pendingDeletionCloudFileId ?: continue
             val deleteResult = cloudProvider.deleteFile(cloudFileId)
-            if (deleteResult is SuccessResult) {
-                uploadedFileIndexDao.clearPendingDeletion(entry.id)
+            if (isGone(deleteResult)) {
+                if (cloudFileId == entry.cloudFileId) {
+                    uploadedFileIndexDao.deleteById(entry.id)
+                } else {
+                    uploadedFileIndexDao.clearPendingDeletion(entry.id)
+                }
             } else {
                 log.warning(
                     "Reap: failed to delete $cloudFileId (row ${entry.id}) — will retry next run: " +
@@ -73,12 +88,27 @@ class RetentionManager(
 
     private suspend fun deleteCloudAndIndex(cloudFileId: String, indexId: Long) {
         val deleteResult = cloudProvider.deleteFile(cloudFileId)
-        if (deleteResult is ErrorResult) {
+        if (isGone(deleteResult)) {
+            uploadedFileIndexDao.deleteById(indexId)
+        } else {
+            // Do NOT drop the row: without it, nothing records that the cloud object exists and it
+            // is orphaned in Drive forever. Instead mark the row's own object pending so the
+            // end-of-run reaper retries the delete and only then removes the row.
             log.warning(
                 "Retention: failed to delete cloud file $cloudFileId" +
-                    " — removing index entry anyway: ${deleteResult.error}"
+                    " — keeping index entry and marking for reap: ${(deleteResult as ErrorResult).error}"
             )
+            uploadedFileIndexDao.markPendingDeletion(indexId, cloudFileId)
         }
-        uploadedFileIndexDao.deleteById(indexId)
     }
+
+    /**
+     * True when the cloud file is confirmed gone: either the delete succeeded, or Drive
+     * reported a 404 ([CloudNotFoundException]) for an already-removed file. Treating 404 as
+     * success keeps deletions idempotent so a file removed out-of-band (manually in Drive or by
+     * a race) does not leave a marker that is re-fetched and re-"deleted" on every run.
+     */
+    private fun isGone(deleteResult: BinaryResult<Unit, Exception>): Boolean =
+        deleteResult is SuccessResult ||
+            (deleteResult is ErrorResult && deleteResult.error is CloudNotFoundException)
 }

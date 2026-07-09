@@ -72,6 +72,23 @@ sealed class RunResult {
     data object SkippedConcurrentRun : RunResult()
 }
 
+/**
+ * Maps the terminal [summary] flags to the persisted [BackupRunStatus]. Extracted as a pure
+ * function so the outcome of each combination — in particular that an inaccessible source folder
+ * fails the run rather than reporting a silent, up-to-date success (BUG-4) — is unit-testable
+ * without the Android/SAF machinery a full run needs.
+ *
+ * Order matters: the first matching branch wins, from most to least severe.
+ */
+internal fun resolveRunStatus(summary: RunSummary): BackupRunStatus = when {
+    summary.authLost -> BackupRunStatus.FAILED
+    summary.sourceFolderInaccessible -> BackupRunStatus.FAILED
+    summary.hitTimeBudget -> BackupRunStatus.INITIAL_SYNC_IN_PROGRESS
+    summary.quotaExceeded && summary.filesUploaded == 0 -> BackupRunStatus.FAILED
+    summary.quotaExceeded || summary.filesFailed > 0 -> BackupRunStatus.COMPLETED_WITH_WARNINGS
+    else -> BackupRunStatus.UP_TO_DATE
+}
+
 class BackupRunner(
     private val context: Context,
     private val authorizer: ICloudAuthorizer,
@@ -200,14 +217,20 @@ class BackupRunner(
                 runId, stagingDir, folderCache, derivedKey, backupSalt, summary, deadline,
             )
             val retention = RetentionManager(uploadedFileIndexDao, cloudProvider)
-            if (!summary.authLost && !summary.quotaExceeded && !summary.hitTimeBudget) {
+            val cleanRun = !summary.authLost && !summary.quotaExceeded &&
+                !summary.hitTimeBudget && !summary.sourceFolderInaccessible
+            if (cleanRun) {
                 retention.applyRetention(config)
             }
             // Reap orphaned cloud files left behind by transient deleteFile failures during
             // CHANGED_OVERWRITE uploads. Independent of retention policy — runs whenever the
-            // cloud connection is still usable.
-            if (!summary.authLost) retention.reapPendingDeletions(config.id)
-            if (!summary.authLost) writeManifest(configId, cloudProvider)
+            // cloud connection is still usable. Skipped on an inaccessible source: that run
+            // failed before discovering anything, so it must not mutate the cloud or rewrite the
+            // manifest from a stale, unverified index.
+            if (!summary.authLost && !summary.sourceFolderInaccessible) {
+                retention.reapPendingDeletions(config.id)
+                writeManifest(configId, cloudProvider)
+            }
         } catch (e: CancellationException) {
             // Worker cancellation (timeout, constraints lost, user action) is expected — honor
             // structured concurrency and propagate, so it isn't recorded as a Crashlytics fatal.
@@ -249,17 +272,32 @@ class BackupRunner(
             return RunResult.FatalError(e, summary, runId)
         } finally {
             MessageRetentionManager(backupMessageDao).prune(config.id)
+            // Drop this run's staging dir promptly. Encrypted runs stage ciphertext here (unencrypted
+            // runs stream directly and stage nothing — see SEC-1); cleanupOldDirs stays as the safety
+            // net for hard kills that skip this finally.
+            runCatchingAsResult { stagingDir.deleteRecursively() }
+                .ifError { log.warning("Failed to delete staging dir for run $runId", it) }
         }
 
-        val status = when {
-            summary.authLost -> BackupRunStatus.FAILED
-            summary.hitTimeBudget -> BackupRunStatus.INITIAL_SYNC_IN_PROGRESS
-            summary.quotaExceeded && summary.filesUploaded == 0 -> BackupRunStatus.FAILED
-            summary.quotaExceeded || summary.filesFailed > 0 -> BackupRunStatus.COMPLETED_WITH_WARNINGS
-            else -> BackupRunStatus.UP_TO_DATE
+        val status = resolveRunStatus(summary)
+        val completedNormally = !summary.authLost && !summary.quotaExceeded &&
+            !summary.hitTimeBudget && !summary.sourceFolderInaccessible
+        if (summary.sourceFolderInaccessible) {
+            backupMessageDao.coalesceInsert(
+                BackupMessageEntity(
+                    backupConfigId = config.id,
+                    runId = runId,
+                    timestamp = System.currentTimeMillis(),
+                    severity = MessageSeverity.ERROR,
+                    type = MessageType.FOLDER_UNREADABLE,
+                    messageText = context.getString(MessageType.FOLDER_UNREADABLE.labelResId),
+                    formatArgs = emptyList(),
+                    relativePath = null,
+                    readAt = null,
+                )
+            )
         }
-        val cleanRun = !summary.authLost && !summary.quotaExceeded && !summary.hitTimeBudget
-        if (cleanRun && config.lastRunStatus == BackupRunStatus.INITIAL_SYNC_IN_PROGRESS) {
+        if (completedNormally && config.lastRunStatus == BackupRunStatus.INITIAL_SYNC_IN_PROGRESS) {
             backupMessageDao.coalesceInsert(
                 BackupMessageEntity(
                     backupConfigId = config.id,
@@ -279,10 +317,21 @@ class BackupRunner(
             runId = runId,
             status = status,
             summary = summary,
-            completedNormally = !summary.authLost && !summary.quotaExceeded && !summary.hitTimeBudget,
+            completedNormally = completedNormally,
         )
 
-        return if (summary.authLost) RunResult.AuthLost(summary, runId) else RunResult.Success(summary, runId)
+        return when {
+            summary.authLost -> RunResult.AuthLost(summary, runId)
+            // An inaccessible source folder is a fatal condition for this run: report FAILURE (so
+            // the completion notification and worker result both reflect failure, and WorkManager
+            // does not retry a condition only the user can fix) rather than a misleading Success.
+            summary.sourceFolderInaccessible -> RunResult.FatalError(
+                IllegalStateException("Source folder is inaccessible for config $configId"),
+                summary,
+                runId,
+            )
+            else -> RunResult.Success(summary, runId)
+        }
     }
 
     private suspend fun writeManifest(configId: String, cloudProvider: ICloudStorageProvider) {
@@ -366,7 +415,7 @@ class BackupRunner(
             launch {
                 try {
                     filesDiscovered = analyzer.analyze(
-                        config, normalChannel, oversizedChannel, fileSizeLimitBytes, runId, folderCache,
+                        config, normalChannel, oversizedChannel, fileSizeLimitBytes, runId, folderCache, summary,
                     )
                 } finally {
                     normalChannel.close()

@@ -11,5 +11,12 @@ class RunSummary {
     var authLost: Boolean = false
     var quotaExceeded: Boolean = false
     var hitTimeBudget: Boolean = false
+
+    /**
+     * Set when the source folder could not be accessed at all (deleted, or its persisted SAF
+     * permission was revoked). Distinct from "the folder is empty": an inaccessible source must
+     * fail the run, not report a silent, up-to-date success with zero files (BUG-4).
+     */
+    var sourceFolderInaccessible: Boolean = false
     var consecutiveQuotaCount: Int = 0
 }

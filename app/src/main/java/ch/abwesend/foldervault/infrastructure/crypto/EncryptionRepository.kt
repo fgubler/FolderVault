@@ -36,6 +36,19 @@ class EncryptionRepository : IEncryptionRepository {
         internal const val PBKDF2_ITERATIONS = 310_000
         internal const val PBKDF2_SALT_LENGTH_BYTES = 16
         private const val JSON_VERSION = 1
+
+        /**
+         * Whitelist of the fixed crypto parameters each persisted [EncryptedPasswordPayload.version]
+         * is defined to use. [decryptPassword] switches on the stored *version* — never on the stored
+         * algorithm string — and instantiates the cipher from the constants a version maps to here.
+         *
+         * This closes the algorithm-confusion anti-pattern (`Cipher.getInstance(dataFromBlob)`) while
+         * preserving forward-compatibility: introducing a new on-disk format is a single new row, and
+         * every existing blob keeps decrypting under its own version's entry.
+         */
+        private val SUPPORTED_PASSWORD_FORMATS: Map<Int, PasswordFormat> = mapOf(
+            JSON_VERSION to PasswordFormat(AES_GCM_TRANSFORMATION, GCM_TAG_LENGTH_BITS),
+        )
     }
 
     // ---- Password storage (KeyStore-backed AES-256-GCM) ----
@@ -58,9 +71,17 @@ class EncryptionRepository : IEncryptionRepository {
     override fun decryptPassword(encryptedPassword: String): BinaryResult<String, Exception> = runCatchingAsResult {
         val key = keyStoreRepository.getKey() ?: error("No KeyStore key available")
         val payload = Json.decodeFromString<EncryptedPasswordPayload>(encryptedPassword)
+        val format = SUPPORTED_PASSWORD_FORMATS[payload.version]
+            ?: error("Unsupported encrypted-password version: ${payload.version}")
+        // The stored algorithm/tagLength are treated as metadata to sanity-check, never as the source
+        // of truth: the cipher is always instantiated from the trusted constants the version maps to.
+        // This prevents an algorithm-confusion / downgrade via a tampered blob (see SEC-2).
+        require(payload.algorithm == format.algorithm && payload.tagLength == format.tagLengthBits) {
+            "Encrypted-password payload is inconsistent with version ${payload.version}"
+        }
         val decoder = Base64.getDecoder()
-        val cipher = Cipher.getInstance(payload.algorithm).apply {
-            init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(payload.tagLength, decoder.decode(payload.iv)))
+        val cipher = Cipher.getInstance(format.algorithm).apply {
+            init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(format.tagLengthBits, decoder.decode(payload.iv)))
         }
         cipher.doFinal(decoder.decode(payload.ciphertext)).toString(Charsets.UTF_8)
     }.ifError { logger.error("Password decryption failed", it) }
@@ -86,6 +107,11 @@ class EncryptionRepository : IEncryptionRepository {
         val key = deriveKey(password, header.salt, header.iterations, AES_KEY_SIZE_BITS)
         Cipher.getInstance(AES_GCM_TRANSFORMATION).apply {
             init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_LENGTH_BITS, header.iv))
+            // Version-2 files bind the header as AAD, so the probe must supply it too — otherwise a
+            // correct password would fail the GCM tag check and be misreported as invalid (SEC-3).
+            if (header.version >= Fvc1Header.VERSION_WITH_AAD) {
+                updateAAD(header.headerBytes)
+            }
         }.doFinal(firstCiphertextBlock)
         Unit
     }.mapError { e -> classifyDecryptionError(e) }
@@ -100,6 +126,9 @@ class EncryptionRepository : IEncryptionRepository {
 
     internal fun generateRandomBytes(size: Int): ByteArray = ByteArray(size).also { SecureRandom().nextBytes(it) }
 }
+
+/** Immutable crypto parameters that a given password-blob version is defined to use (see SEC-2). */
+private data class PasswordFormat(val algorithm: String, val tagLengthBits: Int)
 
 @Serializable
 private data class EncryptedPasswordPayload(

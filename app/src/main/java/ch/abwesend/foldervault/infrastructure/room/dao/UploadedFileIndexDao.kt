@@ -46,6 +46,9 @@ interface UploadedFileIndexDao {
     @Query("UPDATE UploadedFileIndex SET pendingDeletionCloudFileId = NULL WHERE id = :id")
     suspend fun clearPendingDeletion(id: Long)
 
+    @Query("UPDATE UploadedFileIndex SET pendingDeletionCloudFileId = :cloudFileId WHERE id = :id")
+    suspend fun markPendingDeletion(id: Long, cloudFileId: String)
+
     @Query(
         """SELECT * FROM UploadedFileIndex
            WHERE backupConfigId = :configId AND pendingDeletionCloudFileId IS NOT NULL"""

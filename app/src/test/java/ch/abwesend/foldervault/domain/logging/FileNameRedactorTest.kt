@@ -63,4 +63,35 @@ class FileNameRedactorTest : StringSpec({
     "redactPath handles dotfiles in path" {
         FileNameRedactor.redactPath("project/.env") shouldBe "p***/.***"
     }
+
+    // ── redactPathsIn ───────────────────────────────────────────────────────────
+
+    "redactPathsIn leaves a slash-free sentence completely untouched" {
+        val message = "Backup run for config 1234 lost auth; retrying"
+        FileNameRedactor.redactPathsIn(message) shouldBe message
+    }
+
+    "redactPathsIn redacts only the path token and keeps the surrounding words" {
+        FileNameRedactor.redactPathsIn("Failed to prepare local file for photos/2024/img.jpg") shouldBe
+            "Failed to prepare local file for p***/2***/i***.jpg"
+    }
+
+    "redactPathsIn preserves trailing punctuation after a path token" {
+        FileNameRedactor.redactPathsIn("Upload failed for photos/img.jpg: timeout") shouldBe
+            "Upload failed for p***/i***.jpg: timeout"
+    }
+
+    "redactPathsIn does not mangle fully-qualified class names (no slash)" {
+        val message = "com.google.api.client.http.HttpResponseException: 404 Not Found"
+        FileNameRedactor.redactPathsIn(message) shouldBe message
+    }
+
+    "redactPathsIn redacts an absolute filesystem path" {
+        FileNameRedactor.redactPathsIn("Permission denied: /storage/emulated/0/DCIM/priv.jpg") shouldBe
+            "Permission denied: /s***/e***/0***/D***/p***.jpg"
+    }
+
+    "redactPathsIn returns empty string for empty input" {
+        FileNameRedactor.redactPathsIn("") shouldBe ""
+    }
 })

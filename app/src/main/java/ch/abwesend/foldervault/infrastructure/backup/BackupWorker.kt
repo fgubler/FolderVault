@@ -136,8 +136,11 @@ class BackupWorker(
                     }
                 }
                 is RunResult.AuthLost -> {
+                    // Auth loss needs user re-consent, so give up after a low cap instead of
+                    // hammering the auth stack for 20 backed-off attempts (BUG-9). A problem
+                    // notification is already posted, so the user knows action is required.
                     logger.warning("Backup run for $id lost auth; retrying with WorkManager backoff")
-                    errorHandler.retryOrGiveUp(runAttemptCount)
+                    errorHandler.retryOrGiveUp(runAttemptCount, WorkerErrorHandler.MAX_AUTH_RETRY_COUNT)
                 }
                 is RunResult.FatalError -> {
                     logger.error("Backup run for $id failed fatally", result.error)

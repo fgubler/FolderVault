@@ -13,6 +13,7 @@ import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.network.INetworkConnectivityChecker
 import ch.abwesend.foldervault.domain.result.SuccessResult
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
+import ch.abwesend.foldervault.domain.storage.ReleaseSafPermissionIfUnusedUseCase
 import ch.abwesend.foldervault.domain.system.IChargingStateChecker
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -37,6 +38,7 @@ class BackupDetailViewModel(
     private val settingsRepo: IAppSettingsRepository,
     private val connectivityChecker: INetworkConnectivityChecker,
     private val chargingChecker: IChargingStateChecker,
+    private val releaseSafPermissionIfUnused: ReleaseSafPermissionIfUnusedUseCase,
 ) : BaseViewModel() {
 
     val config: StateFlow<BackupConfig?> = configRepo.getById(configId)
@@ -200,10 +202,20 @@ class BackupDetailViewModel(
 
     fun dismissAll() = safeLaunch { messageRepo.dismissAllForConfig(configId) }
 
+    /**
+     * Deletes the config and everything tied to it, then hands back the folder's persisted SAF
+     * grant if no other config still uses it (BUG-12). Order matters: the config is removed first
+     * so it can no longer count as a user of its own tree URI, and it is additionally excluded from
+     * the in-use check to be robust against the delete not yet having propagated to the flow.
+     */
     fun deleteBackup() = safeLaunch {
+        val sourceTreeUri = config.value?.sourceTreeUri
         scheduler.cancel(configId)
         messageRepo.deleteAllForConfig(configId)
         configRepo.deleteById(configId)
+        if (sourceTreeUri != null) {
+            releaseSafPermissionIfUnused(sourceTreeUri, excludingConfigId = configId)
+        }
         _events.emit(DetailEvent.Deleted)
     }
 }

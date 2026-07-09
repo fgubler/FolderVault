@@ -10,7 +10,7 @@ FolderVault lets you set up **any number of independent backups**. Each backup c
 - **Multiple backups**: define several, each mapping a different folder to its own cloud destination, managed and scheduled independently.
 - **Set-and-forget**: pick a folder once; new files get uploaded automatically on the configured schedule.
 - **Incremental**: only new or changed files are uploaded. Unchanged files are never re-sent.
-- **Safe**: it never deletes anything in the cloud. Deleting locally does not delete the backup.
+- **Safe by default**: cloud files are never deleted on their own, and deleting a file locally never deletes its backup. Cloud files are only ever removed when *you* opt in — by choosing the "overwrite changed files" policy or a retention policy that prunes old versions.
 - **Private**: optional AES-256-GCM client-side encryption — the cloud provider sees only encrypted bytes.
 
 ### Limitations (honest)
@@ -22,7 +22,7 @@ FolderVault lets you set up **any number of independent backups**. Each backup c
 ## Setup
 
 ### Prerequisites
-- Android 7.0 (API 24) or later
+- Android 8.0 (API 26) or later
 - A Google account for Google Drive storage
 
 ### Firebase configuration

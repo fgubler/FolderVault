@@ -16,3 +16,12 @@ class CloudTransientException(message: String = "Transient cloud error", cause: 
 
 class CloudNotFoundException(message: String = "Cloud resource not found", cause: Throwable? = null) :
     CloudException(message, cause)
+
+/**
+ * A permanent, non-retryable cloud failure (e.g. HTTP 400 `badRequest`, or another 4xx that is
+ * neither auth, not-found, rate-limit nor quota). Unlike [CloudTransientException] it is NOT caught
+ * by `DriveRetryPolicy`, so it fails fast instead of burning three backoff-spaced retries on a
+ * request that can never succeed as-is (SEC-5).
+ */
+class CloudPermanentException(message: String = "Permanent cloud error", cause: Throwable? = null) :
+    CloudException(message, cause)

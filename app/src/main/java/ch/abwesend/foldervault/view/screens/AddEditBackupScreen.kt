@@ -345,6 +345,7 @@ private fun AddEditContent(
         HorizontalDivider()
         EncryptionSection(
             enabled = form.encryptionEnabled,
+            locked = form.encryptionSettingsLocked,
             password = form.password,
             passwordConfirm = form.passwordConfirm,
             onToggle = onEncryptionToggle,
@@ -584,6 +585,7 @@ private fun RetentionCountField(
 @Composable
 private fun EncryptionSection(
     enabled: Boolean,
+    locked: Boolean,
     password: String,
     passwordConfirm: String,
     onToggle: (Boolean) -> Unit,
@@ -597,9 +599,16 @@ private fun EncryptionSection(
             title = stringResource(R.string.info_encryption_title),
             body = stringResource(R.string.info_encryption_body),
         )
-        Switch(checked = enabled, onCheckedChange = onToggle)
+        // Locked after creation: the password can't be changed on an existing encrypted config (INC-3).
+        Switch(checked = enabled, onCheckedChange = onToggle, enabled = !locked)
     }
-    if (enabled) {
+    if (locked) {
+        Text(
+            stringResource(R.string.info_encryption_password_locked),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    } else if (enabled) {
         Text(
             stringResource(R.string.warning_encryption_password),
             style = MaterialTheme.typography.bodySmall,
@@ -646,6 +655,32 @@ private fun AddEditBackupScreenPreview() {
     FolderVaultTheme {
         AddEditContent(
             form = AddEditFormState(displayName = "My documents", encryptionEnabled = true),
+            onDisplayNameChange = {},
+            onPickFolder = {},
+            onConnectDrive = {},
+            onScheduleChange = {},
+            onChangedFilePolicyChange = {},
+            onNetworkPolicyChange = {},
+            onRequiresChargingChange = {},
+            onEncryptionToggle = {},
+            onPasswordChange = {},
+            onPasswordConfirmChange = {},
+            onRetentionChange = {},
+        )
+    }
+}
+
+@Preview(showBackground = true, name = "Edit – encryption password locked")
+@Composable
+private fun AddEditBackupScreenLockedEncryptionPreview() {
+    FolderVaultTheme {
+        AddEditContent(
+            form = AddEditFormState(
+                displayName = "My documents",
+                encryptionEnabled = true,
+                encryptionSettingsLocked = true,
+                isEditMode = true,
+            ),
             onDisplayNameChange = {},
             onPickFolder = {},
             onConnectDrive = {},

@@ -19,9 +19,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -32,6 +32,7 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -76,7 +77,10 @@ fun HomeScreen(
                 title = { Text(stringResource(R.string.home_title)) },
                 actions = {
                     IconButton(onClick = onOpenRestore) {
-                        Icon(Icons.Default.Restore, contentDescription = stringResource(R.string.home_cd_restore))
+                        Icon(
+                            Icons.Default.CloudDownload,
+                            contentDescription = stringResource(R.string.home_cd_restore),
+                        )
                     }
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.home_cd_settings))
@@ -91,7 +95,10 @@ fun HomeScreen(
         },
     ) { innerPadding ->
         if (configs.isEmpty()) {
-            HomeEmptyState(modifier = Modifier.padding(innerPadding))
+            HomeEmptyState(
+                onOpenRestore = onOpenRestore,
+                modifier = Modifier.padding(innerPadding),
+            )
         } else {
             LazyColumn(
                 contentPadding = innerPadding,
@@ -113,8 +120,17 @@ fun HomeScreen(
     }
 }
 
+/**
+ * Empty home screen. Besides the "create your first backup" hint it offers a direct restore
+ * shortcut: since app data is never carried to a new device (Auto Backup is disabled, see the
+ * manifest / BUG-11), a returning user lands here with no configs and needs an obvious way to
+ * pull their files back from an existing cloud backup without hunting through the top bar.
+ */
 @Composable
-private fun HomeEmptyState(modifier: Modifier = Modifier) {
+private fun HomeEmptyState(
+    onOpenRestore: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(
@@ -134,6 +150,22 @@ private fun HomeEmptyState(modifier: Modifier = Modifier) {
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.outlineVariant,
             )
+            Spacer(modifier = Modifier.height(32.dp))
+            Text(
+                stringResource(R.string.home_empty_restore_hint),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(onClick = onOpenRestore) {
+                Icon(
+                    Icons.Default.CloudDownload,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(stringResource(R.string.home_empty_restore_action))
+            }
         }
     }
 }
@@ -268,7 +300,7 @@ private fun BackupSchedule.labelResId(): Int = when (this) {
 @Composable
 private fun HomeScreenPreview() {
     FolderVaultTheme {
-        HomeEmptyState()
+        HomeEmptyState(onOpenRestore = {})
     }
 }
 

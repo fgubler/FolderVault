@@ -105,6 +105,8 @@
     <string name="home_cd_paused">Disabled</string>
     <string name="home_empty_title">No backups yet</string>
     <string name="home_empty_subtitle">Tap + to create your first backup</string>
+    <string name="home_empty_restore_hint">Already used FolderVault on another device?</string>
+    <string name="home_empty_restore_action">Restore your data</string>
     <string name="home_status_paused">Disabled</string>
     <string name="home_status_initial_sync">Initial backup: %1$d / %2$d files — continues in next run</string>
     <string name="home_status_running">Running…</string>
@@ -145,6 +147,7 @@
     <string name="label_keep_newer_than_days">Keep files newer than (days)</string>
     <string name="label_encrypt_backup">Encrypt backup</string>
     <string name="warning_encryption_password">Warning: If you forget the password, the backup cannot be recovered.</string>
+    <string name="info_encryption_password_locked">The password is set when the backup is created and can\'t be changed here. Changing it would leave already-uploaded files locked with the old password. To use a different password, delete this backup and create a new one.</string>
     <string name="label_password">Password</string>
     <string name="label_confirm_password">Confirm password</string>
     <string name="button_save">Save</string>

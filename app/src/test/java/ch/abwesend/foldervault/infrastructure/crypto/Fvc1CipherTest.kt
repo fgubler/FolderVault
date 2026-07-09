@@ -172,7 +172,7 @@ class Fvc1CipherTest : StringSpec({
         val ciphertext = encryptBytes(salt, key, plaintext)
 
         val header = Fvc1Header.readFrom(ByteArrayInputStream(ciphertext))
-        header.version shouldBe 1
+        header.version shouldBe 2
         header.kdfId shouldBe 1
         header.iterations shouldBe 310_000
         header.salt.size shouldBe 16
@@ -216,8 +216,45 @@ class Fvc1CipherTest : StringSpec({
     // ── Header validation rejects malformed / unsupported fields (BUG-5) ──────
 
     "an unsupported header version is rejected as INVALID_FILE" {
+        // Versions 1 and 2 are understood; 3 is not.
         val key = cipher.deriveKey(password, cipher.generateBackupSalt())
-        (decryptBytes(key, buildBlob(version = 2)) as ErrorResult).error shouldBe DecryptionError.INVALID_FILE
+        (decryptBytes(key, buildBlob(version = 3)) as ErrorResult).error shouldBe DecryptionError.INVALID_FILE
+    }
+
+    // ── Header authentication as GCM AAD (SEC-3) ──────────────────────────────
+
+    "current encryption writes version-2 files that bind the header as AAD" {
+        val salt = cipher.generateBackupSalt()
+        val key = cipher.deriveKey(password, salt)
+        val ciphertext = encryptBytes(salt, key, plaintext)
+
+        Fvc1Header.readFrom(ByteArrayInputStream(ciphertext)).version shouldBe Fvc1Header.VERSION_WITH_AAD
+    }
+
+    "tampering with an authenticated header field (v2) fails decryption (SEC-3)" {
+        val salt = cipher.generateBackupSalt()
+        val key = cipher.deriveKey(password, salt)
+        val ciphertext = encryptBytes(salt, key, plaintext)
+        // Flip the low bit of the iterations field (offset 9): still an in-range, structurally valid
+        // header, but because v2 authenticates the header, the GCM tag must now reject it instead of
+        // silently trusting the altered bytes.
+        ciphertext[9] = (ciphertext[9].toInt() xor 0x01).toByte()
+
+        val result = decryptBytes(key, ciphertext)
+        (result as ErrorResult).error shouldBe DecryptionError.INVALID_PASSWORD
+    }
+
+    "a legacy version-1 file (no AAD) still decrypts (SEC-3 back-compat)" {
+        val salt = cipher.generateBackupSalt()
+        val iv = ByteArray(12) { 5 }
+        // encryptWithIterations builds a version-1 blob with a body encrypted without AAD.
+        val blob = encryptWithIterations(salt, iv, iterations = 310_000, data = plaintext)
+        Fvc1Header.readFrom(ByteArrayInputStream(blob)).version shouldBe Fvc1Header.VERSION_WITHOUT_AAD
+
+        val out = ByteArrayOutputStream()
+        val result = cipher.decryptFileWithPassword(password, ByteArrayInputStream(blob), out)
+        result.shouldBeInstanceOf<SuccessResult<*>>()
+        out.toByteArray() shouldBe plaintext
     }
 
     "an unknown KDF id is rejected as INVALID_FILE" {

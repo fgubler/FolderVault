@@ -107,6 +107,11 @@ class EncryptionRepository : IEncryptionRepository {
         val key = deriveKey(password, header.salt, header.iterations, AES_KEY_SIZE_BITS)
         Cipher.getInstance(AES_GCM_TRANSFORMATION).apply {
             init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_LENGTH_BITS, header.iv))
+            // Version-2 files bind the header as AAD, so the probe must supply it too — otherwise a
+            // correct password would fail the GCM tag check and be misreported as invalid (SEC-3).
+            if (header.version >= Fvc1Header.VERSION_WITH_AAD) {
+                updateAAD(header.headerBytes)
+            }
         }.doFinal(firstCiphertextBlock)
         Unit
     }.mapError { e -> classifyDecryptionError(e) }

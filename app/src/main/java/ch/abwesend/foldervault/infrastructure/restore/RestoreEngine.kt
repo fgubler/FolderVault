@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
+import ch.abwesend.foldervault.domain.crypto.Fvc1Header
 import ch.abwesend.foldervault.domain.crypto.IFvc1Cipher
 import ch.abwesend.foldervault.domain.logging.FileNameRedactor
 import ch.abwesend.foldervault.domain.logging.logger
@@ -19,6 +20,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import java.io.InputStream
 import java.io.OutputStream
+import java.util.Base64
+import javax.crypto.SecretKey
 
 class RestoreEngine(
     context: Context,
@@ -68,10 +71,13 @@ class RestoreEngine(
 
         if (files.isEmpty()) return@withContext RestoreResult.Success(0, 0, 0, 0)
 
-        val firstCrypt = files.firstOrNull { it.relativePath.endsWith(CRYPT_SUFFIX) }
-        if (firstCrypt != null && !verifyPassword(firstCrypt, password)) {
-            return@withContext RestoreResult.InvalidPassword
-        }
+        // PBKDF2 (310k iterations) costs ~0.5–2 s per derivation, so derive lazily once per
+        // distinct salt + iteration count and reuse across every file that shares it. A folder
+        // normally has a single salt, but merged backups may mix several (BUG-6).
+        val keyCache = mutableMapOf<String, SecretKey>()
+
+        val invalidPassword = !verifyProbePassword(files, password, keyCache)
+        if (invalidPassword) return@withContext RestoreResult.InvalidPassword
 
         var decrypted = 0
         var copied = 0
@@ -93,7 +99,8 @@ class RestoreEngine(
             }
 
             val success = if (isCrypt) {
-                decryptEntry(entry.documentFile, outputFile, password)
+                val key = keyFor(entry.documentFile, password, keyCache)
+                if (key == null) false else decryptEntry(entry.documentFile, outputFile, key)
             } else {
                 copyEntry(entry.documentFile, outputFile)
             }
@@ -138,9 +145,55 @@ class RestoreEngine(
             false
         }
 
-    private fun verifyPassword(entry: SourceFileEntry, password: String): Boolean =
+    /**
+     * Verifies the password against the *smallest* `.crypt` file, deriving its key into [cache]
+     * for later reuse. Probing the smallest file matters because a full GCM decrypt must read to
+     * the tag at the end — picking the first file could mean decrypting a multi-GB video just to
+     * check the password (BUG-6). Returns `true` when there is nothing encrypted to verify.
+     */
+    private fun verifyProbePassword(
+        files: List<SourceFileEntry>,
+        password: String,
+        cache: MutableMap<String, SecretKey>,
+    ): Boolean {
+        val probe = files
+            .filter { it.relativePath.endsWith(CRYPT_SUFFIX) }
+            .minByOrNull { it.documentFile.length() }
+        return if (probe == null) {
+            true
+        } else {
+            val key = keyFor(probe.documentFile, password, cache)
+            key != null && verifyPassword(probe, key)
+        }
+    }
+
+    private fun verifyPassword(entry: SourceFileEntry, key: SecretKey): Boolean =
         withInputStream(entry.documentFile) { input ->
-            cipher.decryptFileWithPassword(password, input, NullOutputStream) is SuccessResult
+            cipher.decryptFile(key, input, NullOutputStream) is SuccessResult
+        }
+
+    /**
+     * Returns the AES key for [file], deriving it from the file's FVC1 header parameters on first
+     * use and caching it by `salt + iterations` so repeated files share one expensive derivation
+     * (BUG-6). Returns `null` if the header cannot be read.
+     */
+    private fun keyFor(
+        file: DocumentFile,
+        password: String,
+        cache: MutableMap<String, SecretKey>,
+    ): SecretKey? =
+        readHeader(file)?.let { header ->
+            val cacheKey = "${Base64.getEncoder().encodeToString(header.salt)}:${header.iterations}"
+            cache.getOrPut(cacheKey) { cipher.deriveKey(password, header.salt, header.iterations) }
+        }
+
+    private fun readHeader(file: DocumentFile): Fvc1Header? =
+        try {
+            context.contentResolver.openInputStream(file.uri)?.use { Fvc1Header.readFrom(it) }
+        } catch (e: Exception) {
+            e.rethrowCancellation()
+            logger.warning("Failed to read FVC1 header for ${FileNameRedactor.redact(file.name.orEmpty())}", e)
+            null
         }
 
     private fun resolveOutputFile(
@@ -174,9 +227,9 @@ class RestoreEngine(
         }
     }
 
-    private fun decryptEntry(source: DocumentFile, output: DocumentFile, password: String): Boolean =
+    private fun decryptEntry(source: DocumentFile, output: DocumentFile, key: SecretKey): Boolean =
         withStreams(source, output) { input, out ->
-            cipher.decryptFileWithPassword(password, input, out) is SuccessResult
+            cipher.decryptFile(key, input, out) is SuccessResult
         }
 
     private fun copyEntry(source: DocumentFile, output: DocumentFile): Boolean =

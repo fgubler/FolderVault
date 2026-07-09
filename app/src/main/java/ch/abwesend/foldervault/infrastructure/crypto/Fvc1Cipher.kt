@@ -38,8 +38,11 @@ class Fvc1Cipher : IFvc1Cipher {
     override fun generateBackupSalt(): ByteArray =
         ByteArray(PBKDF2_SALT_LENGTH_BYTES).also { SecureRandom().nextBytes(it) }
 
-    override fun deriveKey(password: String, salt: ByteArray): SecretKey {
-        val spec = PBEKeySpec(password.toCharArray(), salt, PBKDF2_ITERATIONS, AES_KEY_SIZE_BITS)
+    override fun deriveKey(password: String, salt: ByteArray): SecretKey =
+        deriveKey(password, salt, PBKDF2_ITERATIONS)
+
+    override fun deriveKey(password: String, salt: ByteArray, iterations: Int): SecretKey {
+        val spec = PBEKeySpec(password.toCharArray(), salt, iterations, AES_KEY_SIZE_BITS)
         val factory = SecretKeyFactory.getInstance(PBKDF2_ALGORITHM)
         return SecretKeySpec(factory.generateSecret(spec).encoded, AES_KEY_ALGORITHM)
     }
@@ -76,7 +79,7 @@ class Fvc1Cipher : IFvc1Cipher {
     ): BinaryResult<Unit, DecryptionError> =
         runCatchingAsResult {
             val header = Fvc1Header.readFrom(input)
-            val key = deriveKey(password, header.salt)
+            val key = deriveKey(password, header.salt, header.iterations)
             decryptBody(key, header.iv, input, output)
         }.mapError { classifyDecryptionError(it) }
 

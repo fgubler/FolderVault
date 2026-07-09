@@ -10,10 +10,19 @@ interface IFvc1Cipher {
     fun generateBackupSalt(): ByteArray
 
     /**
-     * Derive the per-backup AES key. Call once per run and reuse across all files —
-     * PBKDF2 at 310k iterations is too slow to run per-file.
+     * Derive the per-backup AES key with the current default iteration count. Call once per run
+     * and reuse across all files — PBKDF2 at 310k iterations is too slow to run per-file.
      */
     fun deriveKey(password: String, salt: ByteArray): SecretKey
+
+    /**
+     * Derive the AES key using an explicit [iterations] count — the value read from an FVC1
+     * header. Restore must derive with the parameters the file was written with, not today's
+     * default, so that old files stay decryptable after the default is raised (BUG-5). As with
+     * [deriveKey], reuse the result across all files sharing the same salt + iteration count
+     * rather than re-deriving per file (BUG-6).
+     */
+    fun deriveKey(password: String, salt: ByteArray, iterations: Int): SecretKey
 
     /**
      * Write a FVC1 header + AES-256-GCM ciphertext into [output].

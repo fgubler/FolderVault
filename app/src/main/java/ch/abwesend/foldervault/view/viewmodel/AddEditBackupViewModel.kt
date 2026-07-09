@@ -46,6 +46,12 @@ data class AddEditFormState(
     val networkPolicy: NetworkPolicy = NetworkPolicy.WIFI_ONLY,
     val requiresCharging: Boolean = false,
     val encryptionEnabled: Boolean = false,
+    /**
+     * True when editing a config that was already encrypted at creation. The encryption password is
+     * immutable after creation (INC-3): the password fields are hidden and the toggle is disabled, so
+     * a save can never leave part of the archive encrypted under a different password than the rest.
+     */
+    val encryptionSettingsLocked: Boolean = false,
     val password: String = "",
     val passwordConfirm: String = "",
     val retentionPolicy: RetentionPolicy = RetentionPolicy.KeepAll,
@@ -131,6 +137,7 @@ class AddEditBackupViewModel(
             networkPolicy = config.networkPolicy,
             requiresCharging = config.requiresCharging,
             encryptionEnabled = config.encryptionEnabled,
+            encryptionSettingsLocked = config.encryptionEnabled,
             retentionPolicy = config.retentionPolicy,
             isEditMode = true,
         )
@@ -149,7 +156,14 @@ class AddEditBackupViewModel(
 
     fun setRequiresCharging(enabled: Boolean) = updateForm { it.copy(requiresCharging = enabled) }
 
-    fun setEncryptionEnabled(enabled: Boolean) = updateForm { it.copy(encryptionEnabled = enabled) }
+    /**
+     * Toggles encryption. Ignored once [AddEditFormState.encryptionSettingsLocked] is set: an
+     * already-encrypted config can neither change its password nor be switched to unencrypted, since
+     * both would strand the existing cloud files under the old key (INC-3).
+     */
+    fun setEncryptionEnabled(enabled: Boolean) = updateForm {
+        if (it.encryptionSettingsLocked) it else it.copy(encryptionEnabled = enabled)
+    }
 
     fun setPassword(pw: String) = updateForm { it.copy(password = pw, errorMessage = null) }
 
@@ -333,8 +347,10 @@ class AddEditBackupViewModel(
             state.displayName.isBlank() -> UiText.Resource(R.string.error_display_name_required)
             state.sourceTreeUri.isBlank() -> UiText.Resource(R.string.error_no_source_folder)
             state.cloudSetup !is CloudSetupState.Done -> UiText.Resource(R.string.error_no_drive_connection)
-            state.encryptionEnabled && state.password.isBlank() -> UiText.Resource(R.string.error_password_required)
-            state.encryptionEnabled && state.password != state.passwordConfirm ->
+            // Password fields are hidden when locked (INC-3), so don't validate them in that case.
+            state.encryptionEnabled && !state.encryptionSettingsLocked && state.password.isBlank() ->
+                UiText.Resource(R.string.error_password_required)
+            state.encryptionEnabled && !state.encryptionSettingsLocked && state.password != state.passwordConfirm ->
                 UiText.Resource(R.string.error_passwords_dont_match)
             else -> null
         }
@@ -350,23 +366,7 @@ class AddEditBackupViewModel(
         val cloudState = state.cloudSetup as? CloudSetupState.Done ?: return null
         val id = existingConfig?.id ?: UUID.randomUUID().toString()
 
-        val (encryptedBlob, saltBase64) = if (state.encryptionEnabled) {
-            val result = encryptionRepo.encryptPassword(state.password)
-            if (result !is SuccessResult) {
-                updateForm {
-                    it.copy(
-                        isSaving = false,
-                        errorMessage = UiText.Resource(R.string.error_encryption_setup_failed),
-                    )
-                }
-                return null
-            }
-            val salt = existingConfig?.encryptionSaltBase64
-                ?: Base64.getEncoder().encodeToString(cipher.generateBackupSalt())
-            Pair(result.value, salt)
-        } else {
-            Pair(null, null)
-        }
+        val (encryptedBlob, saltBase64) = resolveEncryptionMaterial(state) ?: return null
 
         return BackupConfig(
             id = id,
@@ -396,6 +396,33 @@ class AddEditBackupViewModel(
             lastRunCompletedNormally = existingConfig?.lastRunCompletedNormally ?: false,
             isPaused = existingConfig?.isPaused ?: false,
         )
+    }
+
+    /**
+     * Resolves the `(encryptedPasswordBlob, saltBase64)` pair to persist.
+     *
+     * Returns `Pair(null, null)` when encryption is disabled, and `null` (after surfacing an error on
+     * the form) when password encryption fails. For a locked config the original blob and salt are
+     * reused verbatim: re-encrypting here would silently re-key future uploads while old cloud files
+     * keep the previous password, producing a mixed-password archive that half-fails on restore (INC-3).
+     */
+    private fun resolveEncryptionMaterial(state: AddEditFormState): Pair<String?, String?>? = when {
+        !state.encryptionEnabled -> Pair(null, null)
+        state.encryptionSettingsLocked ->
+            Pair(existingConfig?.encryptedPasswordBlob, existingConfig?.encryptionSaltBase64)
+        else -> {
+            val result = encryptionRepo.encryptPassword(state.password)
+            if (result is SuccessResult) {
+                val salt = existingConfig?.encryptionSaltBase64
+                    ?: Base64.getEncoder().encodeToString(cipher.generateBackupSalt())
+                Pair(result.value, salt)
+            } else {
+                updateForm {
+                    it.copy(isSaving = false, errorMessage = UiText.Resource(R.string.error_encryption_setup_failed))
+                }
+                null
+            }
+        }
     }
 
     private fun extractFolderDisplayName(uriString: String): String =

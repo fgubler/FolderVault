@@ -147,6 +147,7 @@
     <string name="label_keep_newer_than_days">Keep files newer than (days)</string>
     <string name="label_encrypt_backup">Encrypt backup</string>
     <string name="warning_encryption_password">Warning: If you forget the password, the backup cannot be recovered.</string>
+    <string name="info_encryption_password_locked">The password is set when the backup is created and can\'t be changed here. Changing it would leave already-uploaded files locked with the old password. To use a different password, delete this backup and create a new one.</string>
     <string name="label_password">Password</string>
     <string name="label_confirm_password">Confirm password</string>
     <string name="button_save">Save</string>

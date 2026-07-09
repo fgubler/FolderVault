@@ -74,6 +74,7 @@ class AddEditBackupViewModelTest : StringSpec({
         encryptionRepo = mockk<IEncryptionRepository>(relaxed = true),
         cipher = mockk<IFvc1Cipher>(relaxed = true),
         settingsRepo = settingsRepo,
+        releaseSafPermissionIfUnused = mockk(relaxed = true),
         existingConfigId = null,
     )
 

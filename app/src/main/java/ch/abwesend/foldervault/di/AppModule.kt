@@ -16,6 +16,8 @@ import ch.abwesend.foldervault.domain.logging.ITelemetryToggle
 import ch.abwesend.foldervault.domain.network.INetworkConnectivityChecker
 import ch.abwesend.foldervault.domain.restore.IRestoreEngine
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
+import ch.abwesend.foldervault.domain.storage.ISafPermissionManager
+import ch.abwesend.foldervault.domain.storage.ReleaseSafPermissionIfUnusedUseCase
 import ch.abwesend.foldervault.domain.system.IBackgroundRestrictionChecker
 import ch.abwesend.foldervault.domain.system.IChargingStateChecker
 import ch.abwesend.foldervault.infrastructure.backup.BackupConfigRepository
@@ -36,6 +38,7 @@ import ch.abwesend.foldervault.infrastructure.room.DatabaseRecoveryService
 import ch.abwesend.foldervault.infrastructure.room.FolderVaultDatabase
 import ch.abwesend.foldervault.infrastructure.room.RoomDatabaseFileAccess
 import ch.abwesend.foldervault.infrastructure.settings.AppSettingsRepository
+import ch.abwesend.foldervault.infrastructure.storage.AndroidSafPermissionManager
 import ch.abwesend.foldervault.infrastructure.system.AndroidBackgroundRestrictionChecker
 import ch.abwesend.foldervault.infrastructure.system.AndroidChargingStateChecker
 import ch.abwesend.foldervault.view.viewmodel.AddEditBackupViewModel
@@ -86,6 +89,8 @@ val appModule = module {
     single<INetworkConnectivityChecker> { AndroidNetworkConnectivityChecker(androidContext()) }
     single<IChargingStateChecker> { AndroidChargingStateChecker(androidContext()) }
     single<IBackgroundRestrictionChecker> { AndroidBackgroundRestrictionChecker(androidContext()) }
+    single<ISafPermissionManager> { AndroidSafPermissionManager(androidContext()) }
+    single { ReleaseSafPermissionIfUnusedUseCase(get(), get()) }
 
     // Backup pipeline
     single {
@@ -118,6 +123,7 @@ val appModule = module {
             encryptionRepo = get(),
             cipher = get(),
             settingsRepo = get(),
+            releaseSafPermissionIfUnused = get(),
             existingConfigId = params.getOrNull(),
         )
     }
@@ -131,6 +137,7 @@ val appModule = module {
             settingsRepo = get(),
             connectivityChecker = get(),
             chargingChecker = get(),
+            releaseSafPermissionIfUnused = get(),
         )
     }
     viewModel { params ->

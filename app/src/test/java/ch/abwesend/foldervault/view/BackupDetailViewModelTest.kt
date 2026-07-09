@@ -112,6 +112,7 @@ class BackupDetailViewModelTest : StringSpec({
             settingsRepo = mockk(),
             connectivityChecker = connectivity,
             chargingChecker = charging,
+            releaseSafPermissionIfUnused = mockk(relaxed = true),
         )
         return vm to scheduler
     }

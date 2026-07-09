@@ -24,6 +24,7 @@ import ch.abwesend.foldervault.domain.model.RetentionPolicy
 import ch.abwesend.foldervault.domain.result.SuccessResult
 import ch.abwesend.foldervault.domain.result.rethrowCancellation
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
+import ch.abwesend.foldervault.domain.storage.ReleaseSafPermissionIfUnusedUseCase
 import ch.abwesend.foldervault.view.util.displayNameFromUri
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -78,6 +79,7 @@ class AddEditBackupViewModel(
     private val encryptionRepo: IEncryptionRepository,
     private val cipher: IFvc1Cipher,
     private val settingsRepo: IAppSettingsRepository,
+    private val releaseSafPermissionIfUnused: ReleaseSafPermissionIfUnusedUseCase,
     private val existingConfigId: String?,
 ) : BaseViewModel() {
 
@@ -252,7 +254,14 @@ class AddEditBackupViewModel(
             try {
                 val subFolder = ensureSubFolder(state) ?: return@safeLaunch
                 val config = buildConfig(state, subFolder.first, subFolder.second) ?: return@safeLaunch
+                val previousTreeUri = existingConfig?.sourceTreeUri
                 configRepo.save(config)
+                // Editing may repoint a config at a different folder. The old folder's persisted
+                // SAF grant is then dead weight, so release it if no other config still uses it
+                // (BUG-12). Done after save so the config already references the new URI, not the old.
+                if (previousTreeUri != null && previousTreeUri != config.sourceTreeUri) {
+                    releaseSafPermissionIfUnused(previousTreeUri, excludingConfigId = config.id)
+                }
                 val globalDefault = settingsRepo.settings.first().defaultSchedule
                 scheduler.schedulePeriodicIfNeeded(
                     configId = config.id,

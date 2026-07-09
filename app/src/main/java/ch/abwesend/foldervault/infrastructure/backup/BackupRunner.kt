@@ -272,6 +272,11 @@ class BackupRunner(
             return RunResult.FatalError(e, summary, runId)
         } finally {
             MessageRetentionManager(backupMessageDao).prune(config.id)
+            // Drop this run's staging dir promptly. Encrypted runs stage ciphertext here (unencrypted
+            // runs stream directly and stage nothing — see SEC-1); cleanupOldDirs stays as the safety
+            // net for hard kills that skip this finally.
+            runCatchingAsResult { stagingDir.deleteRecursively() }
+                .ifError { log.warning("Failed to delete staging dir for run $runId", it) }
         }
 
         val status = resolveRunStatus(summary)

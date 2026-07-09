@@ -107,21 +107,40 @@ class BackupUploader(
         }
         val parentFolderId = (folderResult as SuccessResult).value
 
-        // Use hash + nanoTime to avoid name collisions in the staging dir
-        val tempFile = File(stagingDir, "${task.relativePath.hashCode().toUInt()}_${System.nanoTime()}.tmp")
+        // Only encrypted backups need a staged temp copy: encryption rewrites the bytes and the
+        // ciphertext must be re-readable on each upload retry. Unencrypted backups stream the source
+        // file straight to the upload — no plaintext copy is ever written to cache (see SEC-1).
+        val staging = if (config.encryptionEnabled && derivedKey != null && backupSalt != null) {
+            // hash + nanoTime avoids name collisions in the staging dir
+            val file = File(stagingDir, "${task.relativePath.hashCode().toUInt()}_${System.nanoTime()}.tmp")
+            EncryptedStaging(derivedKey, backupSalt, file)
+        } else {
+            null
+        }
         try {
-            // Encrypt (or copy) local file → temp staging file
-            val prepared = prepareLocalFile(context, task, config, derivedKey, backupSalt, tempFile)
-            if (!prepared) {
-                summary.filesFailed++
-                emitMessage(config, runId, MessageSeverity.WARNING, MessageType.UPLOAD_FAILED)
-                return
+            val uploadContent = if (staging != null) {
+                val prepared = encryptToStaging(task, staging)
+                if (!prepared) {
+                    summary.filesFailed++
+                    emitMessage(config, runId, MessageSeverity.WARNING, MessageType.UPLOAD_FAILED)
+                    return
+                }
+                UploadContent(
+                    inputStreamProvider = { FileInputStream(staging.file) },
+                    length = staging.file.length(),
+                )
+            } else {
+                // The provider is re-invoked per upload retry, so re-opening the source is safe.
+                // A null stream (source vanished) makes the provider throw → the upload fails and is
+                // counted like any other upload failure, matching the staged path's behaviour.
+                UploadContent(
+                    inputStreamProvider = {
+                        context.contentResolver.openInputStream(task.documentUri)
+                            ?: error("Could not open source file for upload")
+                    },
+                    length = task.localSize,
+                )
             }
-
-            val uploadContent = UploadContent(
-                inputStreamProvider = { FileInputStream(tempFile) },
-                length = tempFile.length(),
-            )
 
             // Exclude the previous version (CHANGED_OVERWRITE) so the upload's retry-time
             // idempotency probe in GoogleDriveRepository doesn't mistake it for the just-uploaded
@@ -149,7 +168,7 @@ class BackupUploader(
             val cloudFile = (uploadResult as SuccessResult).value
             commitSuccess(config, task, cloudFile, remoteName, summary)
         } finally {
-            tempFile.delete()
+            staging?.file?.delete()
         }
     }
 
@@ -194,36 +213,21 @@ class BackupUploader(
     }
 
     /**
-     * Writes the (possibly encrypted) local file content to [tempFile].
-     * Returns true on success, false if the local file could not be opened.
+     * Encrypts the source file's content into [staging]'s temp file, ready for upload.
+     * Returns true on success, false if the source file could not be opened.
      */
-    private fun prepareLocalFile(
-        context: Context,
-        task: UploadTask,
-        config: BackupConfigEntity,
-        derivedKey: SecretKey?,
-        backupSalt: ByteArray?,
-        tempFile: File,
-    ): Boolean {
+    private fun encryptToStaging(task: UploadTask, staging: EncryptedStaging): Boolean {
         val inputStream = context.contentResolver.openInputStream(task.documentUri) ?: return false
         return try {
-            if (config.encryptionEnabled && derivedKey != null && backupSalt != null) {
-                inputStream.use { ins ->
-                    FileOutputStream(tempFile).use { out ->
-                        cipher.encryptFile(derivedKey, backupSalt, ins, out)
-                    }
-                }
-            } else {
-                inputStream.use { ins ->
-                    FileOutputStream(tempFile).use { out ->
-                        ins.copyTo(out)
-                    }
+            inputStream.use { ins ->
+                FileOutputStream(staging.file).use { out ->
+                    cipher.encryptFile(staging.derivedKey, staging.backupSalt, ins, out)
                 }
             }
             true
         } catch (e: Exception) {
             e.rethrowCancellation()
-            log.warning("Failed to prepare local file for ${FileNameRedactor.redactPath(task.relativePath)}", e)
+            log.warning("Failed to encrypt local file for ${FileNameRedactor.redactPath(task.relativePath)}", e)
             false
         }
     }
@@ -326,3 +330,6 @@ class BackupUploader(
 
     private fun resolveMessageText(type: MessageType): String = context.getString(type.labelResId)
 }
+
+/** Material for encrypting one file into a cache staging copy before upload (encrypted backups only). */
+private class EncryptedStaging(val derivedKey: SecretKey, val backupSalt: ByteArray, val file: File)

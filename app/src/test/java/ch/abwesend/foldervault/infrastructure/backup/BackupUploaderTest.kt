@@ -9,6 +9,7 @@ import ch.abwesend.foldervault.domain.cloud.CloudFile
 import ch.abwesend.foldervault.domain.cloud.CloudQuotaExceededException
 import ch.abwesend.foldervault.domain.cloud.ICloudAuthorizer
 import ch.abwesend.foldervault.domain.cloud.ICloudStorageProvider
+import ch.abwesend.foldervault.domain.cloud.UploadContent
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.crypto.IFvc1Cipher
 import ch.abwesend.foldervault.domain.logging.ILogger
@@ -32,6 +33,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.slot
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -459,6 +461,43 @@ class BackupUploaderTest : StringSpec({
 
             summary.quotaExceeded shouldBe true
             summary.consecutiveQuotaCount shouldBe 2
+        } finally {
+            stagingDir.deleteRecursively()
+        }
+    }
+
+    "unencrypted upload streams the source directly without staging a plaintext copy (SEC-1)" {
+        val contentSlot = slot<UploadContent>()
+        val cloudProvider = mockk<ICloudStorageProvider>(relaxed = true) {
+            coEvery {
+                uploadFile(any(), any(), any(), capture(contentSlot), any())
+            } returns SuccessResult(CloudFile("c-1", "a.txt"))
+        }
+        val (uploader, folderCache) = makeUploader(makeContext(), cloudProvider)
+        val stagingDir = Files.createTempDirectory("fv-uploader-test").toFile()
+        try {
+            val channel = Channel<UploadTask>(1)
+            channel.send(UploadTask("a.txt", mockk<Uri>(), 100L, 0L, UploadMode.NEW, UploadTier.NORMAL))
+            channel.close()
+
+            uploader.processChannel(
+                makeConfig("cfg-sec1"),
+                channel,
+                "run-sec1",
+                stagingDir,
+                folderCache,
+                null,
+                null,
+                RunSummary(),
+            )
+
+            // length is the task's declared source size (100), not the 3-byte staged copy the old
+            // path produced — proof the file was streamed directly with no temp copy in cache.
+            contentSlot.captured.length shouldBe 100L
+            // The provider reads straight from the source content resolver.
+            contentSlot.captured.inputStreamProvider().readBytes() shouldBe byteArrayOf(1, 2, 3)
+            // Nothing was ever written into the staging dir.
+            stagingDir.listFiles()?.toList().orEmpty() shouldBe emptyList()
         } finally {
             stagingDir.deleteRecursively()
         }

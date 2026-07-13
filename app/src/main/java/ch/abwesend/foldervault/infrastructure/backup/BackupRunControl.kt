@@ -28,6 +28,16 @@ class BackupRunControl(private val deadline: Instant? = null) {
     /** Number of files uploaded so far in this run; updated after each committed file. */
     val filesUploadedThisRun: StateFlow<Int> = mutableFilesUploadedThisRun.asStateFlow()
 
+    private val mutableFilesDiscovered = MutableStateFlow(0)
+
+    /**
+     * Total number of files this run's analyzer scan found in the source tree; `0` until the
+     * scan completes. Live counterpart of the cross-run `totalFilesDiscovered` counter, which
+     * is only persisted at run end — on the very first run of a config the persisted value is
+     * still 0 for the whole run, so this flow is the only source for a "N / M files" display.
+     */
+    val filesDiscovered: StateFlow<Int> = mutableFilesDiscovered.asStateFlow()
+
     /** Requests a cooperative stop at the next committed-file boundary. Idempotent. */
     fun requestStop() {
         stopRequested = true
@@ -39,5 +49,10 @@ class BackupRunControl(private val deadline: Instant? = null) {
     /** Reports the current per-run uploaded-file count (from `RunSummary.filesUploaded`). */
     fun reportFileUploaded(count: Int) {
         mutableFilesUploadedThisRun.value = count
+    }
+
+    /** Reports the total file count once the analyzer has scanned the source tree. */
+    fun reportFilesDiscovered(count: Int) {
+        mutableFilesDiscovered.value = count
     }
 }

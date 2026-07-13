@@ -23,6 +23,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Duration
@@ -122,8 +123,12 @@ class BackupForegroundService : Service() {
      * run a few seconds to finish its in-flight file; a run that cannot stop in time is
      * hard-cancelled ([BackupRunner]'s cancellation path marks it CANCELLED) and its
      * continuation is scheduled here, since the normal result handling never runs.
+     *
+     * Must be the two-argument overload: the dataSync time-limit path calls only
+     * `onTimeout(startId, fgsType)` — the one-argument [Service.onTimeout] is invoked solely
+     * for `shortService` timeouts and its two-argument default implementation is empty.
      */
-    override fun onTimeout(startId: Int) {
+    override fun onTimeout(startId: Int, fgsType: Int) {
         log.warning("Foreground backup hit the OS dataSync time limit")
         if (stopReason == null) {
             stopReason = ForegroundStopReason.OS_TIMEOUT
@@ -247,14 +252,22 @@ class BackupForegroundService : Service() {
 
     /**
      * Mirrors per-file progress into the ongoing notification, rate-limited by the delay —
-     * the StateFlow conflates intermediate values, so this samples the latest count.
+     * the StateFlows conflate intermediate values, so this samples the latest counts.
+     *
+     * The discovered total comes from the run control's live flow: the config row's persisted
+     * `totalFilesDiscovered` is only written at run end, so on the very first run it stays 0
+     * throughout — the live value is what makes "N / M files" appear at all. The stale
+     * persisted value (from the previous run) is only the fallback until this run's scan
+     * completes.
      */
     private suspend fun publishProgress(config: BackupConfigEntity, runControl: BackupRunControl) {
-        runControl.filesUploadedThisRun.collect { uploadedThisRun ->
+        combine(runControl.filesUploadedThisRun, runControl.filesDiscovered) { uploaded, discovered ->
+            uploaded to discovered
+        }.collect { (uploadedThisRun, discoveredThisRun) ->
             notificationManager.updateProgressNotification(
                 configId = config.id,
                 filesUploaded = config.filesUploadedTotal + uploadedThisRun,
-                totalDiscovered = config.totalFilesDiscovered,
+                totalDiscovered = if (discoveredThisRun > 0) discoveredThisRun else config.totalFilesDiscovered,
                 stopIntent = stopPendingIntent(),
             )
             delay(PROGRESS_UPDATE_INTERVAL_MS)

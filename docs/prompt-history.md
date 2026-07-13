@@ -7,6 +7,39 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-13 — Review fixes B1 + B3 on the foreground-service commit
+
+### What was requested
+Fix findings B1 and B3 from `review/develop.md` (code review of commit `7db0b96`), with a
+Robolectric test for B1 — trying it in the Bash sandbox first and dropping it if blocked.
+
+### What was done
+- **B1** — `BackupForegroundService` overrode only `onTimeout(startId)`, which the framework
+  invokes solely for shortService timeouts; the dataSync time-limit path (Android 15+) calls
+  only `onTimeout(startId, fgsType)`, so the OS-timeout safety net was dead code. Replaced the
+  override with the two-argument overload (one-arg dropped — the service is never a
+  shortService) and documented why on the KDoc.
+- **B3** — the progress notification read `totalFilesDiscovered` from the run-start config
+  snapshot, which is only persisted at run end — so the very first initial-upload run showed
+  the static "Uploading files…" text for hours. `BackupRunControl` now carries a
+  `filesDiscovered` StateFlow, `FileSystemAnalyzer.analyze` reports the scanned total right
+  after the tree walk, and `publishProgress` combines both live flows (persisted value only as
+  fallback while the scan is pending).
+- **Tests**: new `BackupForegroundServiceTest` (Robolectric + MockK + Koin) drives the real
+  service through `onStartCommand`; one test fires the two-arg `onTimeout` and asserts the
+  cooperative stop + WorkManager continuation, the other asserts live "3 / 42" counts reach
+  the notification on a first run with all-zero persisted counters. Both were mutation-checked
+  (revert fix → test fails). The Robolectric default network needed
+  `ShadowNetworkCapabilities` (INTERNET + NOT_METERED), otherwise the service's own
+  network-policy watcher stops the run and silently voids the assertions.
+  `BackupRunControlTest` extended for the new flow.
+
+### Learnings
+- MockK + Robolectric DO run inside the Bash sandbox now (correct sandbox profile + fresh
+  Gradle daemon) — CLAUDE.md and memory updated; hand-written fakes remain the preference for
+  seam logic.
+- `./gradlew :app:test` does not accept `--tests`; use `:app:testDebugUnitTest --tests "fqcn"`.
+
 ## 2026-07-13 — Initial upload moved into a dataSync foreground service
 
 ### What was requested

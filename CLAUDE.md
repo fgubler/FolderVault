@@ -52,8 +52,10 @@ Crashlytics confinement: ONLY `infrastructure/logging/CrashlyticsSink.kt` may im
   they run on the JUnit5 platform via the Vintage engine.
 - **Prefer hand-written fakes over MockK** for new tests of logic behind a domain / platform
   seam (see `IDatabaseFileAccess` + `DatabaseRecoveryServiceTest`): extract the platform access
-  behind an interface and fake it. MockK's agent and Robolectric's jar download cannot run in
-  the Bash sandbox, so MockK/Robolectric tests are only verifiable outside it.
+  behind an interface and fake it. MockK/Robolectric tests DO run in the Bash sandbox (since
+  2026-07-13, with a correct sandbox profile and a fresh Gradle daemon) — use them where the
+  Android framework is unavoidable (services, workers); the failures below mean a stale
+  daemon/profile, not a hard limit.
 
 ### Style
 - Prefer KDoc style comments over normal comments on methods, classes and properties
@@ -72,9 +74,9 @@ sandbox. If one of these comes up, stop and ask — each is a one-liner for the 
   user to run the tests via `! ./gradlew test` (or to restart so the Gradle daemon picks up a
   corrected sandbox profile).
 - **MockK fails with agent-attach errors / `Could not initialize class io.mockk.impl.JvmMockKGateway`**
-  (plus cascading `NoClassDefFoundError`s in unrelated tests) — MockK cannot run in the sandbox
-  at all. Write hand-written fakes for NEW tests; for existing MockK/Robolectric tests, ask the
-  user to verify with `! ./gradlew test` instead of rewriting them.
+  (plus cascading `NoClassDefFoundError`s in unrelated tests) — a stale sandboxed Gradle daemon
+  (MockK works with a properly configured profile). Do not rewrite the tests; ask the user to
+  restart the daemon or verify with `! ./gradlew test`.
 - **The Gradle daemon misbehaves or holds stale state** (e.g. an old sandbox profile) — never
   run `./gradlew --stop` (it breaks the sandbox JDK toolchain); ask the user to restart the
   daemon / session.

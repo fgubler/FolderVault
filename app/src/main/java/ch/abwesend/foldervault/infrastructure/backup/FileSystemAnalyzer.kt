@@ -38,7 +38,10 @@ class FileSystemAnalyzer(
     /**
      * Walks the source tree and sends upload tasks to the appropriate tier channel.
      * Closes neither channel — the caller is responsible for closing both after this returns.
+     * Reports the scanned file total to [control] as soon as the tree walk completes, so the
+     * run's host can display "N / M files" hours before the count is persisted at run end.
      */
+    @Suppress("LongParameterList")
     suspend fun analyze(
         config: BackupConfigEntity,
         normalChannel: SendChannel<UploadTask>,
@@ -47,8 +50,10 @@ class FileSystemAnalyzer(
         runId: String,
         folderCache: FolderPathCache,
         summary: RunSummary,
+        control: BackupRunControl? = null,
     ): Int {
         val fileInfoList = collectFileInfos(config, summary)
+        control?.reportFilesDiscovered(fileInfoList.size)
         // Collect into two lists first to avoid a producer/consumer deadlock: if we sent normal
         // and oversized tasks interleaved and the oversized channel (cap=8) filled up, the producer
         // would block before closing the normal channel, while the consumer was blocked waiting for

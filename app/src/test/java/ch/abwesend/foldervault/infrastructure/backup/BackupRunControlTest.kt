@@ -53,4 +53,11 @@ class BackupRunControlTest : StringSpec({
         control.reportFileUploaded(42)
         control.filesUploadedThisRun.value shouldBe 42
     }
+
+    "discovered-files flow starts at zero and reflects the reported total" {
+        val control = BackupRunControl()
+        control.filesDiscovered.value shouldBe 0
+        control.reportFilesDiscovered(1337)
+        control.filesDiscovered.value shouldBe 1337
+    }
 })

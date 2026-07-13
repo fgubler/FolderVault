@@ -416,6 +416,7 @@ class BackupRunner(
                 try {
                     filesDiscovered = analyzer.analyze(
                         config, normalChannel, oversizedChannel, fileSizeLimitBytes, runId, folderCache, summary,
+                        control,
                     )
                 } finally {
                     normalChannel.close()

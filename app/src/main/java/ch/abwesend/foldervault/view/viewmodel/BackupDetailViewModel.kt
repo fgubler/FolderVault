@@ -10,6 +10,7 @@ import ch.abwesend.foldervault.domain.backup.StartManualBackupUseCase
 import ch.abwesend.foldervault.domain.crypto.IEncryptionRepository
 import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.model.BackupRunStatus
+import ch.abwesend.foldervault.domain.model.BackupSchedule
 import ch.abwesend.foldervault.domain.model.MessageSeverity
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.network.INetworkConnectivityChecker
@@ -24,6 +25,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
@@ -59,6 +61,25 @@ class BackupDetailViewModel(
 
     val isRunning: StateFlow<Boolean> = scheduler.observeIsRunning(configId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /**
+     * Whether an interrupted sync will eventually be picked up again without user action — i.e.
+     * whether the config's *effective* schedule (its own, or the global default when it
+     * delegates) is anything but manual-only. Drives the wording of the interrupted-sync
+     * banner: promising "continues automatically" on a manual-only config would leave the user
+     * waiting for a run that needs a tap.
+     */
+    val continuesAutomatically: StateFlow<Boolean> = combine(
+        config.filterNotNull(),
+        settingsRepo.settings,
+    ) { current, settings ->
+        val effectiveSchedule = if (current.schedule == BackupSchedule.USE_GLOBAL_DEFAULT) {
+            settings.defaultSchedule
+        } else {
+            current.schedule
+        }
+        effectiveSchedule != BackupSchedule.MANUAL_ONLY
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
 
     private val _passwordCheckResult = MutableStateFlow<Boolean?>(null)
     val passwordCheckResult: StateFlow<Boolean?> = _passwordCheckResult.asStateFlow()

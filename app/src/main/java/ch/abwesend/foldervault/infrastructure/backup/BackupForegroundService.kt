@@ -7,7 +7,6 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
 import androidx.core.app.ServiceCompat
-import androidx.work.WorkManager
 import ch.abwesend.foldervault.domain.backup.IBackupScheduler
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.logging.logger
@@ -70,7 +69,11 @@ class BackupForegroundService : Service() {
     /** Guards [activeRun], [runJob] and [pendingRuns] across the main thread and [scope]. */
     private val runLock = Any()
 
-    /** Parameters of the currently executing run; `null` while idle. Guarded by [runLock]. */
+    /**
+     * Parameters of the currently executing run; `null` while idle. Writes are guarded by
+     * [runLock]; volatile so [onTimeout] can read it outside the lock.
+     */
+    @Volatile
     private var activeRun: RunParameters? = null
 
     private var runJob: Job? = null
@@ -86,10 +89,6 @@ class BackupForegroundService : Service() {
 
     @Volatile
     private var stopReason: ForegroundStopReason? = null
-
-    /** Effective parameters of the active run, kept for continuation scheduling from [onTimeout]. */
-    @Volatile
-    private var runParameters: RunParameters? = null
 
     /**
      * Last notification posted by [publishProgress]. A second `startForegroundService` while a
@@ -156,8 +155,10 @@ class BackupForegroundService : Service() {
      * OS-enforced dataSync time limit (Android 15+). Requests a cooperative stop and gives the
      * run a few seconds to finish its in-flight file; a run that cannot stop in time is
      * hard-cancelled ([BackupRunner]'s cancellation path marks it CANCELLED) and its
-     * continuation is scheduled here, since the normal result handling never runs. Queued runs
-     * cannot start in an out-of-budget session, so they are handed to WorkManager instead.
+     * continuation is scheduled here, since the normal result handling never runs — subject to
+     * [ForegroundHandoverPolicy], so a run the user had already stopped is not resurrected in
+     * the background. Queued runs cannot start in an out-of-budget session, so they are handed
+     * to WorkManager instead.
      *
      * Must be the two-argument overload: the dataSync time-limit path calls only
      * `onTimeout(startId, fgsType)` — the one-argument [Service.onTimeout] is invoked solely
@@ -174,6 +175,10 @@ class BackupForegroundService : Service() {
         control?.requestStop()
         scope.launch {
             val job = runJob
+            // Captured before the drain: once the run's own finally advances the (already
+            // drained) queue, activeRun is nulled — reading it after a failed drain would race
+            // that cleanup and could lose the continuation.
+            val params = activeRun
             if (job == null) {
                 // No run to drain — an OS timeout on an idle service just ends it.
                 stopService()
@@ -187,7 +192,7 @@ class BackupForegroundService : Service() {
                 }
                 if (drained == null) {
                     job.cancel()
-                    runParameters?.let { params ->
+                    if (params != null && ForegroundHandoverPolicy.shouldScheduleContinuation(stopReason)) {
                         scheduler.scheduleOneTime(params.configId, params.networkPolicy, params.requiresCharging)
                     }
                     ServiceCompat.stopForeground(this@BackupForegroundService, ServiceCompat.STOP_FOREGROUND_REMOVE)
@@ -266,7 +271,6 @@ class BackupForegroundService : Service() {
     private fun launchRun(params: RunParameters) {
         stopReason = null
         activeRun = params
-        runParameters = params
         foregroundRunState.markRunning(params.configId)
         runJob = scope.launch { executeRun(params) }
     }
@@ -321,6 +325,12 @@ class BackupForegroundService : Service() {
             } else {
                 runWithConfig(config, params.networkPolicy, params.requiresCharging)
             }
+        } catch (e: Exception) {
+            // BackupRunner already converts pipeline errors to FatalError results; anything
+            // arriving here escaped that (or failed in the config read or result handling) and
+            // must not crash the app through the scope's unhandled-exception handler.
+            e.rethrowCancellation()
+            log.error("Foreground backup for ${params.configId} died unexpectedly", e)
         } finally {
             foregroundRunState.markStopped(params.configId)
             advanceQueue()
@@ -335,9 +345,9 @@ class BackupForegroundService : Service() {
         val configId = config.id
 
         // Any queued one-time run would duplicate this one the moment its constraints are met.
-        // Only the one-time name: the periodic schedule must survive, and a pending charging
+        // Only the one-time slot: the periodic schedule must survive, and a pending charging
         // fallback firing against a drained queue is a cheap no-op.
-        WorkManager.getInstance(this).cancelUniqueWork(BackupWorker.oneTimeWorkName(configId))
+        scheduler.cancelOneTime(configId)
 
         val runControl = BackupRunControl(deadline = Instant.now().plus(RUN_BUDGET))
         control = runControl
@@ -354,12 +364,6 @@ class BackupForegroundService : Service() {
                 }
             }
             handleResult(config, result, networkPolicy, requiresCharging)
-        } catch (e: Exception) {
-            // BackupRunner already converts pipeline errors to FatalError results; anything
-            // arriving here escaped that (or failed in result handling) and must not crash the
-            // app through the scope's unhandled-exception handler.
-            e.rethrowCancellation()
-            log.error("Foreground backup for $configId died unexpectedly", e)
         } finally {
             control = null
         }

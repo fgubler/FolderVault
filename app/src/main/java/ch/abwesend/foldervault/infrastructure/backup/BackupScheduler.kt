@@ -159,6 +159,22 @@ class BackupScheduler(
             .any { !it.state.isFinished }
 
     /**
+     * Cancels only the config's pending *one-time* slot (manual runs and time-budget
+     * continuations share it); the periodic schedule and the charging-only fallback keep
+     * their own unique names and stay untouched.
+     */
+    override fun cancelOneTime(configId: String) {
+        try {
+            workManager.cancelUniqueWork(BackupWorker.oneTimeWorkName(configId))
+            log.info("Cancelled one-time backup work for config $configId")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.error("Failed to cancel one-time backup work for config $configId", e)
+        }
+    }
+
+    /**
      * Cancels all work (periodic + one-time + charging-only fallback) for this config.
      * Call before deleting or when pausing a config — NOT when a schedule merely resolves to
      * manual-only (that must leave pending one-time / fallback work alone, see [cancelPeriodic]).

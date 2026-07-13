@@ -7,6 +7,43 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-13 — Review fixes RV-1, RV-3 … RV-7 (`review/develop.md`)
+
+### What was requested
+Fix the findings from the branch review of `develop` vs `origin/master` (`review/develop.md`):
+first RV-1 (Blocking), then RV-3 through RV-7. RV-2 remains open.
+
+### What was done
+- **RV-1** — `BackupForegroundService.executeRun` gained the `catch (e: Exception)` that used to
+  live inside `runWithConfig`, so the `getByIdOnce` config read and the result handling can no
+  longer crash the app through the handler-less service scope. `runWithConfig` keeps only
+  `try { … } finally { control = null }`.
+- **RV-3** — `onTimeout`'s hard-cancel path (`drained == null`) now consults
+  `ForegroundHandoverPolicy.shouldScheduleContinuation(stopReason)` before enqueueing the
+  WorkManager continuation, so a user-stopped run is not resurrected in the background. New
+  service test: user stop + a runner that ignores the cooperative stop + OS timeout → no
+  continuation scheduled.
+- **RV-5** — the duplicate `runParameters` field is gone; `activeRun` is `@Volatile` (writes
+  stay under `runLock`). `onTimeout` captures it *before* draining the run, because the run's
+  own `finally` nulls it via `advanceQueue` — a post-drain read would race that cleanup (the
+  reason the duplicate field existed).
+- **RV-6** — new `IBackupScheduler.cancelOneTime(configId)` (implemented in `BackupScheduler`);
+  the service uses it instead of a raw `WorkManager.cancelUniqueWork`, keeping unique-name
+  knowledge in the scheduler. Hand-written fakes updated; new service test asserts the call.
+- **RV-4** — `BackupDetailViewModel.continuesAutomatically` resolves the config's *effective*
+  schedule (own, or the global default when delegating) and the interrupted-sync banner drops
+  the "continues automatically in the background" promise for manual-only configs (new string
+  `detail_initial_sync_incomplete_manual`). Two new VM tests cover the resolution.
+- **RV-7** — `BackupDetailScreen` consumes `autoStartBackup` as a one-shot flag through
+  `rememberSaveable` (`autoStartConsumingViewModel`): the first ViewModel sees `true`, a
+  ViewModel re-created for the same back-stack entry (process-death restore) sees `false`, so
+  dismissed metered/charging prompts do not reappear. Replacing the back-stack entry was
+  rejected: it would clear the ViewModel store and could cancel the auto-start mid-flight.
+
+### Verification
+`./gradlew assembleDebug` could not run inside the sandbox (fresh daemon cannot download the
+JDK 21 toolchain) — build + tests to be verified outside the sandbox.
+
 ## 2026-07-13 — Review fixes B2 (in-service run queue) + N1 + N2
 
 ### What was requested

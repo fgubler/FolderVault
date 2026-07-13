@@ -71,6 +71,7 @@ class StartManualBackupUseCaseTest : StringSpec({
             networkPolicy: NetworkPolicy,
             asContinuation: Boolean,
         ): Boolean = false
+        override fun cancelOneTime(configId: String) = Unit
         override fun cancel(configId: String) = Unit
         override fun cancelAll() = Unit
         override fun observeIsRunning(configId: String): Flow<Boolean> = flowOf(false)

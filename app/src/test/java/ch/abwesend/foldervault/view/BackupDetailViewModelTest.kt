@@ -6,12 +6,14 @@ import ch.abwesend.foldervault.domain.backup.IBackupMessageRepository
 import ch.abwesend.foldervault.domain.backup.IBackupScheduler
 import ch.abwesend.foldervault.domain.backup.IForegroundBackupLauncher
 import ch.abwesend.foldervault.domain.backup.StartManualBackupUseCase
+import ch.abwesend.foldervault.domain.model.AppSettings
 import ch.abwesend.foldervault.domain.model.BackupRunStatus
 import ch.abwesend.foldervault.domain.model.BackupSchedule
 import ch.abwesend.foldervault.domain.model.ChangedFilePolicy
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.model.RetentionPolicy
 import ch.abwesend.foldervault.domain.network.INetworkConnectivityChecker
+import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
 import ch.abwesend.foldervault.domain.system.IChargingStateChecker
 import ch.abwesend.foldervault.view.viewmodel.BackupDetailViewModel
 import io.kotest.core.spec.IsolationMode
@@ -53,6 +55,7 @@ class BackupDetailViewModelTest : StringSpec({
         networkPolicy: NetworkPolicy = NetworkPolicy.WIFI_ONLY,
         requiresCharging: Boolean = false,
         lastRunStatus: BackupRunStatus = BackupRunStatus.UP_TO_DATE,
+        schedule: BackupSchedule = BackupSchedule.DAILY,
     ) = BackupConfig(
         id = id,
         displayName = "Test",
@@ -61,7 +64,7 @@ class BackupDetailViewModelTest : StringSpec({
         cloudSubFolderId = "fid",
         cloudSubFolderName = "test_sub",
         cloudAccountIdentifier = "user@test.com",
-        schedule = BackupSchedule.DAILY,
+        schedule = schedule,
         changedFilePolicy = ChangedFilePolicy.DUPLICATE_WITH_TIMESTAMP,
         encryptionEnabled = false,
         encryptedPasswordBlob = null,
@@ -86,8 +89,8 @@ class BackupDetailViewModelTest : StringSpec({
      * Spins up a [BackupDetailViewModel] with sensible defaults: a config repo returning [config],
      * a message repo that surfaces nothing, a relaxed scheduler whose isRunning state defaults to
      * [isRunning], a connectivity checker that reports [onUnmetered], and a charging checker that
-     * reports [isCharging]. Encryption + settings repos are unused in these tests so they are bare
-     * [mockk]s.
+     * reports [isCharging]. The settings repo serves default [AppSettings] (daily default
+     * schedule); the encryption repo is unused in these tests so it stays a bare [mockk].
      */
     @Suppress("LongParameterList")
     fun buildVm(
@@ -115,6 +118,9 @@ class BackupDetailViewModelTest : StringSpec({
         val charging = mockk<IChargingStateChecker> {
             every { isCharging() } returns isCharging
         }
+        val settingsRepo = mockk<IAppSettingsRepository> {
+            every { settings } returns flowOf(AppSettings())
+        }
         val vm = BackupDetailViewModel(
             configId = configId,
             configRepo = configRepo,
@@ -122,7 +128,7 @@ class BackupDetailViewModelTest : StringSpec({
             scheduler = scheduler,
             startManualBackup = StartManualBackupUseCase(scheduler, foregroundLauncher),
             encryptionRepo = mockk(),
-            settingsRepo = mockk(),
+            settingsRepo = settingsRepo,
             connectivityChecker = connectivity,
             chargingChecker = charging,
             releaseSafPermissionIfUnused = mockk(relaxed = true),
@@ -176,6 +182,32 @@ class BackupDetailViewModelTest : StringSpec({
 
         verify(exactly = 0) { launcher.start(any(), any(), any()) }
         verify(exactly = 0) { scheduler.scheduleOneTime(any(), any(), any()) }
+        job.cancel()
+    }
+
+    "continuesAutomatically is false for a manual-only config" {
+        val configId = "cfg-21"
+        val (vm, _) = buildVm(
+            configId,
+            makeConfig(configId, isPaused = false, schedule = BackupSchedule.MANUAL_ONLY),
+        )
+        val job = vm.continuesAutomatically.launchIn(CoroutineScope(testDispatcher))
+
+        vm.continuesAutomatically.value shouldBe false
+        job.cancel()
+    }
+
+    "continuesAutomatically resolves a delegating schedule against the global default" {
+        val configId = "cfg-22"
+        // The default AppSettings has a DAILY global default — a config delegating to it
+        // therefore continues automatically.
+        val (vm, _) = buildVm(
+            configId,
+            makeConfig(configId, isPaused = false, schedule = BackupSchedule.USE_GLOBAL_DEFAULT),
+        )
+        val job = vm.continuesAutomatically.launchIn(CoroutineScope(testDispatcher))
+
+        vm.continuesAutomatically.value shouldBe true
         job.cancel()
     }
 

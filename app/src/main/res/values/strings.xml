@@ -15,6 +15,7 @@
     </plurals>
     <string name="backup_notification_stop_action">Stop</string>
     <string name="detail_initial_sync_incomplete">First backup not finished yet (%1$d of %2$d files uploaded). It continues automatically in the background — or finish it now while the app is open.</string>
+    <string name="detail_initial_sync_incomplete_manual">First backup not finished yet (%1$d of %2$d files uploaded). Finish it now while the app is open.</string>
     <string name="detail_initial_sync_continue">Continue now</string>
     <string name="notification_channel_problems_name">Backup problems</string>
     <string name="notification_channel_problems_description">Alerts when a backup stops working or needs your attention</string>

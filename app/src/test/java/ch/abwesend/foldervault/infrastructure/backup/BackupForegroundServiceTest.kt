@@ -23,7 +23,9 @@ import ch.abwesend.foldervault.infrastructure.room.entity.BackupConfigEntity
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
+import io.mockk.just
 import io.mockk.mockk
+import io.mockk.runs
 import io.mockk.verify
 import kotlinx.coroutines.delay
 import org.junit.After
@@ -101,6 +103,7 @@ class BackupForegroundServiceTest {
         every { scheduler.scheduleOneTime(any(), any(), any(), any()) } answers {
             continuationScheduled.countDown()
         }
+        every { scheduler.cancelOneTime(any()) } just runs
 
         coEvery { configDao.getByIdOnce(configId) } returns backupConfigEntity(configId)
         coEvery { configDao.getByIdOnce(secondConfigId) } returns backupConfigEntity(secondConfigId)
@@ -294,6 +297,43 @@ class BackupForegroundServiceTest {
         }
         coVerify(exactly = 0) { runner.runBackup(secondConfigId, any()) }
         awaitNotRunning(secondConfigId)
+    }
+
+    /**
+     * A user stop followed by the OS timeout may end in the hard-cancel path (the run never
+     * reaches a file boundary). The user explicitly declined the run — the hard-cancel path must
+     * honor [ForegroundHandoverPolicy] like the normal result handling does, not enqueue the
+     * WorkManager continuation unconditionally (RV-3).
+     */
+    @Test
+    fun `the OS timeout hard-cancel path schedules no continuation after a user stop`() {
+        val neverReleased = CountDownLatch(1)
+        mockRunnerHeldOpen(configId, runStarted, neverReleased)
+
+        val service = Robolectric.buildService(BackupForegroundService::class.java).create().get()
+        service.onStartCommand(startIntent(), 0, 1)
+        assertTrue(runStarted.await(10, TimeUnit.SECONDS), "the backup run should have started")
+
+        // The runner ignores the cooperative stop, so the drain in onTimeout must time out.
+        service.onStartCommand(stopIntent(), 0, 2)
+        service.onTimeout(1, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+
+        awaitNotRunning(configId)
+        verify(exactly = 0) { scheduler.scheduleOneTime(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `starting a run cancels the config's pending one-time slot through the scheduler`() {
+        mockRunnerStoppingCooperatively(configId, runStarted)
+
+        val service = Robolectric.buildService(BackupForegroundService::class.java).create().get()
+        service.onStartCommand(startIntent(), 0, 1)
+        assertTrue(runStarted.await(10, TimeUnit.SECONDS), "the backup run should have started")
+
+        // A queued one-time run would duplicate the foreground run once its constraints are met.
+        verify(exactly = 1) { scheduler.cancelOneTime(configId) }
+        service.onStartCommand(stopIntent(), 0, 2)
+        awaitNotRunning(configId)
     }
 
     /** Runner fake that works until the service's [BackupRunControl] requests a cooperative stop. */

@@ -45,6 +45,13 @@ data class AddEditFormState(
     val changedFilePolicy: ChangedFilePolicy = ChangedFilePolicy.DUPLICATE_WITH_TIMESTAMP,
     val networkPolicy: NetworkPolicy = NetworkPolicy.WIFI_ONLY,
     val requiresCharging: Boolean = false,
+    /**
+     * "Only sync changes from now on": skip the files already in the folder at creation time.
+     * Creation-only — in edit mode the toggle is shown disabled and the setter ignores changes,
+     * since the baseline is materialized by the first run and flipping the flag afterwards
+     * could silently re-upload or strand files.
+     */
+    val syncLaterChangesOnly: Boolean = false,
     val encryptionEnabled: Boolean = false,
     /**
      * True when editing a config that was already encrypted at creation. The encryption password is
@@ -74,7 +81,8 @@ sealed interface CloudSetupState {
 }
 
 sealed interface AddEditEvent {
-    data object Saved : AddEditEvent
+    /** [isNewConfig] lets the nav graph open the detail screen with auto-start for new configs. */
+    data class Saved(val configId: String, val isNewConfig: Boolean) : AddEditEvent
 }
 
 @Suppress("TooManyFunctions")
@@ -136,6 +144,7 @@ class AddEditBackupViewModel(
             changedFilePolicy = config.changedFilePolicy,
             networkPolicy = config.networkPolicy,
             requiresCharging = config.requiresCharging,
+            syncLaterChangesOnly = config.syncLaterChangesOnly,
             encryptionEnabled = config.encryptionEnabled,
             encryptionSettingsLocked = config.encryptionEnabled,
             retentionPolicy = config.retentionPolicy,
@@ -155,6 +164,14 @@ class AddEditBackupViewModel(
     fun setNetworkPolicy(policy: NetworkPolicy) = updateForm { it.copy(networkPolicy = policy) }
 
     fun setRequiresCharging(enabled: Boolean) = updateForm { it.copy(requiresCharging = enabled) }
+
+    /**
+     * Toggles "only sync changes from now on". Ignored in edit mode — the option is immutable
+     * after creation (see [AddEditFormState.syncLaterChangesOnly]).
+     */
+    fun setSyncLaterChangesOnly(enabled: Boolean) = updateForm {
+        if (it.isEditMode) it else it.copy(syncLaterChangesOnly = enabled)
+    }
 
     /**
      * Toggles encryption. Ignored once [AddEditFormState.encryptionSettingsLocked] is set: an
@@ -267,7 +284,14 @@ class AddEditBackupViewModel(
             updateForm { it.copy(isSaving = true, errorMessage = null) }
             try {
                 val subFolder = ensureSubFolder(state) ?: return@safeLaunch
-                val config = buildConfig(state, subFolder.first, subFolder.second) ?: return@safeLaunch
+                // Re-read the persisted config so run bookkeeping (baselineCompletedAt, run stats,
+                // pause flag) reflects any run that finished while the edit screen was open. The
+                // snapshot captured at load time can be stale — persisting it would clobber those
+                // columns, and resetting baselineCompletedAt to NULL would re-enter the baseline
+                // pass and silently strand files added since (RV-9). Falls back to the load-time
+                // snapshot if the row can no longer be read.
+                val persisted = existingConfigId?.let { configRepo.getById(it).first() } ?: existingConfig
+                val config = buildConfig(state, subFolder.first, subFolder.second, persisted) ?: return@safeLaunch
                 val previousTreeUri = existingConfig?.sourceTreeUri
                 configRepo.save(config)
                 // Editing may repoint a config at a different folder. The old folder's persisted
@@ -284,7 +308,7 @@ class AddEditBackupViewModel(
                     requiresCharging = config.requiresCharging,
                     globalDefault = globalDefault,
                 )
-                _events.emit(AddEditEvent.Saved)
+                _events.emit(AddEditEvent.Saved(config.id, isNewConfig = existingConfigId == null))
             } catch (e: Exception) {
                 e.rethrowCancellation()
                 logger.error("Failed to save backup config", e)
@@ -358,13 +382,20 @@ class AddEditBackupViewModel(
         return error == null
     }
 
+    /**
+     * Builds the [BackupConfig] to persist. User-editable fields come from [state]; all persisted
+     * bookkeeping and immutable fields ([persisted] — the freshly re-read config, or null for a new
+     * config) come from the fresh DB read so a run that finished while the edit screen was open is
+     * never clobbered (RV-9).
+     */
     private fun buildConfig(
         state: AddEditFormState,
         subFolderId: String,
         subFolderName: String,
+        persisted: BackupConfig?,
     ): BackupConfig? {
         val cloudState = state.cloudSetup as? CloudSetupState.Done ?: return null
-        val id = existingConfig?.id ?: UUID.randomUUID().toString()
+        val id = persisted?.id ?: UUID.randomUUID().toString()
 
         val (encryptedBlob, saltBase64) = resolveEncryptionMaterial(state) ?: return null
 
@@ -384,17 +415,20 @@ class AddEditBackupViewModel(
             retentionPolicy = state.retentionPolicy,
             networkPolicy = state.networkPolicy,
             requiresCharging = state.requiresCharging,
-            createdAt = existingConfig?.createdAt ?: System.currentTimeMillis(),
-            lastRunAt = existingConfig?.lastRunAt,
-            lastRunStatus = existingConfig?.lastRunStatus ?: BackupRunStatus.IDLE,
-            filesUploaded = existingConfig?.filesUploaded ?: 0,
-            filesSkipped = existingConfig?.filesSkipped ?: 0,
-            filesFailed = existingConfig?.filesFailed ?: 0,
-            bytesUploaded = existingConfig?.bytesUploaded ?: 0L,
-            totalFilesDiscovered = existingConfig?.totalFilesDiscovered ?: 0,
-            filesUploadedTotal = existingConfig?.filesUploadedTotal ?: 0,
-            lastRunCompletedNormally = existingConfig?.lastRunCompletedNormally ?: false,
-            isPaused = existingConfig?.isPaused ?: false,
+            // Immutable after creation: an edit can never flip the flag or reset the baseline.
+            syncLaterChangesOnly = persisted?.syncLaterChangesOnly ?: state.syncLaterChangesOnly,
+            baselineCompletedAt = persisted?.baselineCompletedAt,
+            createdAt = persisted?.createdAt ?: System.currentTimeMillis(),
+            lastRunAt = persisted?.lastRunAt,
+            lastRunStatus = persisted?.lastRunStatus ?: BackupRunStatus.IDLE,
+            filesUploaded = persisted?.filesUploaded ?: 0,
+            filesSkipped = persisted?.filesSkipped ?: 0,
+            filesFailed = persisted?.filesFailed ?: 0,
+            bytesUploaded = persisted?.bytesUploaded ?: 0L,
+            totalFilesDiscovered = persisted?.totalFilesDiscovered ?: 0,
+            filesUploadedTotal = persisted?.filesUploadedTotal ?: 0,
+            lastRunCompletedNormally = persisted?.lastRunCompletedNormally ?: false,
+            isPaused = persisted?.isPaused ?: false,
         )
     }
 

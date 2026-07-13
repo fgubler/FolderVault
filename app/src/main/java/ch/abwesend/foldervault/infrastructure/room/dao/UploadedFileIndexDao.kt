@@ -40,8 +40,21 @@ interface UploadedFileIndexDao {
     @Transaction
     suspend fun upsertCurrentVersion(entity: UploadedFileIndexEntity): Long {
         clearCurrentFlag(entity.backupConfigId, entity.relativePath)
+        deleteSupersededBaselineRows(entity.backupConfigId, entity.relativePath)
         return insert(entity.copy(isCurrentVersion = true))
     }
+
+    /**
+     * Baseline rows (never-uploaded snapshot entries of a `syncLaterChangesOnly` config) are
+     * only meaningful as the current version — once a real upload supersedes one, it is
+     * deleted rather than kept as a dead history entry that retention would otherwise trip on.
+     */
+    @Query(
+        """DELETE FROM UploadedFileIndex
+           WHERE backupConfigId = :backupConfigId AND relativePath = :relativePath
+             AND isBaseline = 1 AND isCurrentVersion = 0"""
+    )
+    suspend fun deleteSupersededBaselineRows(backupConfigId: String, relativePath: String)
 
     @Query("UPDATE UploadedFileIndex SET pendingDeletionCloudFileId = NULL WHERE id = :id")
     suspend fun clearPendingDeletion(id: Long)

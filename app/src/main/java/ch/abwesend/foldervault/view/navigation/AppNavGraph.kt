@@ -73,6 +73,7 @@ fun AppNavGraph(
                 is AppDestination.BackupDetail -> NavEntry(key) {
                     BackupDetailScreen(
                         configId = key.configId,
+                        autoStartBackup = key.autoStartBackup,
                         onBack = { backStack.removeLastOrNull() },
                         onEdit = { backStack.add(AppDestination.AddEditBackup(key.configId)) },
                         onDelete = { backStack.removeLastOrNull() },
@@ -89,7 +90,14 @@ fun AppNavGraph(
                     AddEditBackupScreen(
                         configId = key.configId,
                         onBack = { backStack.removeLastOrNull() },
-                        onSave = { backStack.removeLastOrNull() },
+                        onSave = { configId, isNewConfig ->
+                            backStack.removeLastOrNull()
+                            // A freshly created config lands on its detail screen, which starts
+                            // the initial upload (foreground service) after the usual prompts.
+                            if (isNewConfig) {
+                                backStack.add(AppDestination.BackupDetail(configId, autoStartBackup = true))
+                            }
+                        },
                     )
                 }
                 is AppDestination.Restore -> NavEntry(key) {

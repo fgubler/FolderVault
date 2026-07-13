@@ -43,7 +43,7 @@ abstract class FolderVaultDatabase : RoomDatabase() {
          * Current schema version. Whenever this is bumped, a matching entry must be added to
          * [DatabaseMigrations.ALL] — enforced by `DatabaseMigrationChainTest`.
          */
-        const val DB_VERSION = 3
+        const val DB_VERSION = 4
 
         internal const val DB_NAME = "foldervault.db"
 
@@ -64,12 +64,12 @@ private object DatabaseCallback : RoomDatabase.Callback() {
     override fun onOpen(db: SupportSQLiteDatabase) {
         super.onOpen(db)
         db.execSQL("PRAGMA foreign_keys = ON")
-    }
-
-    override fun onCreate(db: SupportSQLiteDatabase) {
-        super.onCreate(db)
         // Room does not support partial indexes natively.
         // This index enforces that at most one row per (backupConfigId, relativePath) has isCurrentVersion = 1.
+        // Created in onOpen (idempotent, runs after migrations AND schema validation) instead of
+        // onCreate: Room validates the complete index set of a table after every migration, so
+        // this undeclared index must not exist during validation — each migration drops it
+        // (see `DatabaseMigrations.dropPartialIndexesForValidation`) and this recreates it.
         db.execSQL(
             """CREATE UNIQUE INDEX IF NOT EXISTS idx_uploaded_file_index_current_version
                ON UploadedFileIndex (backupConfigId, relativePath)

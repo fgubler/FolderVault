@@ -181,6 +181,8 @@ private class FakeBackupScheduler : IBackupScheduler {
         asContinuation: Boolean,
     ) = true
 
+    override fun cancelOneTime(configId: String) = Unit
+
     override fun cancel(configId: String) = Unit
 
     override fun cancelAll() {

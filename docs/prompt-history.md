@@ -7,6 +7,232 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-13 — "Only sync changes from now on" option for new backup configs
+
+### What was requested
+When creating a backup config, offer an option (default off) to skip the files already in the
+folder and only sync changes from then on. A min-date/mtime-cutoff approach was questioned and
+rejected in planning (files copied in later keep old mtimes → silently never synced; SAF mtimes
+unreliable); a **baseline snapshot** was chosen instead, with baseline rows explicitly
+recognizable in the DB.
+
+### What was done
+- **Schema v3→v4** (`MIGRATION_3_4`): `BackupConfig.syncLaterChangesOnly` (INTEGER NOT NULL
+  DEFAULT 0, immutable after creation), `BackupConfig.baselineCompletedAt` (INTEGER NULL),
+  `UploadedFileIndex.isBaseline` (INTEGER NOT NULL DEFAULT 0). Mirrored in entities, the
+  domain `BackupConfig`, and `BackupConfigRepository` mapping.
+- **Baseline pass**: new `BaselineRecorder` records every source file as a *current baseline
+  row* (`isBaseline = 1`, empty `cloudFileId`/`remoteName`) instead of uploading. Gated in
+  `BackupRunner.runBackupExclusive` **before** `authorize()` (DB-only → works offline) while
+  `syncLaterChangesOnly && baselineCompletedAt == null`. Interruption-safe: a cooperative stop
+  takes the `hitTimeBudget` path (status `INITIAL_SYNC_IN_PROGRESS` keeps FGS routing for the
+  resume), already-indexed paths are skipped on resume so originally captured mtimes survive.
+  The first run of such a config still routes to the foreground service — it hosts the baseline
+  pass instead of an initial upload and finishes quickly.
+- **Scanner seam**: SAF tree walk extracted from `FileSystemAnalyzer.collectFileInfos` into
+  `LocalFileScanner` / `ILocalFileScanner` (+ `LocalFileInfo` now top-level internal), shared by
+  analyzer and recorder, fakeable in tests.
+- **ChangeDetector**: baseline rows never yield `CHANGED`/`CHECK_CLOUD` — any divergence is
+  `NEW` (first upload: no predecessor to overwrite/duplicate, and `IGNORE` does not suppress
+  it); unusable mtime + size match is `UNCHANGED` (documented limitation: content-only change
+  without size change stays undetected on mtime-less providers — no cloud object to check).
+- **Index hygiene**: `upsertCurrentVersion` deletes superseded baseline rows in the same
+  transaction (a real upload replaces the baseline row instead of leaving a dead version).
+- **Manifest**: `buildManifestEntries` (extracted, unit-tested) filters baseline rows.
+- **Retention**: `KeepLastN` counts cloud copies only; both policies drop stray baseline rows
+  via `deleteById`, never `cloudProvider.deleteFile("")`.
+- **Run bookkeeping**: baseline run reports the recorded files as `filesSkipped`; clean pass →
+  `UP_TO_DATE` + new info message `BASELINE_RECORDED` (notifies = false).
+- **UI**: toggle "Only sync changes from now on" in the Basics section below the folder picker
+  (standard label + info-icon + switch row); shown but disabled in edit mode, setter is a no-op
+  in edit mode, `buildConfig` always carries the stored flag/timestamp verbatim on edit.
+- **Tests first throughout**: migration v1→v4 chain, 5 baseline `ChangeDetector` cases,
+  Room upsert-over-baseline + `updateBaselineCompleted`, `BaselineRecorderTest` (hand-written
+  fakes; interruption/resume/inaccessible/empty cases), `ManifestEntriesTest`, 3 retention
+  guard cases, 5 ViewModel cases (default off, create/edit setter, save wiring).
+
+### Follow-up fix: v3→v4 migration failed on-device ("Migration didn't properly handle: UploadedFileIndex")
+Room validates each table's **complete index set** after a migration; the hand-created partial
+unique index `idx_uploaded_file_index_current_version` (created in `DatabaseCallback.onCreate`,
+undeclarable via `@Index`) is not in the entity's expected set, so the first-ever real
+migration failed validation and triggered the database-reset recovery screen. Latent since v1 —
+fresh installs never validate. Fix: `MIGRATION_3_4` drops the index first
+(`dropPartialIndexesForValidation()`, a convention every future migration must follow — noted
+in `CLAUDE.md`), and the callback recreates it in `onOpen` (idempotent, runs after migrations
+*and* validation). New `DatabaseMigrationValidationTest` reproduces the failure through Room's
+real open path against an on-disk v3 database (schema replayed verbatim from
+`schemas/.../3.json` incl. partial index and identity hash) — the raw-SQL migration tests
+bypass Room's validation and could not catch this class of bug.
+
+### Decisions carried forward
+- Baseline captures the folder state at the **first run**, not the creation instant (new
+  configs auto-start immediately, so the gap is seconds; pre-auth branch keeps it minimal).
+- Baseline rows only ever exist as current versions; `isBaseline` is the semantic marker
+  (sentinel `cloudFileId = ""` is not to be relied on).
+- Every future Room migration starts with `dropPartialIndexesForValidation()`; the partial
+  index lives in `onOpen`. Extend `DatabaseMigrationValidationTest` on each `DB_VERSION` bump.
+
+## 2026-07-13 — Review fixes RV-1, RV-3 … RV-7 (`review/develop.md`)
+
+### What was requested
+Fix the findings from the branch review of `develop` vs `origin/master` (`review/develop.md`):
+first RV-1 (Blocking), then RV-3 through RV-7. RV-2 remains open.
+
+### What was done
+- **RV-1** — `BackupForegroundService.executeRun` gained the `catch (e: Exception)` that used to
+  live inside `runWithConfig`, so the `getByIdOnce` config read and the result handling can no
+  longer crash the app through the handler-less service scope. `runWithConfig` keeps only
+  `try { … } finally { control = null }`.
+- **RV-3** — `onTimeout`'s hard-cancel path (`drained == null`) now consults
+  `ForegroundHandoverPolicy.shouldScheduleContinuation(stopReason)` before enqueueing the
+  WorkManager continuation, so a user-stopped run is not resurrected in the background. New
+  service test: user stop + a runner that ignores the cooperative stop + OS timeout → no
+  continuation scheduled.
+- **RV-5** — the duplicate `runParameters` field is gone; `activeRun` is `@Volatile` (writes
+  stay under `runLock`). `onTimeout` captures it *before* draining the run, because the run's
+  own `finally` nulls it via `advanceQueue` — a post-drain read would race that cleanup (the
+  reason the duplicate field existed).
+- **RV-6** — new `IBackupScheduler.cancelOneTime(configId)` (implemented in `BackupScheduler`);
+  the service uses it instead of a raw `WorkManager.cancelUniqueWork`, keeping unique-name
+  knowledge in the scheduler. Hand-written fakes updated; new service test asserts the call.
+- **RV-4** — `BackupDetailViewModel.continuesAutomatically` resolves the config's *effective*
+  schedule (own, or the global default when delegating) and the interrupted-sync banner drops
+  the "continues automatically in the background" promise for manual-only configs (new string
+  `detail_initial_sync_incomplete_manual`). Two new VM tests cover the resolution.
+- **RV-7** — `BackupDetailScreen` consumes `autoStartBackup` as a one-shot flag through
+  `rememberSaveable` (`autoStartConsumingViewModel`): the first ViewModel sees `true`, a
+  ViewModel re-created for the same back-stack entry (process-death restore) sees `false`, so
+  dismissed metered/charging prompts do not reappear. Replacing the back-stack entry was
+  rejected: it would clear the ViewModel store and could cancel the auto-start mid-flight.
+
+### Verification
+`./gradlew assembleDebug` could not run inside the sandbox (fresh daemon cannot download the
+JDK 21 toolchain) — build + tests to be verified outside the sandbox.
+
+## 2026-07-13 — Review fixes B2 (in-service run queue) + N1 + N2
+
+### What was requested
+Fix B2 from `review/develop.md`: a "Back up now" for a second config while the foreground
+service was busy was silently dropped. Instead of the review's suggested WorkManager fallback,
+the chosen design queues the run *inside* the service (runs stay strictly serial — parallel
+uploads would share the same ~6 h dataSync budget and uplink without finishing sooner, and
+would break the serial-upload convention). Also fix nitpicks N1 and N2.
+
+### What was done
+- **B2** — `BackupForegroundService` now holds a FIFO queue of `RunParameters` guarded by a
+  lock shared with the active-run state. A start for a different config while busy is queued
+  and launched back-to-back in the same service session (full FGS budget); a start for a
+  config already active or queued is ignored as a duplicate. Queued configs are marked in
+  `ForegroundRunState` immediately (the UI shows the accepted tap as running), the progress
+  notification appends "N more backups waiting" (live via a `pendingRunCount` StateFlow
+  combined into `publishProgress`), an OS timeout hands queued runs to
+  `scheduler.scheduleOneTime`, and a user stop drops them. The service stops itself only when
+  the active slot and the queue are both empty; `onDestroy` drains the queue so queued configs
+  never stay marked as running. The `startForeground` re-post on a second start now re-uses
+  the active run's latest notification instead of building one for the incoming config
+  (fixes B2's notification-flip side issue); a start without a config id no longer kills a
+  live run (`stopWhenIdle`).
+- **N1** — `onTimeout`'s drain check now distinguishes "no job" (stop the idle service) from
+  "did not drain" via `withTimeoutOrNull { job.join(); true }`, so a boundary-timed join can
+  no longer double-schedule the continuation.
+- **N2** — `NetworkStateMonitor` registered in the Koin module and injected like the service's
+  other collaborators.
+- **Tests**: `BackupForegroundServiceTest` extended with queue-then-run (incl. queued count in
+  the notification and `ForegroundRunState` feedback), duplicate-start, user-stop-drains-queue,
+  and OS-timeout-hands-over-queued-runs scenarios.
+
+## 2026-07-13 — Review fixes B1 + B3 on the foreground-service commit
+
+### What was requested
+Fix findings B1 and B3 from `review/develop.md` (code review of commit `7db0b96`), with a
+Robolectric test for B1 — trying it in the Bash sandbox first and dropping it if blocked.
+
+### What was done
+- **B1** — `BackupForegroundService` overrode only `onTimeout(startId)`, which the framework
+  invokes solely for shortService timeouts; the dataSync time-limit path (Android 15+) calls
+  only `onTimeout(startId, fgsType)`, so the OS-timeout safety net was dead code. Replaced the
+  override with the two-argument overload (one-arg dropped — the service is never a
+  shortService) and documented why on the KDoc.
+- **B3** — the progress notification read `totalFilesDiscovered` from the run-start config
+  snapshot, which is only persisted at run end — so the very first initial-upload run showed
+  the static "Uploading files…" text for hours. `BackupRunControl` now carries a
+  `filesDiscovered` StateFlow, `FileSystemAnalyzer.analyze` reports the scanned total right
+  after the tree walk, and `publishProgress` combines both live flows (persisted value only as
+  fallback while the scan is pending).
+- **Tests**: new `BackupForegroundServiceTest` (Robolectric + MockK + Koin) drives the real
+  service through `onStartCommand`; one test fires the two-arg `onTimeout` and asserts the
+  cooperative stop + WorkManager continuation, the other asserts live "3 / 42" counts reach
+  the notification on a first run with all-zero persisted counters. Both were mutation-checked
+  (revert fix → test fails). The Robolectric default network needed
+  `ShadowNetworkCapabilities` (INTERNET + NOT_METERED), otherwise the service's own
+  network-policy watcher stops the run and silently voids the assertions.
+  `BackupRunControlTest` extended for the new flow.
+
+### Learnings
+- MockK + Robolectric DO run inside the Bash sandbox now (correct sandbox profile + fresh
+  Gradle daemon) — CLAUDE.md and memory updated; hand-written fakes remain the preference for
+  seam logic.
+- `./gradlew :app:test` does not accept `--tests`; use `:app:testDebugUnitTest --tests "fqcn"`.
+
+## 2026-07-13 — Initial upload moved into a dataSync foreground service
+
+### What was requested
+Run the *initial upload* in a foreground service instead of WorkManager: with many files the
+~10-minute worker windows cause too many cancellations and the first sync takes days.
+Decisions confirmed during planning: auto-start after creating a config (plus "back up now"
+while the initial sync is incomplete), fall back to a WorkManager continuation on any
+interruption, honor Wi-Fi-only/charging prompts at start and stop cleanly on a mid-run
+network-policy violation.
+
+### What was done
+- **`BackupRunControl`** generalizes the former `deadline` param of `BackupRunner.runBackup`:
+  the uploader polls `shouldStop()` at each committed-file boundary (former deadline check in
+  `BackupUploader.processChannel`) so user stop / Wi-Fi loss / OS timeout all take the clean
+  `hitTimeBudget` path (`INITIAL_SYNC_IN_PROGRESS`, cross-run counters, continuation) instead
+  of `CancellationException`. Also carries live per-run progress as a `StateFlow` for the
+  service's notification (per-file progress is deliberately not persisted).
+- **`BackupForegroundService`** (dataSync FGS, `START_NOT_STICKY`): runs the same pipeline with
+  a 5.5 h budget under the resurrected LOW-importance "Backup status" notification
+  ("Uploading N / M files", Stop action, deep link). Cancels the pending *one-time* unique work
+  at start (periodic + charging-fallback names untouched); `onTimeout` (Android 15's 6 h cap)
+  requests a cooperative stop, hard-cancels after 4 s, and schedules the continuation itself.
+  `ForegroundHandoverPolicy` (pure, tested): every stop except an explicit user stop enqueues a
+  WorkManager continuation. Notification code was resurrected from commit `be3b3bd` — whose
+  *`setForeground`-inside-worker* approach (crashes on background start, Android 12+) remains
+  removed; the service is only ever started from foreground UI (`ForegroundBackupLauncher`,
+  which degrades to `scheduleOneTime` if the FGS start is rejected).
+- **Routing**: new domain `StartManualBackupUseCase` — `IDLE` / `INITIAL_SYNC_IN_PROGRESS` /
+  `totalFilesDiscovered > 0` (interrupted sync; counters only reset on a normal completion) →
+  foreground service, established backups → `scheduleOneTime`. `BackupDetailViewModel` uses it
+  behind the existing metered/charging prompts; saving a *new* config navigates to the detail
+  screen with `autoStartBackup = true`, which triggers `backUpNow()` once (guarded on `IDLE`).
+  A banner on the detail screen offers "Continue now" for an interrupted initial sync.
+- **Visibility**: `ForegroundRunState` (in-memory set of running configIds) merged into
+  `BackupScheduler.observeIsRunning`, so the UI treats service runs like worker runs. New
+  `NetworkStateMonitor` (`infrastructure/network`) observes whether the default network
+  satisfies the policy; the service stops cleanly after a 5 s grace (network switches emit a
+  transient loss).
+- Manifest: `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_DATA_SYNC` permissions, `<service
+  android:foregroundServiceType="dataSync">`.
+- Tests: `BackupRunControlTest`, `ForegroundRunStateTest`, `ForegroundHandoverPolicyTest`,
+  `StartManualBackupUseCaseTest` (hand-written fakes); `BackupDetailViewModelTest` updated
+  (established-backup default + 3 new routing/auto-start tests, MockK).
+
+### Verification
+- Sandbox could not build during the implementation session (Gradle daemon toolchain download
+  blocked — the documented environment issue); after a terminal restart,
+  `./gradlew assembleDebug test detekt` all green (348 tests). Fixes applied during verification:
+  - `BackupDetailViewModel`: the auto-start `init` block moved below every property that
+    `backUpNow()` touches — on an eager dispatcher (the test's `UnconfinedTestDispatcher`) the
+    coroutine ran during construction and hit the not-yet-initialized `isRunning` backing field
+    (NPE swallowed by `safeLaunch`, launcher never called).
+  - `BackupForegroundService.scope`: `lateinit` + `onCreate` replaced by a lazy val (detekt
+    `LateinitUsage`); `buildVm` test helper got the codebase-standard
+    `@Suppress("LongParameterList")`.
+- Device (open): create config with a large folder → FGS runs with progress notification; Stop
+  stops cleanly; Wi-Fi loss on a Wi-Fi-only config hands over to a waiting continuation;
+  swipe-away → upload continues. Screenshot check of the "Continue now" banner pending.
+
 ## 2026-07-08 — Third review round (fresh `review/develop.md`) + fixes for findings 1, 3, 4
 
 ### What was requested

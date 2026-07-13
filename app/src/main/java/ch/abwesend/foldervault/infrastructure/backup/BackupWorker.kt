@@ -92,7 +92,7 @@ class BackupWorker(
             }
 
             val deadline = Instant.now().plusMillis(RUN_BUDGET_MS - DEADLINE_BUFFER_MS)
-            val result = backupRunner.runBackup(id, deadline)
+            val result = backupRunner.runBackup(id, BackupRunControl(deadline))
 
             // A skipped run did nothing and has no run row — no notifications to derive from it.
             if (result is RunResult.Completed) {

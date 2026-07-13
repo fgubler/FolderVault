@@ -41,4 +41,14 @@ data class UploadedFileIndexEntity(
      * reaper retries any rows still marked pending.
      */
     val pendingDeletionCloudFileId: String? = null,
+
+    /**
+     * True for rows recorded by the baseline snapshot of a "only sync changes from now on"
+     * config ([BackupConfigEntity.syncLaterChangesOnly]): the file existed at the first run
+     * and was deliberately never uploaded. Baseline rows carry empty [cloudFileId] /
+     * [remoteName] sentinels and [uploadedAt] means "baselined at". They must never reach the
+     * cloud manifest or retention cloud-deletes, and they are only ever current versions —
+     * a real upload of the same path replaces the baseline row.
+     */
+    val isBaseline: Boolean = false,
 )

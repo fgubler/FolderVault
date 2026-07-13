@@ -22,7 +22,10 @@ import kotlinx.coroutines.flow.first
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.cancellation.CancellationException
 
-class BackupScheduler(private val context: Context) : IBackupScheduler {
+class BackupScheduler(
+    private val context: Context,
+    private val foregroundRunState: ForegroundRunState,
+) : IBackupScheduler {
     private val log get() = logger
     private val workManager get() = WorkManager.getInstance(context)
 
@@ -156,6 +159,22 @@ class BackupScheduler(private val context: Context) : IBackupScheduler {
             .any { !it.state.isFinished }
 
     /**
+     * Cancels only the config's pending *one-time* slot (manual runs and time-budget
+     * continuations share it); the periodic schedule and the charging-only fallback keep
+     * their own unique names and stay untouched.
+     */
+    override fun cancelOneTime(configId: String) {
+        try {
+            workManager.cancelUniqueWork(BackupWorker.oneTimeWorkName(configId))
+            log.info("Cancelled one-time backup work for config $configId")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.error("Failed to cancel one-time backup work for config $configId", e)
+        }
+    }
+
+    /**
      * Cancels all work (periodic + one-time + charging-only fallback) for this config.
      * Call before deleting or when pausing a config — NOT when a schedule merely resolves to
      * manual-only (that must leave pending one-time / fallback work alone, see [cancelPeriodic]).
@@ -203,12 +222,17 @@ class BackupScheduler(private val context: Context) : IBackupScheduler {
         }
     }
 
+    /**
+     * True while any host is executing a run for this config — a WorkManager worker (periodic,
+     * one-time, or charging fallback) or the foreground service ([ForegroundRunState]).
+     */
     override fun observeIsRunning(configId: String): Flow<Boolean> {
         val periodic = workManager.getWorkInfosForUniqueWorkFlow(BackupWorker.workName(configId))
         val oneTime = workManager.getWorkInfosForUniqueWorkFlow(BackupWorker.oneTimeWorkName(configId))
         val fallback = workManager.getWorkInfosForUniqueWorkFlow(BackupWorker.chargingFallbackWorkName(configId))
-        return combine(periodic, oneTime, fallback) { periodicInfos, oneTimeInfos, fallbackInfos ->
-            (periodicInfos + oneTimeInfos + fallbackInfos).any { it.state == WorkInfo.State.RUNNING }
+        val foreground = foregroundRunState.observeIsRunning(configId)
+        return combine(periodic, oneTime, fallback, foreground) { periodicInfos, oneTimeInfos, fallbackInfos, fg ->
+            fg || (periodicInfos + oneTimeInfos + fallbackInfos).any { it.state == WorkInfo.State.RUNNING }
         }.distinctUntilChanged()
     }
 

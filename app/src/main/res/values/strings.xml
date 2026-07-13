@@ -3,6 +3,20 @@
     <string name="app_name">Folder Vault</string>
 
     <!-- Backup notifications -->
+    <string name="notification_channel_status_name">Backup status</string>
+    <string name="notification_channel_status_description">Progress updates while a backup is running</string>
+    <string name="backup_notification_progress_title">FolderVault Backup</string>
+    <string name="backup_notification_progress_text">Uploading files…</string>
+    <string name="backup_notification_progress_text_with_count">Uploading %1$d / %2$d files</string>
+    <string name="backup_notification_progress_text_with_queued">%1$s — %2$s</string>
+    <plurals name="backup_notification_progress_queued">
+        <item quantity="one">%d more backup waiting</item>
+        <item quantity="other">%d more backups waiting</item>
+    </plurals>
+    <string name="backup_notification_stop_action">Stop</string>
+    <string name="detail_initial_sync_incomplete">First backup not finished yet (%1$d of %2$d files uploaded). It continues automatically in the background — or finish it now while the app is open.</string>
+    <string name="detail_initial_sync_incomplete_manual">First backup not finished yet (%1$d of %2$d files uploaded). Finish it now while the app is open.</string>
+    <string name="detail_initial_sync_continue">Continue now</string>
     <string name="notification_channel_problems_name">Backup problems</string>
     <string name="notification_channel_problems_description">Alerts when a backup stops working or needs your attention</string>
     <string name="backup_notification_problems_title">Backup problem</string>
@@ -88,6 +102,7 @@
     <string name="msg_upload_failed">One or more files failed to upload.</string>
     <string name="msg_encryption_failed">One or more files could not be encrypted.</string>
     <string name="msg_initial_sync_complete">Initial sync complete.</string>
+    <string name="msg_baseline_recorded">Current folder contents recorded. Only files added or changed from now on will be backed up.</string>
     <string name="msg_quota_exceeded">Google Drive storage quota exceeded — backup stopped.</string>
     <string name="msg_unreliable_timestamps">File timestamps are unreliable. Some unchanged files may be re-checked.</string>
     <string name="msg_rate_limited">Upload was rate-limited. Backup will continue in the next run.</string>
@@ -141,6 +156,7 @@
     <string name="label_schedule">Schedule</string>
     <string name="label_network_policy">Network policy</string>
     <string name="label_requires_charging">Only run while charging</string>
+    <string name="label_sync_later_changes_only">Only sync changes from now on</string>
     <string name="label_changed_file_policy">Changed-file policy</string>
     <string name="label_retention_policy">Retention policy</string>
     <string name="label_keep_n_copies">Number of copies to keep</string>
@@ -158,6 +174,8 @@
     <string name="button_keep_editing">Keep editing</string>
     <string name="info_requires_charging_title">Only run while charging</string>
     <string name="info_requires_charging_body">When on, FolderVault waits for the phone to be plugged in before starting a backup. When off, backups run whenever the phone has power to spare — but if several attempts in a row get cut short (for example the phone unplugs or reboots), FolderVault will schedule one extra charging-only run in the background so at least one attempt gets to finish. Your normal schedule keeps running either way.</string>
+    <string name="info_sync_later_changes_only_title">Only sync changes from now on</string>
+    <string name="info_sync_later_changes_only_body">When on, the files already in the folder are not uploaded. The first run just takes note of what is there; from then on, only files you add or change get backed up. The files present now stay on your phone and are never uploaded — as long as you don\'t change them. If you edit one later, that new version does get backed up. This choice is fixed once the backup is created. When off, everything in the folder is backed up.</string>
     <string name="info_changed_file_policy_title">Changed-file policy</string>
     <string name="info_changed_file_policy_body">FolderVault is built for files that rarely change. When a file you\'ve already backed up gets edited, this setting decides whether to upload it as a new timestamped copy, overwrite the previous upload, or skip the change.</string>
     <string name="info_retention_policy_title">Retention policy</string>

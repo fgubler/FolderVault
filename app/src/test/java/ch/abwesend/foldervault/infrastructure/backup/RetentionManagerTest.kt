@@ -86,6 +86,13 @@ private class FakeUploadedFileIndexDao(
         rows.removeAll { it.id == id }
     }
 
+    override suspend fun deleteSupersededBaselineRows(backupConfigId: String, relativePath: String) {
+        rows.removeAll {
+            it.backupConfigId == backupConfigId && it.relativePath == relativePath &&
+                it.isBaseline && !it.isCurrentVersion
+        }
+    }
+
     override suspend fun getVersionHistory(
         backupConfigId: String,
         relativePath: String,
@@ -104,7 +111,8 @@ private class FakeUploadedFileIndexDao(
     override suspend fun pruneVersionsOlderThan(backupConfigId: String, cutoffEpochMs: Long) = notNeeded()
     override suspend fun deleteAllForConfig(backupConfigId: String) = notNeeded()
     override suspend fun getCurrentVersionList(configId: String) = notNeeded()
-    override suspend fun getOldVersionsOlderThan(configId: String, cutoffEpochMs: Long) = notNeeded()
+    override suspend fun getOldVersionsOlderThan(configId: String, cutoffEpochMs: Long) =
+        rows.filter { it.backupConfigId == configId && !it.isCurrentVersion && it.uploadedAt < cutoffEpochMs }
 
     private fun notNeeded(): Nothing = throw UnsupportedOperationException("not needed for this test")
 }
@@ -240,6 +248,50 @@ class RetentionManagerTest : StringSpec({
         manager.applyRetention(configWithPolicy("cfg", RetentionPolicy.KeepLastN(1)))
 
         dao.rows.map { it.id } shouldBe listOf(1L)
+    }
+
+    "KeepLastN counts cloud copies only and never cloud-deletes a baseline row" {
+        // A stray non-current baseline row (defense in depth — the upsert transaction normally
+        // deletes these) plus two real versions, KeepLastN(1): the old real version is
+        // cloud-deleted, the baseline row is dropped locally without any cloud call for it.
+        val current = versionRow(1L, "cfg", "a.jpg", cloudFileId = "cloud-new", uploadedAt = 3L, isCurrent = true)
+        val old = versionRow(2L, "cfg", "a.jpg", cloudFileId = "cloud-old", uploadedAt = 2L, isCurrent = false)
+        val baseline = versionRow(3L, "cfg", "a.jpg", cloudFileId = "", uploadedAt = 1L, isCurrent = false)
+            .copy(isBaseline = true, remoteName = "")
+        val dao = FakeUploadedFileIndexDao(listOf(current, old, baseline))
+        val cloud = FakeCloudProvider()
+        val manager = RetentionManager(dao, cloud)
+
+        manager.applyRetention(configWithPolicy("cfg", RetentionPolicy.KeepLastN(1)))
+
+        cloud.deletedIds shouldBe listOf("cloud-old")
+        dao.rows.map { it.id } shouldBe listOf(1L)
+    }
+
+    "KeepLastN keeps a current baseline row untouched" {
+        val baseline = versionRow(1L, "cfg", "pre.jpg", cloudFileId = "", uploadedAt = 1L, isCurrent = true)
+            .copy(isBaseline = true, remoteName = "")
+        val dao = FakeUploadedFileIndexDao(listOf(baseline))
+        val cloud = FakeCloudProvider()
+        val manager = RetentionManager(dao, cloud)
+
+        manager.applyRetention(configWithPolicy("cfg", RetentionPolicy.KeepLastN(1)))
+
+        cloud.deletedIds shouldBe emptyList()
+        dao.rows.map { it.id } shouldBe listOf(1L)
+    }
+
+    "KeepNewerThan drops an old superseded baseline row locally with zero cloud calls" {
+        val baseline = versionRow(1L, "cfg", "pre.jpg", cloudFileId = "", uploadedAt = 1L, isCurrent = false)
+            .copy(isBaseline = true, remoteName = "")
+        val dao = FakeUploadedFileIndexDao(listOf(baseline))
+        val cloud = FakeCloudProvider()
+        val manager = RetentionManager(dao, cloud)
+
+        manager.applyRetention(configWithPolicy("cfg", RetentionPolicy.KeepNewerThan(1)))
+
+        cloud.deletedIds shouldBe emptyList()
+        dao.rows.isEmpty() shouldBe true
     }
 
     "reap drops the whole row once a retention-marked own object is finally gone" {

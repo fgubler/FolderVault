@@ -44,6 +44,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,6 +58,7 @@ import androidx.core.net.toUri
 import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.backup.BackupConfig
 import ch.abwesend.foldervault.domain.backup.BackupMessage
+import ch.abwesend.foldervault.domain.backup.StartManualBackupUseCase
 import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.model.BackupRunStatus
 import ch.abwesend.foldervault.domain.model.BackupSchedule
@@ -81,6 +83,22 @@ import java.util.Locale
 
 private const val CLOUD_FOLDER_WIDTH_FRACTION = 0.75f
 
+/**
+ * Creates the screen's [BackupDetailViewModel], consuming [autoStartBackup] as a one-shot flag:
+ * the nav entry keeps `autoStartBackup = true` on the back stack forever, but only the very
+ * first ViewModel may see it — one re-created for the same entry (process-death restore) would
+ * otherwise re-open the backup prompts the user already dismissed. The consumed state lives in
+ * [rememberSaveable], so it survives exactly as long as the back-stack entry itself.
+ */
+@Composable
+private fun autoStartConsumingViewModel(configId: String, autoStartBackup: Boolean): BackupDetailViewModel {
+    var autoStartPending by rememberSaveable { mutableStateOf(autoStartBackup) }
+    val viewModel: BackupDetailViewModel =
+        koinViewModel(parameters = { parametersOf(configId, autoStartPending) })
+    LaunchedEffect(Unit) { autoStartPending = false }
+    return viewModel
+}
+
 private fun formatMessageTimestamp(epochMillis: Long, locale: Locale): String {
     val formatter = DateTimeFormatter
         .ofLocalizedDateTime(FormatStyle.MEDIUM)
@@ -97,9 +115,11 @@ fun BackupDetailScreen(
     onDelete: () -> Unit,
     onShowRunHistory: () -> Unit,
     modifier: Modifier = Modifier,
-    viewModel: BackupDetailViewModel = koinViewModel(parameters = { parametersOf(configId) }),
+    autoStartBackup: Boolean = false,
+    viewModel: BackupDetailViewModel = autoStartConsumingViewModel(configId, autoStartBackup),
 ) {
     val config by viewModel.config.collectAsState()
+    val continuesAutomatically by viewModel.continuesAutomatically.collectAsState()
     val messages by viewModel.messages.collectAsState()
     val passwordCheckResult by viewModel.passwordCheckResult.collectAsState()
     val isRunning by viewModel.isRunning.collectAsState()
@@ -161,6 +181,7 @@ fun BackupDetailScreen(
                 config = cfg,
                 messages = messages,
                 isRunning = isRunning,
+                continuesAutomatically = continuesAutomatically,
                 onBackUpNow = viewModel::backUpNow,
                 onTogglePause = viewModel::togglePause,
                 onCheckPassword = { showPasswordDialog = true },
@@ -213,6 +234,7 @@ private fun DetailContent(
     config: BackupConfig,
     messages: List<BackupMessage>,
     isRunning: Boolean,
+    continuesAutomatically: Boolean,
     onBackUpNow: () -> Unit,
     onTogglePause: () -> Unit,
     onCheckPassword: () -> Unit,
@@ -228,6 +250,15 @@ private fun DetailContent(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item { ConfigInfoSection(config = config) }
+        if (showInitialSyncBanner(config, isRunning)) {
+            item {
+                InitialSyncIncompleteBanner(
+                    config = config,
+                    continuesAutomatically = continuesAutomatically,
+                    onContinue = onBackUpNow,
+                )
+            }
+        }
         item { ActionButtonRow(config, isRunning, onBackUpNow, onTogglePause, onCheckPassword) }
         item { HorizontalDivider() }
         item {
@@ -431,6 +462,59 @@ private fun ActionButtonRow(
         if (config.encryptionEnabled) {
             OutlinedButton(onClick = onCheckPassword, modifier = Modifier.fillMaxWidth()) {
                 Text(stringResource(R.string.button_check_password))
+            }
+        }
+    }
+}
+
+/**
+ * The banner appears when an initial sync was interrupted (service stopped, run cancelled or
+ * failed mid-sync) and nothing is currently running — a fresh config (IDLE) has nothing to
+ * "continue" yet, and a paused config must not invite a run that would be skipped.
+ */
+private fun showInitialSyncBanner(config: BackupConfig, isRunning: Boolean): Boolean =
+    StartManualBackupUseCase.needsForegroundService(config.lastRunStatus, config.totalFilesDiscovered) &&
+        config.lastRunStatus != BackupRunStatus.IDLE &&
+        !isRunning &&
+        !config.isPaused
+
+/**
+ * Reassuring "this is not an error" banner for an interrupted initial sync (spec §7.6), with a
+ * one-tap way to continue in the foreground service — going through the same prompt chain as
+ * the "Back up now" button. A manual-only config gets a text without the "continues
+ * automatically" promise: nothing is scheduled for it, so only the tap continues the sync.
+ */
+@Composable
+private fun InitialSyncIncompleteBanner(
+    config: BackupConfig,
+    continuesAutomatically: Boolean,
+    onContinue: () -> Unit,
+) {
+    val textRes = if (continuesAutomatically) {
+        R.string.detail_initial_sync_incomplete
+    } else {
+        R.string.detail_initial_sync_incomplete_manual
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                text = stringResource(
+                    textRes,
+                    config.filesUploadedTotal,
+                    config.totalFilesDiscovered,
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                TextButton(onClick = onContinue) {
+                    Text(stringResource(R.string.detail_initial_sync_continue))
+                }
             }
         }
     }
@@ -694,6 +778,7 @@ private fun BackupDetailPreview() {
             config = sample,
             messages = sampleMessages,
             isRunning = false,
+            continuesAutomatically = true,
             onBackUpNow = {},
             onTogglePause = {},
             onCheckPassword = {},

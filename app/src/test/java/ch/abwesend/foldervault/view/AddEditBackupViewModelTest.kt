@@ -83,8 +83,9 @@ class AddEditBackupViewModelTest : StringSpec({
         provider: ICloudStorageProvider,
         settingsRepo: IAppSettingsRepository = makeSettingsRepo(),
         authorizer: ICloudAuthorizer = makeAuthorizer(provider),
+        configRepo: IBackupConfigRepository = mockk(relaxed = true),
     ): AddEditBackupViewModel = AddEditBackupViewModel(
-        configRepo = mockk<IBackupConfigRepository>(relaxed = true),
+        configRepo = configRepo,
         scheduler = mockk<IBackupScheduler>(relaxed = true),
         authorizer = authorizer,
         encryptionRepo = mockk<IEncryptionRepository>(relaxed = true),
@@ -285,5 +286,116 @@ class AddEditBackupViewModelTest : StringSpec({
         saved.captured.encryptedPasswordBlob shouldBe "OLD_BLOB"
         saved.captured.encryptionSaltBase64 shouldBe "OLD_SALT"
         coVerify(exactly = 0) { encryptionRepo.encryptPassword(any()) }
+    }
+
+    // ── "Only sync changes from now on" (creation-only option) ────────────────
+
+    "new config form defaults to syncing everything" {
+        val vm = makeVm(makeProvider())
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.form.value.syncLaterChangesOnly shouldBe false
+    }
+
+    "setSyncLaterChangesOnly updates the flag in create mode" {
+        val vm = makeVm(makeProvider())
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.setSyncLaterChangesOnly(true)
+
+        vm.form.value.syncLaterChangesOnly shouldBe true
+    }
+
+    "setSyncLaterChangesOnly is ignored in edit mode" {
+        val (vm, _) = makeEditVm(encryptedConfig)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.setSyncLaterChangesOnly(true)
+
+        vm.form.value.syncLaterChangesOnly shouldBe false
+    }
+
+    "saving a new config persists the flag with a pending baseline" {
+        val configRepo = mockk<IBackupConfigRepository>(relaxed = true)
+        val vm = makeVm(makeProvider(), configRepo = configRepo)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.setDisplayName("Docs")
+        vm.setSourceFolder("content://tree/docs", "docs")
+        vm.startDriveSetup("user@test.com")
+        testDispatcher.scheduler.advanceUntilIdle()
+        vm.setSyncLaterChangesOnly(true)
+        vm.save()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        val saved = slot<BackupConfig>()
+        coVerify { configRepo.save(capture(saved)) }
+        saved.captured.syncLaterChangesOnly shouldBe true
+        saved.captured.baselineCompletedAt shouldBe null
+    }
+
+    "editing preserves the stored flag and baseline timestamp verbatim" {
+        val storedConfig = encryptedConfig.copy(syncLaterChangesOnly = true, baselineCompletedAt = 123L)
+        val (vm, configRepo) = makeEditVm(storedConfig)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.form.value.syncLaterChangesOnly shouldBe true
+
+        vm.save()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        val saved = slot<BackupConfig>()
+        coVerify { configRepo.save(capture(saved)) }
+        saved.captured.syncLaterChangesOnly shouldBe true
+        saved.captured.baselineCompletedAt shouldBe 123L
+    }
+
+    "save re-reads run bookkeeping so a baseline that completes mid-edit is not reset to pending (RV-9)" {
+        // The edit screen opens while the baseline is still pending, then the baseline pass
+        // completes in the background before the user hits Save. The save must persist the fresh
+        // baselineCompletedAt / run stats, not the stale load-time snapshot (which would re-enter
+        // the baseline pass and strand files added since).
+        val loaded = encryptedConfig.copy(
+            syncLaterChangesOnly = true,
+            baselineCompletedAt = null,
+            filesSkipped = 0,
+        )
+        val completedMidEdit = loaded.copy(baselineCompletedAt = 777L, filesSkipped = 42)
+        val configRepo = mockk<IBackupConfigRepository>(relaxed = true)
+        // First getById (loadExisting) sees the pending baseline; the re-read in save() sees it done.
+        every { configRepo.getById(any()) } returnsMany listOf(flowOf(loaded), flowOf(completedMidEdit))
+        val settingsRepo = makeSettingsRepo(
+            AppSettings(
+                cloudRoots = listOf(
+                    CloudAccountRoot(
+                        accountIdentifier = loaded.cloudAccountIdentifier,
+                        rootFolderId = "root-id",
+                        rootFolderName = "FolderVault_test",
+                    ),
+                ),
+            ),
+        )
+        val vm = AddEditBackupViewModel(
+            configRepo = configRepo,
+            scheduler = mockk<IBackupScheduler>(relaxed = true),
+            authorizer = mockk(relaxed = true),
+            encryptionRepo = mockk<IEncryptionRepository>(relaxed = true),
+            cipher = mockk<IFvc1Cipher>(relaxed = true),
+            settingsRepo = settingsRepo,
+            releaseSafPermissionIfUnused = mockk(relaxed = true),
+            existingConfigId = loaded.id,
+        )
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        // The form still shows the pending baseline it loaded.
+        vm.form.value.syncLaterChangesOnly shouldBe true
+
+        vm.save()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        val saved = slot<BackupConfig>()
+        coVerify { configRepo.save(capture(saved)) }
+        saved.captured.baselineCompletedAt shouldBe 777L
+        saved.captured.filesSkipped shouldBe 42
     }
 })

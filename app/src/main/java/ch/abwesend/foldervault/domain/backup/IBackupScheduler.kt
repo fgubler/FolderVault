@@ -69,6 +69,14 @@ interface IBackupScheduler {
     ): Boolean
 
     /**
+     * Cancels only the config's pending *one-time* run (or continuation), leaving the periodic
+     * schedule and any charging-only fallback untouched. Used by the foreground service when it
+     * takes over a run: a one-time run left in the queue would duplicate the foreground run the
+     * moment its constraints are met.
+     */
+    fun cancelOneTime(configId: String)
+
+    /**
      * Cancels *all* scheduled work for [configId]: the periodic schedule, any pending one-time
      * run or continuation, and any pending charging-only fallback. For pause / delete — not for
      * switching a schedule to manual-only (see [schedulePeriodicIfNeeded]).
@@ -83,7 +91,8 @@ interface IBackupScheduler {
 
     /**
      * Emits `true` while a backup for [configId] is enqueued or actively running, `false` otherwise.
-     * Backed by WorkManager — survives process death and reflects retries.
+     * Covers both hosts: WorkManager runs (survives process death, reflects retries) and
+     * foreground-service runs of the initial upload.
      */
     fun observeIsRunning(configId: String): Flow<Boolean>
 }

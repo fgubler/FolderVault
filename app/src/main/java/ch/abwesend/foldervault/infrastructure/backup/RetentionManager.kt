@@ -31,10 +31,17 @@ class RetentionManager(
         log.debug("Applying KeepLastN($effective) retention for config $configId")
         val paths = uploadedFileIndexDao.getDistinctPaths(configId)
         for (path in paths) {
-            // Get all versions for this path, newest first
-            val history = uploadedFileIndexDao.getVersionHistory(configId, path)
+            // Get all versions for this path, newest first. Baseline rows own no cloud object,
+            // so they neither count against N (which counts *cloud* copies) nor get
+            // cloud-deleted — stray superseded ones are dropped locally (defense in depth; the
+            // index upsert normally removes them already).
+            val (baselineRows, cloudRows) = uploadedFileIndexDao.getVersionHistory(configId, path)
+                .partition { it.isBaseline }
+            for (entry in baselineRows.filterNot { it.isCurrentVersion }) {
+                uploadedFileIndexDao.deleteById(entry.id)
+            }
             // Keep the newest effective count; delete everything beyond that
-            val toDelete = history.drop(effective)
+            val toDelete = cloudRows.drop(effective)
             for (entry in toDelete) {
                 deleteCloudAndIndex(entry.cloudFileId, entry.id)
             }
@@ -46,7 +53,12 @@ class RetentionManager(
         val cutoff = System.currentTimeMillis() - days.toLong() * MILLIS_PER_DAY
         val oldVersions = uploadedFileIndexDao.getOldVersionsOlderThan(configId, cutoff)
         for (entry in oldVersions) {
-            deleteCloudAndIndex(entry.cloudFileId, entry.id)
+            // Baseline rows have no cloud object to delete — drop the index row directly.
+            if (entry.isBaseline) {
+                uploadedFileIndexDao.deleteById(entry.id)
+            } else {
+                deleteCloudAndIndex(entry.cloudFileId, entry.id)
+            }
         }
     }
 

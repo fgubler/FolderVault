@@ -3,7 +3,6 @@ package ch.abwesend.foldervault.infrastructure.backup
 import android.content.Context
 import android.net.Uri
 import ch.abwesend.foldervault.domain.cloud.ICloudStorageProvider
-import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.model.ChangedFilePolicy
 import ch.abwesend.foldervault.domain.model.MessageSeverity
@@ -15,30 +14,24 @@ import ch.abwesend.foldervault.infrastructure.room.dao.UploadedFileIndexDao
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupConfigEntity
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupMessageEntity
 import ch.abwesend.foldervault.infrastructure.room.entity.UploadedFileIndexEntity
-import ch.abwesend.foldervault.infrastructure.storage.ScopedStorageHelper
 import kotlinx.coroutines.channels.SendChannel
-import kotlinx.coroutines.withContext
 
-private data class LocalFileInfo(
-    val relativePath: String,
-    val uri: Uri,
-    val size: Long,
-    val mtime: Long?,
-)
-
-class FileSystemAnalyzer(
+internal class FileSystemAnalyzer(
     private val context: Context,
+    private val fileScanner: ILocalFileScanner,
     private val uploadedFileIndexDao: UploadedFileIndexDao,
     private val backupMessageDao: BackupMessageDao,
     private val cloudProvider: ICloudStorageProvider,
-    private val dispatchers: IDispatchers,
 ) {
     private val log get() = logger
 
     /**
      * Walks the source tree and sends upload tasks to the appropriate tier channel.
      * Closes neither channel — the caller is responsible for closing both after this returns.
+     * Reports the scanned file total to [control] as soon as the tree walk completes, so the
+     * run's host can display "N / M files" hours before the count is persisted at run end.
      */
+    @Suppress("LongParameterList")
     suspend fun analyze(
         config: BackupConfigEntity,
         normalChannel: SendChannel<UploadTask>,
@@ -47,8 +40,10 @@ class FileSystemAnalyzer(
         runId: String,
         folderCache: FolderPathCache,
         summary: RunSummary,
+        control: BackupRunControl? = null,
     ): Int {
         val fileInfoList = collectFileInfos(config, summary)
+        control?.reportFilesDiscovered(fileInfoList.size)
         // Collect into two lists first to avoid a producer/consumer deadlock: if we sent normal
         // and oversized tasks interleaved and the oversized channel (cap=8) filled up, the producer
         // would block before closing the normal channel, while the consumer was blocked waiting for
@@ -63,25 +58,7 @@ class FileSystemAnalyzer(
     }
 
     private suspend fun collectFileInfos(config: BackupConfigEntity, summary: RunSummary): List<LocalFileInfo> =
-        withContext(dispatchers.io) {
-            val results = mutableListOf<LocalFileInfo>()
-            val treeUri = Uri.parse(config.sourceTreeUri)
-            val accessible = ScopedStorageHelper.walkTree(context, treeUri) { relativePath, file ->
-                results.add(
-                    LocalFileInfo(
-                        relativePath = relativePath,
-                        uri = file.uri,
-                        size = file.length(),
-                        mtime = file.lastModified().takeIf { it != 0L },
-                    )
-                )
-            }
-            if (!accessible) {
-                log.warning("Source folder for config ${config.id} is inaccessible (deleted or permission revoked)")
-                summary.sourceFolderInaccessible = true
-            }
-            results
-        }
+        fileScanner.scan(config, summary)
 
     private suspend fun buildUploadTaskLists(
         config: BackupConfigEntity,

@@ -8,6 +8,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Optional: observe network state changes for scheduling hints -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Initial-upload foreground service (started from foreground UI only; API 28+ / 34+) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <!--
         Android Auto Backup is disabled on purpose (BUG-11). The Room DB (foldervault.db) stores
@@ -49,6 +52,12 @@
                     android:pathPrefix="/detail" />
             </intent-filter>
         </activity>
+
+        <!-- Long-running initial upload; WorkManager handles all background/scheduled runs -->
+        <service
+            android:name=".infrastructure.backup.BackupForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <!-- Koin WorkManager factory; WorkManager uses this to inject workers -->
         <provider

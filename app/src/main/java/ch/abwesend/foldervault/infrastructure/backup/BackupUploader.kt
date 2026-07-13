@@ -28,7 +28,6 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.time.Instant
 import javax.crypto.SecretKey
 
 class BackupUploader(
@@ -53,7 +52,7 @@ class BackupUploader(
         derivedKey: SecretKey?,
         backupSalt: ByteArray?,
         summary: RunSummary,
-        deadline: Instant? = null,
+        control: BackupRunControl? = null,
     ) = withContext(dispatchers.io) {
         // Always drain the channel even when stopped — a break without draining would leave the
         // producer blocked on send(), hanging the coroutineScope indefinitely.
@@ -72,7 +71,8 @@ class BackupUploader(
                     backupSalt = backupSalt,
                     summary = summary,
                 )
-                if (deadline != null && Instant.now().isAfter(deadline)) {
+                control?.reportFileUploaded(summary.filesUploaded)
+                if (control?.shouldStop() == true) {
                     summary.hitTimeBudget = true
                 }
             }

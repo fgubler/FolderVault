@@ -40,8 +40,12 @@ class BackupNotificationManager(
     private val log get() = logger
 
     companion object {
+        const val STATUS_CHANNEL_ID = "foldervault_backup_status"
         const val PROBLEMS_CHANNEL_ID = "foldervault_backup_problems"
         const val COMPLETIONS_CHANNEL_ID = "foldervault_backup_completions"
+
+        /** ID of the foreground service's ongoing progress notification (spec §7.6 / §8.3). */
+        const val PROGRESS_NOTIFICATION_ID = 1001
         const val THROTTLE_WINDOW_MS = 24 * 60 * 60 * 1000L
         private const val DEEP_LINK_SCHEME = "foldervault"
         private const val DEEP_LINK_HOST = "backup"
@@ -83,6 +87,12 @@ class BackupNotificationManager(
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
+        val statusChannel = NotificationChannel(
+            STATUS_CHANNEL_ID,
+            context.getString(R.string.notification_channel_status_name),
+            NotificationManager.IMPORTANCE_LOW,
+        ).apply { description = context.getString(R.string.notification_channel_status_description) }
+
         val problemsChannel = NotificationChannel(
             PROBLEMS_CHANNEL_ID,
             context.getString(R.string.notification_channel_problems_name),
@@ -95,8 +105,65 @@ class BackupNotificationManager(
             NotificationManager.IMPORTANCE_DEFAULT,
         ).apply { description = context.getString(R.string.notification_channel_completions_description) }
 
+        nm.createNotificationChannel(statusChannel)
         nm.createNotificationChannel(problemsChannel)
         nm.createNotificationChannel(completionsChannel)
+    }
+
+    /**
+     * Builds the ongoing (silent, LOW-importance) progress notification the foreground service
+     * runs under. Shows "Uploading N / M files" once the total is known, an indeterminate text
+     * before that; a positive [queuedRuns] appends how many further backups wait in the
+     * service's queue. [stopIntent] is provided by the service (it targets the service
+     * itself), so this class stays independent of the service class.
+     */
+    fun buildProgressNotification(
+        configId: String,
+        filesUploaded: Int,
+        totalDiscovered: Int,
+        queuedRuns: Int,
+        stopIntent: PendingIntent,
+    ): Notification {
+        val progressText = if (totalDiscovered > 0) {
+            context.getString(R.string.backup_notification_progress_text_with_count, filesUploaded, totalDiscovered)
+        } else {
+            context.getString(R.string.backup_notification_progress_text)
+        }
+        val text = if (queuedRuns > 0) {
+            val queuedText = context.resources
+                .getQuantityString(R.plurals.backup_notification_progress_queued, queuedRuns, queuedRuns)
+            context.getString(R.string.backup_notification_progress_text_with_queued, progressText, queuedText)
+        } else {
+            progressText
+        }
+        return NotificationCompat.Builder(context, STATUS_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle(context.getString(R.string.backup_notification_progress_title))
+            .setContentText(text)
+            .setContentIntent(detailScreenPendingIntent(configId, PROGRESS_NOTIFICATION_ID))
+            .setOngoing(true)
+            .setSilent(true)
+            .addAction(0, context.getString(R.string.backup_notification_stop_action), stopIntent)
+            .build()
+    }
+
+    /**
+     * Re-posts the progress notification with updated counts. The initial one is handed to
+     * `startForeground` by the service itself; this refreshes it while the run proceeds. The
+     * posted notification is returned so the service can re-post the current state verbatim
+     * when a later start forces another `startForeground` call.
+     */
+    fun updateProgressNotification(
+        configId: String,
+        filesUploaded: Int,
+        totalDiscovered: Int,
+        queuedRuns: Int,
+        stopIntent: PendingIntent,
+    ): Notification {
+        val notification =
+            buildProgressNotification(configId, filesUploaded, totalDiscovered, queuedRuns, stopIntent)
+        notifySafely(PROGRESS_NOTIFICATION_ID, notification, "backup progress")
+        return notification
     }
 
     suspend fun postProblemNotificationIfNeeded(

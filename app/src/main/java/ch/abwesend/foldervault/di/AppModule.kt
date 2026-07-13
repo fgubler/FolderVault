@@ -4,6 +4,8 @@ import ch.abwesend.foldervault.domain.backup.IBackupConfigRepository
 import ch.abwesend.foldervault.domain.backup.IBackupMessageRepository
 import ch.abwesend.foldervault.domain.backup.IBackupRunRepository
 import ch.abwesend.foldervault.domain.backup.IBackupScheduler
+import ch.abwesend.foldervault.domain.backup.IForegroundBackupLauncher
+import ch.abwesend.foldervault.domain.backup.StartManualBackupUseCase
 import ch.abwesend.foldervault.domain.cloud.ICloudAuthorizer
 import ch.abwesend.foldervault.domain.coroutine.AppDispatchers
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
@@ -26,6 +28,8 @@ import ch.abwesend.foldervault.infrastructure.backup.BackupNotificationManager
 import ch.abwesend.foldervault.infrastructure.backup.BackupRunRepository
 import ch.abwesend.foldervault.infrastructure.backup.BackupRunner
 import ch.abwesend.foldervault.infrastructure.backup.BackupScheduler
+import ch.abwesend.foldervault.infrastructure.backup.ForegroundBackupLauncher
+import ch.abwesend.foldervault.infrastructure.backup.ForegroundRunState
 import ch.abwesend.foldervault.infrastructure.cloud.googledrive.GoogleDriveAuthorizationRepository
 import ch.abwesend.foldervault.infrastructure.crypto.AndroidKeyStoreRepository
 import ch.abwesend.foldervault.infrastructure.crypto.EncryptionRepository
@@ -33,6 +37,7 @@ import ch.abwesend.foldervault.infrastructure.crypto.Fvc1Cipher
 import ch.abwesend.foldervault.infrastructure.logging.FirebaseTelemetryToggle
 import ch.abwesend.foldervault.infrastructure.logging.LocalLogFiles
 import ch.abwesend.foldervault.infrastructure.network.AndroidNetworkConnectivityChecker
+import ch.abwesend.foldervault.infrastructure.network.NetworkStateMonitor
 import ch.abwesend.foldervault.infrastructure.restore.RestoreEngine
 import ch.abwesend.foldervault.infrastructure.room.DatabaseRecoveryService
 import ch.abwesend.foldervault.infrastructure.room.FolderVaultDatabase
@@ -85,8 +90,12 @@ val appModule = module {
 
     // Backup notifications and scheduling
     single { BackupNotificationManager(androidContext(), get(), get(), get()) }
-    single<IBackupScheduler> { BackupScheduler(androidContext()) }
+    single { ForegroundRunState() }
+    single<IBackupScheduler> { BackupScheduler(androidContext(), get()) }
+    single<IForegroundBackupLauncher> { ForegroundBackupLauncher(androidContext(), get()) }
+    single { StartManualBackupUseCase(get(), get()) }
     single<INetworkConnectivityChecker> { AndroidNetworkConnectivityChecker(androidContext()) }
+    single { NetworkStateMonitor(androidContext()) }
     single<IChargingStateChecker> { AndroidChargingStateChecker(androidContext()) }
     single<IBackgroundRestrictionChecker> { AndroidBackgroundRestrictionChecker(androidContext()) }
     single<ISafPermissionManager> { AndroidSafPermissionManager(androidContext()) }
@@ -129,15 +138,17 @@ val appModule = module {
     }
     viewModel { params ->
         BackupDetailViewModel(
-            configId = params.get(),
+            configId = params.get<String>(),
             configRepo = get(),
             messageRepo = get(),
             scheduler = get(),
+            startManualBackup = get(),
             encryptionRepo = get(),
             settingsRepo = get(),
             connectivityChecker = get(),
             chargingChecker = get(),
             releaseSafPermissionIfUnused = get(),
+            autoStartBackup = params.get<Boolean>(),
         )
     }
     viewModel { params ->

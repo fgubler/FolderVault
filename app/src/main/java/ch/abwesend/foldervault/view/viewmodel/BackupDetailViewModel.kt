@@ -6,8 +6,11 @@ import ch.abwesend.foldervault.domain.backup.BackupMessage
 import ch.abwesend.foldervault.domain.backup.IBackupConfigRepository
 import ch.abwesend.foldervault.domain.backup.IBackupMessageRepository
 import ch.abwesend.foldervault.domain.backup.IBackupScheduler
+import ch.abwesend.foldervault.domain.backup.StartManualBackupUseCase
 import ch.abwesend.foldervault.domain.crypto.IEncryptionRepository
 import ch.abwesend.foldervault.domain.logging.logger
+import ch.abwesend.foldervault.domain.model.BackupRunStatus
+import ch.abwesend.foldervault.domain.model.BackupSchedule
 import ch.abwesend.foldervault.domain.model.MessageSeverity
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.network.INetworkConnectivityChecker
@@ -22,6 +25,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 
@@ -34,11 +39,13 @@ class BackupDetailViewModel(
     private val configRepo: IBackupConfigRepository,
     private val messageRepo: IBackupMessageRepository,
     private val scheduler: IBackupScheduler,
+    private val startManualBackup: StartManualBackupUseCase,
     private val encryptionRepo: IEncryptionRepository,
     private val settingsRepo: IAppSettingsRepository,
     private val connectivityChecker: INetworkConnectivityChecker,
     private val chargingChecker: IChargingStateChecker,
     private val releaseSafPermissionIfUnused: ReleaseSafPermissionIfUnusedUseCase,
+    autoStartBackup: Boolean = false,
 ) : BaseViewModel() {
 
     val config: StateFlow<BackupConfig?> = configRepo.getById(configId)
@@ -54,6 +61,25 @@ class BackupDetailViewModel(
 
     val isRunning: StateFlow<Boolean> = scheduler.observeIsRunning(configId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /**
+     * Whether an interrupted sync will eventually be picked up again without user action — i.e.
+     * whether the config's *effective* schedule (its own, or the global default when it
+     * delegates) is anything but manual-only. Drives the wording of the interrupted-sync
+     * banner: promising "continues automatically" on a manual-only config would leave the user
+     * waiting for a run that needs a tap.
+     */
+    val continuesAutomatically: StateFlow<Boolean> = combine(
+        config.filterNotNull(),
+        settingsRepo.settings,
+    ) { current, settings ->
+        val effectiveSchedule = if (current.schedule == BackupSchedule.USE_GLOBAL_DEFAULT) {
+            settings.defaultSchedule
+        } else {
+            current.schedule
+        }
+        effectiveSchedule != BackupSchedule.MANUAL_ONLY
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
 
     private val _passwordCheckResult = MutableStateFlow<Boolean?>(null)
     val passwordCheckResult: StateFlow<Boolean?> = _passwordCheckResult.asStateFlow()
@@ -87,6 +113,23 @@ class BackupDetailViewModel(
      * running with a stale policy.
      */
     private var pendingNetworkPolicy: NetworkPolicy? = null
+
+    init {
+        // Auto-start of the initial upload right after creating the config (the nav graph opens
+        // this screen with the flag). Guarded on IDLE so a re-created screen (process death,
+        // config change) cannot re-trigger once the first run has committed a result.
+        // NOTE: this block must stay BELOW every property that backUpNow() touches (config,
+        // isRunning, the prompt flows, pendingNetworkPolicy) — on an eager dispatcher the
+        // coroutine can run during construction, before later-declared fields are initialized.
+        if (autoStartBackup) {
+            safeLaunch {
+                val current = config.filterNotNull().first()
+                if (current.lastRunStatus == BackupRunStatus.IDLE) {
+                    backUpNow()
+                }
+            }
+        }
+    }
 
     /**
      * Triggered by the "Back up now" button. If the config is Wi-Fi-only and the device is
@@ -136,7 +179,7 @@ class BackupDetailViewModel(
                 pendingNetworkPolicy = networkPolicy
                 _showChargingOverridePrompt.value = true
             } else {
-                scheduler.scheduleOneTime(configId, networkPolicy, current.requiresCharging)
+                startManualBackup.start(current, networkPolicy, current.requiresCharging)
             }
         }
     }
@@ -150,7 +193,7 @@ class BackupDetailViewModel(
         if (networkPolicy == null) {
             logger.error("Charging override confirmed but no prompt captured a network policy")
         } else if (current != null && !current.isPaused && !isRunning.value) {
-            scheduler.scheduleOneTime(configId, networkPolicy, requiresCharging = false)
+            startManualBackup.start(current, networkPolicy, requiresCharging = false)
         }
     }
 

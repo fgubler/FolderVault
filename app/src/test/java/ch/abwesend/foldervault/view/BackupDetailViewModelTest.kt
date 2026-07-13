@@ -4,12 +4,16 @@ import ch.abwesend.foldervault.domain.backup.BackupConfig
 import ch.abwesend.foldervault.domain.backup.IBackupConfigRepository
 import ch.abwesend.foldervault.domain.backup.IBackupMessageRepository
 import ch.abwesend.foldervault.domain.backup.IBackupScheduler
+import ch.abwesend.foldervault.domain.backup.IForegroundBackupLauncher
+import ch.abwesend.foldervault.domain.backup.StartManualBackupUseCase
+import ch.abwesend.foldervault.domain.model.AppSettings
 import ch.abwesend.foldervault.domain.model.BackupRunStatus
 import ch.abwesend.foldervault.domain.model.BackupSchedule
 import ch.abwesend.foldervault.domain.model.ChangedFilePolicy
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.model.RetentionPolicy
 import ch.abwesend.foldervault.domain.network.INetworkConnectivityChecker
+import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
 import ch.abwesend.foldervault.domain.system.IChargingStateChecker
 import ch.abwesend.foldervault.view.viewmodel.BackupDetailViewModel
 import io.kotest.core.spec.IsolationMode
@@ -39,11 +43,19 @@ class BackupDetailViewModelTest : StringSpec({
     beforeTest { Dispatchers.setMain(testDispatcher) }
     afterTest { Dispatchers.resetMain() }
 
+    /**
+     * Defaults to [BackupRunStatus.UP_TO_DATE] (an established backup): manual runs of such a
+     * config go through the WorkManager scheduler, which is what most tests here assert. A
+     * config still in (or before) its initial sync routes to the foreground launcher instead —
+     * covered by the dedicated routing test below and by [StartManualBackupUseCase]'s own tests.
+     */
     fun makeConfig(
         id: String,
         isPaused: Boolean,
         networkPolicy: NetworkPolicy = NetworkPolicy.WIFI_ONLY,
         requiresCharging: Boolean = false,
+        lastRunStatus: BackupRunStatus = BackupRunStatus.UP_TO_DATE,
+        schedule: BackupSchedule = BackupSchedule.DAILY,
     ) = BackupConfig(
         id = id,
         displayName = "Test",
@@ -52,7 +64,7 @@ class BackupDetailViewModelTest : StringSpec({
         cloudSubFolderId = "fid",
         cloudSubFolderName = "test_sub",
         cloudAccountIdentifier = "user@test.com",
-        schedule = BackupSchedule.DAILY,
+        schedule = schedule,
         changedFilePolicy = ChangedFilePolicy.DUPLICATE_WITH_TIMESTAMP,
         encryptionEnabled = false,
         encryptedPasswordBlob = null,
@@ -62,7 +74,7 @@ class BackupDetailViewModelTest : StringSpec({
         requiresCharging = requiresCharging,
         createdAt = 0L,
         lastRunAt = null,
-        lastRunStatus = BackupRunStatus.IDLE,
+        lastRunStatus = lastRunStatus,
         filesUploaded = 0,
         filesSkipped = 0,
         filesFailed = 0,
@@ -77,9 +89,10 @@ class BackupDetailViewModelTest : StringSpec({
      * Spins up a [BackupDetailViewModel] with sensible defaults: a config repo returning [config],
      * a message repo that surfaces nothing, a relaxed scheduler whose isRunning state defaults to
      * [isRunning], a connectivity checker that reports [onUnmetered], and a charging checker that
-     * reports [isCharging]. Encryption + settings repos are unused in these tests so they are bare
-     * [mockk]s.
+     * reports [isCharging]. The settings repo serves default [AppSettings] (daily default
+     * schedule); the encryption repo is unused in these tests so it stays a bare [mockk].
      */
+    @Suppress("LongParameterList")
     fun buildVm(
         configId: String,
         config: BackupConfig?,
@@ -92,6 +105,8 @@ class BackupDetailViewModelTest : StringSpec({
         configRepo: IBackupConfigRepository = mockk {
             every { getById(configId) } returns flowOf(config)
         },
+        foregroundLauncher: IForegroundBackupLauncher = mockk(relaxed = true),
+        autoStartBackup: Boolean = false,
     ): Pair<BackupDetailViewModel, IBackupScheduler> {
         val messageRepo = mockk<IBackupMessageRepository> {
             every { getUndismissed(configId) } returns flowOf(emptyList())
@@ -103,18 +118,97 @@ class BackupDetailViewModelTest : StringSpec({
         val charging = mockk<IChargingStateChecker> {
             every { isCharging() } returns isCharging
         }
+        val settingsRepo = mockk<IAppSettingsRepository> {
+            every { settings } returns flowOf(AppSettings())
+        }
         val vm = BackupDetailViewModel(
             configId = configId,
             configRepo = configRepo,
             messageRepo = messageRepo,
             scheduler = scheduler,
+            startManualBackup = StartManualBackupUseCase(scheduler, foregroundLauncher),
             encryptionRepo = mockk(),
-            settingsRepo = mockk(),
+            settingsRepo = settingsRepo,
             connectivityChecker = connectivity,
             chargingChecker = charging,
             releaseSafPermissionIfUnused = mockk(relaxed = true),
+            autoStartBackup = autoStartBackup,
         )
         return vm to scheduler
+    }
+
+    "backUpNow on a config that never ran routes to the foreground launcher instead of WorkManager" {
+        val configId = "cfg-18"
+        val launcher = mockk<IForegroundBackupLauncher>(relaxed = true)
+        val (vm, scheduler) = buildVm(
+            configId,
+            makeConfig(configId, isPaused = false, lastRunStatus = BackupRunStatus.IDLE),
+            foregroundLauncher = launcher,
+        )
+        val job = vm.config.launchIn(CoroutineScope(testDispatcher))
+
+        vm.backUpNow()
+
+        verify(exactly = 1) { launcher.start(configId, NetworkPolicy.WIFI_ONLY, false) }
+        verify(exactly = 0) { scheduler.scheduleOneTime(any(), any(), any()) }
+        job.cancel()
+    }
+
+    "autoStartBackup starts the initial upload once the config loads, if it never ran" {
+        val configId = "cfg-19"
+        val launcher = mockk<IForegroundBackupLauncher>(relaxed = true)
+        val (vm, _) = buildVm(
+            configId,
+            makeConfig(configId, isPaused = false, lastRunStatus = BackupRunStatus.IDLE),
+            foregroundLauncher = launcher,
+            autoStartBackup = true,
+        )
+        val job = vm.config.launchIn(CoroutineScope(testDispatcher))
+
+        verify(exactly = 1) { launcher.start(configId, NetworkPolicy.WIFI_ONLY, false) }
+        job.cancel()
+    }
+
+    "autoStartBackup does nothing when the config already ran" {
+        val configId = "cfg-20"
+        val launcher = mockk<IForegroundBackupLauncher>(relaxed = true)
+        val (vm, scheduler) = buildVm(
+            configId,
+            makeConfig(configId, isPaused = false, lastRunStatus = BackupRunStatus.UP_TO_DATE),
+            foregroundLauncher = launcher,
+            autoStartBackup = true,
+        )
+        val job = vm.config.launchIn(CoroutineScope(testDispatcher))
+
+        verify(exactly = 0) { launcher.start(any(), any(), any()) }
+        verify(exactly = 0) { scheduler.scheduleOneTime(any(), any(), any()) }
+        job.cancel()
+    }
+
+    "continuesAutomatically is false for a manual-only config" {
+        val configId = "cfg-21"
+        val (vm, _) = buildVm(
+            configId,
+            makeConfig(configId, isPaused = false, schedule = BackupSchedule.MANUAL_ONLY),
+        )
+        val job = vm.continuesAutomatically.launchIn(CoroutineScope(testDispatcher))
+
+        vm.continuesAutomatically.value shouldBe false
+        job.cancel()
+    }
+
+    "continuesAutomatically resolves a delegating schedule against the global default" {
+        val configId = "cfg-22"
+        // The default AppSettings has a DAILY global default — a config delegating to it
+        // therefore continues automatically.
+        val (vm, _) = buildVm(
+            configId,
+            makeConfig(configId, isPaused = false, schedule = BackupSchedule.USE_GLOBAL_DEFAULT),
+        )
+        val job = vm.continuesAutomatically.launchIn(CoroutineScope(testDispatcher))
+
+        vm.continuesAutomatically.value shouldBe true
+        job.cancel()
     }
 
     "backUpNow does not call scheduler when config is paused" {

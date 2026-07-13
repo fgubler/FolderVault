@@ -7,6 +7,65 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-13 — Initial upload moved into a dataSync foreground service
+
+### What was requested
+Run the *initial upload* in a foreground service instead of WorkManager: with many files the
+~10-minute worker windows cause too many cancellations and the first sync takes days.
+Decisions confirmed during planning: auto-start after creating a config (plus "back up now"
+while the initial sync is incomplete), fall back to a WorkManager continuation on any
+interruption, honor Wi-Fi-only/charging prompts at start and stop cleanly on a mid-run
+network-policy violation.
+
+### What was done
+- **`BackupRunControl`** generalizes the former `deadline` param of `BackupRunner.runBackup`:
+  the uploader polls `shouldStop()` at each committed-file boundary (former deadline check in
+  `BackupUploader.processChannel`) so user stop / Wi-Fi loss / OS timeout all take the clean
+  `hitTimeBudget` path (`INITIAL_SYNC_IN_PROGRESS`, cross-run counters, continuation) instead
+  of `CancellationException`. Also carries live per-run progress as a `StateFlow` for the
+  service's notification (per-file progress is deliberately not persisted).
+- **`BackupForegroundService`** (dataSync FGS, `START_NOT_STICKY`): runs the same pipeline with
+  a 5.5 h budget under the resurrected LOW-importance "Backup status" notification
+  ("Uploading N / M files", Stop action, deep link). Cancels the pending *one-time* unique work
+  at start (periodic + charging-fallback names untouched); `onTimeout` (Android 15's 6 h cap)
+  requests a cooperative stop, hard-cancels after 4 s, and schedules the continuation itself.
+  `ForegroundHandoverPolicy` (pure, tested): every stop except an explicit user stop enqueues a
+  WorkManager continuation. Notification code was resurrected from commit `be3b3bd` — whose
+  *`setForeground`-inside-worker* approach (crashes on background start, Android 12+) remains
+  removed; the service is only ever started from foreground UI (`ForegroundBackupLauncher`,
+  which degrades to `scheduleOneTime` if the FGS start is rejected).
+- **Routing**: new domain `StartManualBackupUseCase` — `IDLE` / `INITIAL_SYNC_IN_PROGRESS` /
+  `totalFilesDiscovered > 0` (interrupted sync; counters only reset on a normal completion) →
+  foreground service, established backups → `scheduleOneTime`. `BackupDetailViewModel` uses it
+  behind the existing metered/charging prompts; saving a *new* config navigates to the detail
+  screen with `autoStartBackup = true`, which triggers `backUpNow()` once (guarded on `IDLE`).
+  A banner on the detail screen offers "Continue now" for an interrupted initial sync.
+- **Visibility**: `ForegroundRunState` (in-memory set of running configIds) merged into
+  `BackupScheduler.observeIsRunning`, so the UI treats service runs like worker runs. New
+  `NetworkStateMonitor` (`infrastructure/network`) observes whether the default network
+  satisfies the policy; the service stops cleanly after a 5 s grace (network switches emit a
+  transient loss).
+- Manifest: `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_DATA_SYNC` permissions, `<service
+  android:foregroundServiceType="dataSync">`.
+- Tests: `BackupRunControlTest`, `ForegroundRunStateTest`, `ForegroundHandoverPolicyTest`,
+  `StartManualBackupUseCaseTest` (hand-written fakes); `BackupDetailViewModelTest` updated
+  (established-backup default + 3 new routing/auto-start tests, MockK).
+
+### Verification
+- Sandbox could not build during the implementation session (Gradle daemon toolchain download
+  blocked — the documented environment issue); after a terminal restart,
+  `./gradlew assembleDebug test detekt` all green (348 tests). Fixes applied during verification:
+  - `BackupDetailViewModel`: the auto-start `init` block moved below every property that
+    `backUpNow()` touches — on an eager dispatcher (the test's `UnconfinedTestDispatcher`) the
+    coroutine ran during construction and hit the not-yet-initialized `isRunning` backing field
+    (NPE swallowed by `safeLaunch`, launcher never called).
+  - `BackupForegroundService.scope`: `lateinit` + `onCreate` replaced by a lazy val (detekt
+    `LateinitUsage`); `buildVm` test helper got the codebase-standard
+    `@Suppress("LongParameterList")`.
+- Device (open): create config with a large folder → FGS runs with progress notification; Stop
+  stops cleanly; Wi-Fi loss on a Wi-Fi-only config hands over to a waiting continuation;
+  swipe-away → upload continues. Screenshot check of the "Continue now" banner pending.
+
 ## 2026-07-08 — Third review round (fresh `review/develop.md`) + fixes for findings 1, 3, 4
 
 ### What was requested

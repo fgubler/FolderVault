@@ -74,7 +74,8 @@ sealed interface CloudSetupState {
 }
 
 sealed interface AddEditEvent {
-    data object Saved : AddEditEvent
+    /** [isNewConfig] lets the nav graph open the detail screen with auto-start for new configs. */
+    data class Saved(val configId: String, val isNewConfig: Boolean) : AddEditEvent
 }
 
 @Suppress("TooManyFunctions")
@@ -284,7 +285,7 @@ class AddEditBackupViewModel(
                     requiresCharging = config.requiresCharging,
                     globalDefault = globalDefault,
                 )
-                _events.emit(AddEditEvent.Saved)
+                _events.emit(AddEditEvent.Saved(config.id, isNewConfig = existingConfigId == null))
             } catch (e: Exception) {
                 e.rethrowCancellation()
                 logger.error("Failed to save backup config", e)

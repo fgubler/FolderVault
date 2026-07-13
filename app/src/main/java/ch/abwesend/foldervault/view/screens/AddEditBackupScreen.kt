@@ -81,7 +81,7 @@ private const val GOOGLE_ACCOUNT_TYPE = "com.google"
 fun AddEditBackupScreen(
     configId: String?,
     onBack: () -> Unit,
-    onSave: () -> Unit,
+    onSave: (configId: String, isNewConfig: Boolean) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: AddEditBackupViewModel = koinViewModel(parameters = { parametersOf(configId) }),
 ) {
@@ -123,7 +123,7 @@ fun AddEditBackupScreen(
 
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
-            if (event is AddEditEvent.Saved) currentOnSave()
+            if (event is AddEditEvent.Saved) currentOnSave(event.configId, event.isNewConfig)
         }
     }
 

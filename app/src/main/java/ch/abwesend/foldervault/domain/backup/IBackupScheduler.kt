@@ -83,7 +83,8 @@ interface IBackupScheduler {
 
     /**
      * Emits `true` while a backup for [configId] is enqueued or actively running, `false` otherwise.
-     * Backed by WorkManager — survives process death and reflects retries.
+     * Covers both hosts: WorkManager runs (survives process death, reflects retries) and
+     * foreground-service runs of the initial upload.
      */
     fun observeIsRunning(configId: String): Flow<Boolean>
 }

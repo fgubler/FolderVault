@@ -113,7 +113,7 @@ class BackupRunner(
      * this returns [RunResult.SkippedConcurrentRun] immediately instead of waiting — the caller
      * retries later with a fresh deadline and execution window.
      */
-    suspend fun runBackup(configId: String, deadline: Instant? = null): RunResult =
+    suspend fun runBackup(configId: String, control: BackupRunControl? = null): RunResult =
         runLock.withLockOrElse(
             key = configId,
             onBusy = {
@@ -121,11 +121,11 @@ class BackupRunner(
                 RunResult.SkippedConcurrentRun
             },
         ) {
-            runBackupExclusive(configId, deadline)
+            runBackupExclusive(configId, control)
         }
 
     @Suppress("CyclomaticComplexMethod", "ReturnCount", "LongMethod")
-    private suspend fun runBackupExclusive(configId: String, deadline: Instant?): RunResult {
+    private suspend fun runBackupExclusive(configId: String, control: BackupRunControl?): RunResult {
         val runId = UUID.randomUUID().toString()
         val config = backupConfigDao.getByIdOnce(configId)
             ?: return RunResult.FatalError(
@@ -214,7 +214,7 @@ class BackupRunner(
 
             runPipeline(
                 config, analyzer, uploader, fileSizeLimitBytes,
-                runId, stagingDir, folderCache, derivedKey, backupSalt, summary, deadline,
+                runId, stagingDir, folderCache, derivedKey, backupSalt, summary, control,
             )
             val retention = RetentionManager(uploadedFileIndexDao, cloudProvider)
             val cleanRun = !summary.authLost && !summary.quotaExceeded &&
@@ -405,7 +405,7 @@ class BackupRunner(
         derivedKey: SecretKey?,
         backupSalt: ByteArray?,
         summary: RunSummary,
-        deadline: Instant? = null,
+        control: BackupRunControl? = null,
     ) {
         val normalChannel = Channel<UploadTask>(capacity = 64)
         val oversizedChannel = Channel<UploadTask>(capacity = 8)
@@ -428,11 +428,11 @@ class BackupRunner(
             launch {
                 uploader.processChannel(
                     config, normalChannel, runId, stagingDir, folderCache,
-                    derivedKey, backupSalt, summary, deadline,
+                    derivedKey, backupSalt, summary, control,
                 )
                 uploader.processChannel(
                     config, oversizedChannel, runId, stagingDir, folderCache,
-                    derivedKey, backupSalt, summary, deadline,
+                    derivedKey, backupSalt, summary, control,
                 )
             }
         }

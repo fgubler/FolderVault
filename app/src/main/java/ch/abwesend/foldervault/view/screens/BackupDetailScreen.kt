@@ -57,6 +57,7 @@ import androidx.core.net.toUri
 import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.backup.BackupConfig
 import ch.abwesend.foldervault.domain.backup.BackupMessage
+import ch.abwesend.foldervault.domain.backup.StartManualBackupUseCase
 import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.model.BackupRunStatus
 import ch.abwesend.foldervault.domain.model.BackupSchedule
@@ -97,7 +98,8 @@ fun BackupDetailScreen(
     onDelete: () -> Unit,
     onShowRunHistory: () -> Unit,
     modifier: Modifier = Modifier,
-    viewModel: BackupDetailViewModel = koinViewModel(parameters = { parametersOf(configId) }),
+    autoStartBackup: Boolean = false,
+    viewModel: BackupDetailViewModel = koinViewModel(parameters = { parametersOf(configId, autoStartBackup) }),
 ) {
     val config by viewModel.config.collectAsState()
     val messages by viewModel.messages.collectAsState()
@@ -228,6 +230,9 @@ private fun DetailContent(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item { ConfigInfoSection(config = config) }
+        if (showInitialSyncBanner(config, isRunning)) {
+            item { InitialSyncIncompleteBanner(config = config, onContinue = onBackUpNow) }
+        }
         item { ActionButtonRow(config, isRunning, onBackUpNow, onTogglePause, onCheckPassword) }
         item { HorizontalDivider() }
         item {
@@ -431,6 +436,49 @@ private fun ActionButtonRow(
         if (config.encryptionEnabled) {
             OutlinedButton(onClick = onCheckPassword, modifier = Modifier.fillMaxWidth()) {
                 Text(stringResource(R.string.button_check_password))
+            }
+        }
+    }
+}
+
+/**
+ * The banner appears when an initial sync was interrupted (service stopped, run cancelled or
+ * failed mid-sync) and nothing is currently running — a fresh config (IDLE) has nothing to
+ * "continue" yet, and a paused config must not invite a run that would be skipped.
+ */
+private fun showInitialSyncBanner(config: BackupConfig, isRunning: Boolean): Boolean =
+    StartManualBackupUseCase.needsForegroundService(config.lastRunStatus, config.totalFilesDiscovered) &&
+        config.lastRunStatus != BackupRunStatus.IDLE &&
+        !isRunning &&
+        !config.isPaused
+
+/**
+ * Reassuring "this is not an error" banner for an interrupted initial sync (spec §7.6), with a
+ * one-tap way to continue in the foreground service — going through the same prompt chain as
+ * the "Back up now" button.
+ */
+@Composable
+private fun InitialSyncIncompleteBanner(config: BackupConfig, onContinue: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                text = stringResource(
+                    R.string.detail_initial_sync_incomplete,
+                    config.filesUploadedTotal,
+                    config.totalFilesDiscovered,
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                TextButton(onClick = onContinue) {
+                    Text(stringResource(R.string.detail_initial_sync_continue))
+                }
             }
         }
     }

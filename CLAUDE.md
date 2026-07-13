@@ -40,6 +40,11 @@ Crashlytics confinement: ONLY `infrastructure/logging/CrashlyticsSink.kt` may im
   unconditionally `throw e`, or pair it with a preceding `catch (X: CancellationException)`.
   Enforced by `CancellationRethrowArchitectureTest`.
 - **Serial uploads**: one file fully encrypted + uploaded + indexed before the next. No parallelism.
+- **Two run hosts**: the *initial upload* runs in `BackupForegroundService` (dataSync FGS,
+  5.5 h budget, started ONLY from foreground UI via `IForegroundBackupLauncher` — never from a
+  worker or sticky restart); all scheduled/background runs stay on WorkManager. Cooperative
+  stops go through `BackupRunControl.requestStop()` (clean `hitTimeBudget` path), never by
+  cancelling the coroutine. Routing lives in `StartManualBackupUseCase.needsForegroundService`.
 - **Kotest** spec DSL for unit tests (e.g. `StringSpec`, `FunSpec`). Set
   `isolationMode = IsolationMode.InstancePerTest` when using MockK to get a fresh mock per test.
 - **Konsist** architecture tests live in `src/test/.../architecture/`.

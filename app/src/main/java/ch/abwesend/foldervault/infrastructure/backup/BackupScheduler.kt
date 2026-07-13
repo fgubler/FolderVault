@@ -22,7 +22,10 @@ import kotlinx.coroutines.flow.first
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.cancellation.CancellationException
 
-class BackupScheduler(private val context: Context) : IBackupScheduler {
+class BackupScheduler(
+    private val context: Context,
+    private val foregroundRunState: ForegroundRunState,
+) : IBackupScheduler {
     private val log get() = logger
     private val workManager get() = WorkManager.getInstance(context)
 
@@ -203,12 +206,17 @@ class BackupScheduler(private val context: Context) : IBackupScheduler {
         }
     }
 
+    /**
+     * True while any host is executing a run for this config — a WorkManager worker (periodic,
+     * one-time, or charging fallback) or the foreground service ([ForegroundRunState]).
+     */
     override fun observeIsRunning(configId: String): Flow<Boolean> {
         val periodic = workManager.getWorkInfosForUniqueWorkFlow(BackupWorker.workName(configId))
         val oneTime = workManager.getWorkInfosForUniqueWorkFlow(BackupWorker.oneTimeWorkName(configId))
         val fallback = workManager.getWorkInfosForUniqueWorkFlow(BackupWorker.chargingFallbackWorkName(configId))
-        return combine(periodic, oneTime, fallback) { periodicInfos, oneTimeInfos, fallbackInfos ->
-            (periodicInfos + oneTimeInfos + fallbackInfos).any { it.state == WorkInfo.State.RUNNING }
+        val foreground = foregroundRunState.observeIsRunning(configId)
+        return combine(periodic, oneTime, fallback, foreground) { periodicInfos, oneTimeInfos, fallbackInfos, fg ->
+            fg || (periodicInfos + oneTimeInfos + fallbackInfos).any { it.state == WorkInfo.State.RUNNING }
         }.distinctUntilChanged()
     }
 

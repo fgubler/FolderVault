@@ -6,8 +6,10 @@ import ch.abwesend.foldervault.domain.backup.BackupMessage
 import ch.abwesend.foldervault.domain.backup.IBackupConfigRepository
 import ch.abwesend.foldervault.domain.backup.IBackupMessageRepository
 import ch.abwesend.foldervault.domain.backup.IBackupScheduler
+import ch.abwesend.foldervault.domain.backup.StartManualBackupUseCase
 import ch.abwesend.foldervault.domain.crypto.IEncryptionRepository
 import ch.abwesend.foldervault.domain.logging.logger
+import ch.abwesend.foldervault.domain.model.BackupRunStatus
 import ch.abwesend.foldervault.domain.model.MessageSeverity
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.network.INetworkConnectivityChecker
@@ -22,6 +24,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 
@@ -34,11 +37,13 @@ class BackupDetailViewModel(
     private val configRepo: IBackupConfigRepository,
     private val messageRepo: IBackupMessageRepository,
     private val scheduler: IBackupScheduler,
+    private val startManualBackup: StartManualBackupUseCase,
     private val encryptionRepo: IEncryptionRepository,
     private val settingsRepo: IAppSettingsRepository,
     private val connectivityChecker: INetworkConnectivityChecker,
     private val chargingChecker: IChargingStateChecker,
     private val releaseSafPermissionIfUnused: ReleaseSafPermissionIfUnusedUseCase,
+    autoStartBackup: Boolean = false,
 ) : BaseViewModel() {
 
     val config: StateFlow<BackupConfig?> = configRepo.getById(configId)
@@ -88,6 +93,23 @@ class BackupDetailViewModel(
      */
     private var pendingNetworkPolicy: NetworkPolicy? = null
 
+    init {
+        // Auto-start of the initial upload right after creating the config (the nav graph opens
+        // this screen with the flag). Guarded on IDLE so a re-created screen (process death,
+        // config change) cannot re-trigger once the first run has committed a result.
+        // NOTE: this block must stay BELOW every property that backUpNow() touches (config,
+        // isRunning, the prompt flows, pendingNetworkPolicy) — on an eager dispatcher the
+        // coroutine can run during construction, before later-declared fields are initialized.
+        if (autoStartBackup) {
+            safeLaunch {
+                val current = config.filterNotNull().first()
+                if (current.lastRunStatus == BackupRunStatus.IDLE) {
+                    backUpNow()
+                }
+            }
+        }
+    }
+
     /**
      * Triggered by the "Back up now" button. If the config is Wi-Fi-only and the device is
      * currently on a metered (non-Wi-Fi) network, exposes a confirmation prompt instead of
@@ -136,7 +158,7 @@ class BackupDetailViewModel(
                 pendingNetworkPolicy = networkPolicy
                 _showChargingOverridePrompt.value = true
             } else {
-                scheduler.scheduleOneTime(configId, networkPolicy, current.requiresCharging)
+                startManualBackup.start(current, networkPolicy, current.requiresCharging)
             }
         }
     }
@@ -150,7 +172,7 @@ class BackupDetailViewModel(
         if (networkPolicy == null) {
             logger.error("Charging override confirmed but no prompt captured a network policy")
         } else if (current != null && !current.isPaused && !isRunning.value) {
-            scheduler.scheduleOneTime(configId, networkPolicy, requiresCharging = false)
+            startManualBackup.start(current, networkPolicy, requiresCharging = false)
         }
     }
 

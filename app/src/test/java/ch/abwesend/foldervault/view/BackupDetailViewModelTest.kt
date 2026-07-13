@@ -4,6 +4,8 @@ import ch.abwesend.foldervault.domain.backup.BackupConfig
 import ch.abwesend.foldervault.domain.backup.IBackupConfigRepository
 import ch.abwesend.foldervault.domain.backup.IBackupMessageRepository
 import ch.abwesend.foldervault.domain.backup.IBackupScheduler
+import ch.abwesend.foldervault.domain.backup.IForegroundBackupLauncher
+import ch.abwesend.foldervault.domain.backup.StartManualBackupUseCase
 import ch.abwesend.foldervault.domain.model.BackupRunStatus
 import ch.abwesend.foldervault.domain.model.BackupSchedule
 import ch.abwesend.foldervault.domain.model.ChangedFilePolicy
@@ -39,11 +41,18 @@ class BackupDetailViewModelTest : StringSpec({
     beforeTest { Dispatchers.setMain(testDispatcher) }
     afterTest { Dispatchers.resetMain() }
 
+    /**
+     * Defaults to [BackupRunStatus.UP_TO_DATE] (an established backup): manual runs of such a
+     * config go through the WorkManager scheduler, which is what most tests here assert. A
+     * config still in (or before) its initial sync routes to the foreground launcher instead —
+     * covered by the dedicated routing test below and by [StartManualBackupUseCase]'s own tests.
+     */
     fun makeConfig(
         id: String,
         isPaused: Boolean,
         networkPolicy: NetworkPolicy = NetworkPolicy.WIFI_ONLY,
         requiresCharging: Boolean = false,
+        lastRunStatus: BackupRunStatus = BackupRunStatus.UP_TO_DATE,
     ) = BackupConfig(
         id = id,
         displayName = "Test",
@@ -62,7 +71,7 @@ class BackupDetailViewModelTest : StringSpec({
         requiresCharging = requiresCharging,
         createdAt = 0L,
         lastRunAt = null,
-        lastRunStatus = BackupRunStatus.IDLE,
+        lastRunStatus = lastRunStatus,
         filesUploaded = 0,
         filesSkipped = 0,
         filesFailed = 0,
@@ -80,6 +89,7 @@ class BackupDetailViewModelTest : StringSpec({
      * reports [isCharging]. Encryption + settings repos are unused in these tests so they are bare
      * [mockk]s.
      */
+    @Suppress("LongParameterList")
     fun buildVm(
         configId: String,
         config: BackupConfig?,
@@ -92,6 +102,8 @@ class BackupDetailViewModelTest : StringSpec({
         configRepo: IBackupConfigRepository = mockk {
             every { getById(configId) } returns flowOf(config)
         },
+        foregroundLauncher: IForegroundBackupLauncher = mockk(relaxed = true),
+        autoStartBackup: Boolean = false,
     ): Pair<BackupDetailViewModel, IBackupScheduler> {
         val messageRepo = mockk<IBackupMessageRepository> {
             every { getUndismissed(configId) } returns flowOf(emptyList())
@@ -108,13 +120,63 @@ class BackupDetailViewModelTest : StringSpec({
             configRepo = configRepo,
             messageRepo = messageRepo,
             scheduler = scheduler,
+            startManualBackup = StartManualBackupUseCase(scheduler, foregroundLauncher),
             encryptionRepo = mockk(),
             settingsRepo = mockk(),
             connectivityChecker = connectivity,
             chargingChecker = charging,
             releaseSafPermissionIfUnused = mockk(relaxed = true),
+            autoStartBackup = autoStartBackup,
         )
         return vm to scheduler
+    }
+
+    "backUpNow on a config that never ran routes to the foreground launcher instead of WorkManager" {
+        val configId = "cfg-18"
+        val launcher = mockk<IForegroundBackupLauncher>(relaxed = true)
+        val (vm, scheduler) = buildVm(
+            configId,
+            makeConfig(configId, isPaused = false, lastRunStatus = BackupRunStatus.IDLE),
+            foregroundLauncher = launcher,
+        )
+        val job = vm.config.launchIn(CoroutineScope(testDispatcher))
+
+        vm.backUpNow()
+
+        verify(exactly = 1) { launcher.start(configId, NetworkPolicy.WIFI_ONLY, false) }
+        verify(exactly = 0) { scheduler.scheduleOneTime(any(), any(), any()) }
+        job.cancel()
+    }
+
+    "autoStartBackup starts the initial upload once the config loads, if it never ran" {
+        val configId = "cfg-19"
+        val launcher = mockk<IForegroundBackupLauncher>(relaxed = true)
+        val (vm, _) = buildVm(
+            configId,
+            makeConfig(configId, isPaused = false, lastRunStatus = BackupRunStatus.IDLE),
+            foregroundLauncher = launcher,
+            autoStartBackup = true,
+        )
+        val job = vm.config.launchIn(CoroutineScope(testDispatcher))
+
+        verify(exactly = 1) { launcher.start(configId, NetworkPolicy.WIFI_ONLY, false) }
+        job.cancel()
+    }
+
+    "autoStartBackup does nothing when the config already ran" {
+        val configId = "cfg-20"
+        val launcher = mockk<IForegroundBackupLauncher>(relaxed = true)
+        val (vm, scheduler) = buildVm(
+            configId,
+            makeConfig(configId, isPaused = false, lastRunStatus = BackupRunStatus.UP_TO_DATE),
+            foregroundLauncher = launcher,
+            autoStartBackup = true,
+        )
+        val job = vm.config.launchIn(CoroutineScope(testDispatcher))
+
+        verify(exactly = 0) { launcher.start(any(), any(), any()) }
+        verify(exactly = 0) { scheduler.scheduleOneTime(any(), any(), any()) }
+        job.cancel()
     }
 
     "backUpNow does not call scheduler when config is paused" {

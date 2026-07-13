@@ -45,6 +45,13 @@ data class AddEditFormState(
     val changedFilePolicy: ChangedFilePolicy = ChangedFilePolicy.DUPLICATE_WITH_TIMESTAMP,
     val networkPolicy: NetworkPolicy = NetworkPolicy.WIFI_ONLY,
     val requiresCharging: Boolean = false,
+    /**
+     * "Only sync changes from now on": skip the files already in the folder at creation time.
+     * Creation-only — in edit mode the toggle is shown disabled and the setter ignores changes,
+     * since the baseline is materialized by the first run and flipping the flag afterwards
+     * could silently re-upload or strand files.
+     */
+    val syncLaterChangesOnly: Boolean = false,
     val encryptionEnabled: Boolean = false,
     /**
      * True when editing a config that was already encrypted at creation. The encryption password is
@@ -137,6 +144,7 @@ class AddEditBackupViewModel(
             changedFilePolicy = config.changedFilePolicy,
             networkPolicy = config.networkPolicy,
             requiresCharging = config.requiresCharging,
+            syncLaterChangesOnly = config.syncLaterChangesOnly,
             encryptionEnabled = config.encryptionEnabled,
             encryptionSettingsLocked = config.encryptionEnabled,
             retentionPolicy = config.retentionPolicy,
@@ -156,6 +164,14 @@ class AddEditBackupViewModel(
     fun setNetworkPolicy(policy: NetworkPolicy) = updateForm { it.copy(networkPolicy = policy) }
 
     fun setRequiresCharging(enabled: Boolean) = updateForm { it.copy(requiresCharging = enabled) }
+
+    /**
+     * Toggles "only sync changes from now on". Ignored in edit mode — the option is immutable
+     * after creation (see [AddEditFormState.syncLaterChangesOnly]).
+     */
+    fun setSyncLaterChangesOnly(enabled: Boolean) = updateForm {
+        if (it.isEditMode) it else it.copy(syncLaterChangesOnly = enabled)
+    }
 
     /**
      * Toggles encryption. Ignored once [AddEditFormState.encryptionSettingsLocked] is set: an
@@ -385,6 +401,9 @@ class AddEditBackupViewModel(
             retentionPolicy = state.retentionPolicy,
             networkPolicy = state.networkPolicy,
             requiresCharging = state.requiresCharging,
+            // Immutable after creation: an edit can never flip the flag or reset the baseline.
+            syncLaterChangesOnly = existingConfig?.syncLaterChangesOnly ?: state.syncLaterChangesOnly,
+            baselineCompletedAt = existingConfig?.baselineCompletedAt,
             createdAt = existingConfig?.createdAt ?: System.currentTimeMillis(),
             lastRunAt = existingConfig?.lastRunAt,
             lastRunStatus = existingConfig?.lastRunStatus ?: BackupRunStatus.IDLE,

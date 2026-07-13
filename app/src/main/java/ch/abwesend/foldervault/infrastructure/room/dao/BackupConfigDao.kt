@@ -65,4 +65,12 @@ interface BackupConfigDao {
 
     @Query("UPDATE BackupConfig SET isPaused = :paused WHERE id = :id")
     suspend fun updatePaused(id: String, paused: Boolean)
+
+    /**
+     * Marks the baseline snapshot of a `syncLaterChangesOnly` config as complete. Only ever
+     * called after a full, uninterrupted tree walk — while this stays NULL, the next run
+     * resumes baselining instead of uploading.
+     */
+    @Query("UPDATE BackupConfig SET baselineCompletedAt = :completedAt WHERE id = :id")
+    suspend fun updateBaselineCompleted(id: String, completedAt: Long)
 }

@@ -163,6 +163,68 @@ class RoomDatabaseTest {
         assertEquals(2, history.size)
     }
 
+    @Test
+    fun `upsertCurrentVersion over a baseline row deletes it instead of keeping a dead version`() = runTest {
+        val configDao = db.backupConfigDao()
+        val indexDao = db.uploadedFileIndexDao()
+
+        val configId = "config-baseline-upsert"
+        configDao.upsert(backupConfigEntity(configId, "Baseline Upsert Test"))
+
+        val path = "docs/existing.txt"
+        indexDao.upsertCurrentVersion(
+            UploadedFileIndexEntity(
+                backupConfigId = configId,
+                relativePath = path,
+                localLastModified = 1_000L,
+                localSize = 500L,
+                cloudFileId = "",
+                remoteName = "",
+                uploadedAt = 1_000L,
+                isCurrentVersion = true,
+                isBaseline = true,
+            )
+        )
+        indexDao.upsertCurrentVersion(
+            UploadedFileIndexEntity(
+                backupConfigId = configId,
+                relativePath = path,
+                localLastModified = 2_000L,
+                localSize = 600L,
+                cloudFileId = "id-real",
+                remoteName = "existing.txt",
+                uploadedAt = 2_000L,
+                isCurrentVersion = true,
+            )
+        )
+
+        val current = indexDao.getCurrentVersion(configId, path)
+        assertNotNull(current)
+        assertEquals("id-real", current.cloudFileId)
+        assertEquals(false, current.isBaseline)
+
+        // The superseded baseline row must be gone entirely — not linger as a dead old version.
+        val history = indexDao.getVersionHistory(configId, path)
+        assertEquals(1, history.size)
+    }
+
+    @Test
+    fun `updateBaselineCompleted persists the completion timestamp`() = runTest {
+        val configDao = db.backupConfigDao()
+
+        val configId = "config-baseline-done"
+        configDao.upsert(
+            backupConfigEntity(configId, "Baseline Done Test").copy(syncLaterChangesOnly = true)
+        )
+
+        configDao.updateBaselineCompleted(configId, completedAt = 42_000L)
+
+        val updated = configDao.getByIdOnce(configId)
+        assertNotNull(updated)
+        assertEquals(42_000L, updated.baselineCompletedAt)
+        assertEquals(true, updated.syncLaterChangesOnly)
+    }
+
     private fun backupConfigEntity(id: String, name: String) = BackupConfigEntity(
         id = id,
         displayName = name,

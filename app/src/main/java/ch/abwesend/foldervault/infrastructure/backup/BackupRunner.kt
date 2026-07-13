@@ -29,6 +29,7 @@ import ch.abwesend.foldervault.infrastructure.room.dao.UploadedFileIndexDao
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupConfigEntity
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupMessageEntity
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupRunEntity
+import ch.abwesend.foldervault.infrastructure.room.entity.UploadedFileIndexEntity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
@@ -88,6 +89,21 @@ internal fun resolveRunStatus(summary: RunSummary): BackupRunStatus = when {
     summary.quotaExceeded || summary.filesFailed > 0 -> BackupRunStatus.COMPLETED_WITH_WARNINGS
     else -> BackupRunStatus.UP_TO_DATE
 }
+
+/**
+ * Maps the current index rows to cloud-manifest entries. Baseline rows are excluded — they
+ * describe files that were deliberately never uploaded, so nothing exists in the cloud for them.
+ */
+internal fun buildManifestEntries(rows: List<UploadedFileIndexEntity>): List<ManifestEntry> =
+    rows.filterNot { it.isBaseline }.map { entry ->
+        ManifestEntry(
+            relativePath = entry.relativePath,
+            mtime = entry.localLastModified,
+            size = entry.localSize,
+            cloudFileId = entry.cloudFileId,
+            remoteName = entry.remoteName,
+        )
+    }
 
 class BackupRunner(
     private val context: Context,
@@ -150,6 +166,14 @@ class BackupRunner(
             )
         )
 
+        // Baseline pass of a "only sync changes from now on" config: record the source tree in
+        // the index instead of uploading. Branches before authorization deliberately — the pass
+        // is DB-only, so it completes even offline, keeping the creation-to-baseline gap
+        // minimal (files added while auth is broken must not get wrongly baselined).
+        if (config.syncLaterChangesOnly && config.baselineCompletedAt == null) {
+            return runBaselinePass(config, runId, summary, control)
+        }
+
         // Clean up stale staging dirs from previous interrupted runs.
         // Cleanup failures must not abort the run — they only mean cache disk fills up slowly.
         val stagingRoot = File(context.cacheDir, "encrypt-staging")
@@ -184,10 +208,10 @@ class BackupRunner(
 
         val analyzer = FileSystemAnalyzer(
             context = context,
+            fileScanner = LocalFileScanner(context, dispatchers),
             uploadedFileIndexDao = uploadedFileIndexDao,
             backupMessageDao = backupMessageDao,
             cloudProvider = cloudProvider,
-            dispatchers = dispatchers,
         )
 
         try {
@@ -334,18 +358,88 @@ class BackupRunner(
         }
     }
 
+    /**
+     * Runs the baseline pass of a `syncLaterChangesOnly` config instead of the upload pipeline:
+     * no cloud provider, no staging, no encryption — just the tree walk recorded into the index
+     * (see [BaselineRecorder]). Run bookkeeping mirrors the normal path: a stopped pass resolves
+     * to INITIAL_SYNC_IN_PROGRESS (so the resume routes back to the foreground service), an
+     * inaccessible source fails the run, and a clean pass reports the recorded files as skipped.
+     */
+    private suspend fun runBaselinePass(
+        config: BackupConfigEntity,
+        runId: String,
+        summary: RunSummary,
+        control: BackupRunControl?,
+    ): RunResult {
+        val recorder = BaselineRecorder(
+            fileScanner = LocalFileScanner(context, dispatchers),
+            uploadedFileIndexDao = uploadedFileIndexDao,
+            backupConfigDao = backupConfigDao,
+        )
+        try {
+            recorder.recordBaseline(config, summary, control)
+        } catch (e: CancellationException) {
+            // Mirrors the upload path: the DB writes must run NonCancellable, otherwise the
+            // RUNNING row would stay stuck forever (this coroutine is already cancelled).
+            log.warning("Baseline pass cancelled for config ${config.id}")
+            withContext(NonCancellable) {
+                commitRunStats(config.id, runId, BackupRunStatus.CANCELLED, summary, completedNormally = false)
+            }
+            throw e
+        } catch (e: Exception) {
+            log.error("Baseline pass failed for config ${config.id}", e)
+            commitRunStats(config.id, runId, BackupRunStatus.FAILED, summary, completedNormally = false)
+            return RunResult.FatalError(e, summary, runId)
+        } finally {
+            MessageRetentionManager(backupMessageDao).prune(config.id)
+        }
+
+        val status = resolveRunStatus(summary)
+        val completedNormally = !summary.hitTimeBudget && !summary.sourceFolderInaccessible
+        if (summary.sourceFolderInaccessible) {
+            emitRunMessage(config.id, runId, MessageSeverity.ERROR, MessageType.FOLDER_UNREADABLE)
+        }
+        if (completedNormally) {
+            emitRunMessage(config.id, runId, MessageSeverity.INFO, MessageType.BASELINE_RECORDED)
+        }
+        commitRunStats(config.id, runId, status, summary, completedNormally)
+
+        return if (summary.sourceFolderInaccessible) {
+            RunResult.FatalError(
+                IllegalStateException("Source folder is inaccessible for config ${config.id}"),
+                summary,
+                runId,
+            )
+        } else {
+            RunResult.Success(summary, runId)
+        }
+    }
+
+    private suspend fun emitRunMessage(
+        configId: String,
+        runId: String,
+        severity: MessageSeverity,
+        type: MessageType,
+    ) {
+        backupMessageDao.coalesceInsert(
+            BackupMessageEntity(
+                backupConfigId = configId,
+                runId = runId,
+                timestamp = System.currentTimeMillis(),
+                severity = severity,
+                type = type,
+                messageText = context.getString(type.labelResId),
+                formatArgs = emptyList(),
+                relativePath = null,
+                readAt = null,
+            )
+        )
+    }
+
     private suspend fun writeManifest(configId: String, cloudProvider: ICloudStorageProvider) {
         val config = backupConfigDao.getByIdOnce(configId) ?: return
         val currentVersions = uploadedFileIndexDao.getCurrentVersionList(configId)
-        val entries = currentVersions.map { entry ->
-            ManifestEntry(
-                relativePath = entry.relativePath,
-                mtime = entry.localLastModified,
-                size = entry.localSize,
-                cloudFileId = entry.cloudFileId,
-                remoteName = entry.remoteName,
-            )
-        }
+        val entries = buildManifestEntries(currentVersions)
         val manifest = CloudManifest(
             generatedAt = Instant.now().toString(),
             files = entries,

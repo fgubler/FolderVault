@@ -134,12 +134,70 @@ class DatabaseMigrationTest {
         }
     }
 
+    @Test
+    fun `migration 3 to 4 adds baseline columns with expected defaults`() {
+        val db = helper.writableDatabase
+        seedV1BackupConfig(db, configId = "config-baseline")
+        seedV1UploadedFileIndex(db, configId = "config-baseline", relativePath = "docs/a.txt")
+        DatabaseMigrations.MIGRATION_1_2.migrate(db)
+        DatabaseMigrations.MIGRATION_2_3.migrate(db)
+
+        DatabaseMigrations.MIGRATION_3_4.migrate(db)
+
+        db.query(
+            "SELECT syncLaterChangesOnly, baselineCompletedAt FROM BackupConfig WHERE id = 'config-baseline'"
+        ).use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(0, c.getInt(0))
+            assertTrue(c.isNull(1))
+        }
+        db.query(
+            "SELECT isBaseline FROM UploadedFileIndex WHERE relativePath = 'docs/a.txt'"
+        ).use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(0, c.getInt(0))
+        }
+    }
+
+    @Test
+    fun `migration 3 to 4 allows writing the new columns`() {
+        val db = helper.writableDatabase
+        seedV1BackupConfig(db, configId = "config-write")
+        DatabaseMigrations.MIGRATION_1_2.migrate(db)
+        DatabaseMigrations.MIGRATION_2_3.migrate(db)
+
+        DatabaseMigrations.MIGRATION_3_4.migrate(db)
+
+        db.execSQL(
+            "UPDATE BackupConfig SET syncLaterChangesOnly = 1, baselineCompletedAt = 1234 WHERE id = 'config-write'"
+        )
+        db.execSQL(
+            """INSERT INTO UploadedFileIndex (
+                   backupConfigId, relativePath, localLastModified, localSize,
+                   cloudFileId, remoteName, uploadedAt, isCurrentVersion,
+                   pendingDeletionCloudFileId, isBaseline
+               ) VALUES ('config-write', 'new.bin', 10, 20, '', '', 30, 1, NULL, 1)"""
+        )
+        db.query(
+            "SELECT syncLaterChangesOnly, baselineCompletedAt FROM BackupConfig WHERE id = 'config-write'"
+        ).use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(1, c.getInt(0))
+            assertEquals(1234L, c.getLong(1))
+        }
+        db.query("SELECT isBaseline FROM UploadedFileIndex WHERE relativePath = 'new.bin'").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(1, c.getInt(0))
+        }
+    }
+
     /**
-     * Subset of the v1 schema: only the tables this migration touches or references. Other v1
-     * tables (UploadedFileIndex, BackupMessage, NotificationThrottleState) are irrelevant to
-     * [DatabaseMigrations.MIGRATION_1_2] and omitted to keep the test focused.
+     * Subset of the v1 schema: only the tables the tested migrations touch or reference. Other
+     * v1 tables (BackupMessage, NotificationThrottleState) are irrelevant here and omitted to
+     * keep the test focused.
      */
     private fun createV1Schema(db: SupportSQLiteDatabase) {
+        createV1UploadedFileIndex(db)
         db.execSQL(
             """CREATE TABLE IF NOT EXISTS BackupConfig (
                    `id` TEXT NOT NULL, `displayName` TEXT NOT NULL, `sourceTreeUri` TEXT NOT NULL,
@@ -157,6 +215,33 @@ class DatabaseMigrationTest {
                    `enc_cipherTransformation` TEXT, `enc_gcmTagBits` INTEGER,
                    PRIMARY KEY(`id`)
                )"""
+        )
+    }
+
+    private fun createV1UploadedFileIndex(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS UploadedFileIndex (
+                   `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                   `backupConfigId` TEXT NOT NULL, `relativePath` TEXT NOT NULL,
+                   `localLastModified` INTEGER NOT NULL, `localSize` INTEGER NOT NULL,
+                   `cloudFileId` TEXT NOT NULL, `remoteName` TEXT NOT NULL,
+                   `uploadedAt` INTEGER NOT NULL, `isCurrentVersion` INTEGER NOT NULL,
+                   `pendingDeletionCloudFileId` TEXT,
+                   FOREIGN KEY (`backupConfigId`) REFERENCES BackupConfig(`id`) ON DELETE CASCADE
+               )"""
+        )
+    }
+
+    private fun seedV1UploadedFileIndex(
+        db: SupportSQLiteDatabase,
+        configId: String,
+        relativePath: String,
+    ) {
+        db.execSQL(
+            """INSERT INTO UploadedFileIndex (
+                   backupConfigId, relativePath, localLastModified, localSize,
+                   cloudFileId, remoteName, uploadedAt, isCurrentVersion, pendingDeletionCloudFileId
+               ) VALUES ('$configId', '$relativePath', 1, 2, 'cloud-1', 'a.txt', 3, 1, NULL)"""
         )
     }
 

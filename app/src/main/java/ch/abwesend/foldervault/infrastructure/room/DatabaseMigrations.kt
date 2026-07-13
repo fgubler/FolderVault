@@ -49,5 +49,33 @@ object DatabaseMigrations {
         }
     }
 
-    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
+    /**
+     * Every migration MUST call this first: Room's post-migration validation compares the
+     * complete index set of each table against the entities, and the hand-created partial
+     * unique index on UploadedFileIndex (not declarable via `@Index` — Room has no
+     * partial-index support) fails that comparison with "Migration didn't properly handle:
+     * UploadedFileIndex". Dropping it here keeps validation clean; the database callback
+     * recreates it in `onOpen`, which runs after migrations and validation on every open.
+     */
+    private fun SupportSQLiteDatabase.dropPartialIndexesForValidation() {
+        execSQL("DROP INDEX IF EXISTS idx_uploaded_file_index_current_version")
+    }
+
+    /**
+     * v3 → v4: adds the "only sync changes from now on" option. `syncLaterChangesOnly` marks a
+     * config whose pre-existing files must never be uploaded; `baselineCompletedAt` records when
+     * the baseline snapshot of those files finished (NULL = baseline still pending);
+     * `isBaseline` marks UploadedFileIndex rows that represent baselined-but-never-uploaded
+     * files. Existing rows default to disabled, so the migration changes no behaviour.
+     */
+    internal val MIGRATION_3_4 = object : Migration(3, 4) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.dropPartialIndexesForValidation()
+            db.execSQL("ALTER TABLE BackupConfig ADD COLUMN syncLaterChangesOnly INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE BackupConfig ADD COLUMN baselineCompletedAt INTEGER")
+            db.execSQL("ALTER TABLE UploadedFileIndex ADD COLUMN isBaseline INTEGER NOT NULL DEFAULT 0")
+        }
+    }
+
+    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
 }

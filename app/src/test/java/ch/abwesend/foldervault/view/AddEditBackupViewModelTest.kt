@@ -83,8 +83,9 @@ class AddEditBackupViewModelTest : StringSpec({
         provider: ICloudStorageProvider,
         settingsRepo: IAppSettingsRepository = makeSettingsRepo(),
         authorizer: ICloudAuthorizer = makeAuthorizer(provider),
+        configRepo: IBackupConfigRepository = mockk(relaxed = true),
     ): AddEditBackupViewModel = AddEditBackupViewModel(
-        configRepo = mockk<IBackupConfigRepository>(relaxed = true),
+        configRepo = configRepo,
         scheduler = mockk<IBackupScheduler>(relaxed = true),
         authorizer = authorizer,
         encryptionRepo = mockk<IEncryptionRepository>(relaxed = true),
@@ -285,5 +286,67 @@ class AddEditBackupViewModelTest : StringSpec({
         saved.captured.encryptedPasswordBlob shouldBe "OLD_BLOB"
         saved.captured.encryptionSaltBase64 shouldBe "OLD_SALT"
         coVerify(exactly = 0) { encryptionRepo.encryptPassword(any()) }
+    }
+
+    // ── "Only sync changes from now on" (creation-only option) ────────────────
+
+    "new config form defaults to syncing everything" {
+        val vm = makeVm(makeProvider())
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.form.value.syncLaterChangesOnly shouldBe false
+    }
+
+    "setSyncLaterChangesOnly updates the flag in create mode" {
+        val vm = makeVm(makeProvider())
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.setSyncLaterChangesOnly(true)
+
+        vm.form.value.syncLaterChangesOnly shouldBe true
+    }
+
+    "setSyncLaterChangesOnly is ignored in edit mode" {
+        val (vm, _) = makeEditVm(encryptedConfig)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.setSyncLaterChangesOnly(true)
+
+        vm.form.value.syncLaterChangesOnly shouldBe false
+    }
+
+    "saving a new config persists the flag with a pending baseline" {
+        val configRepo = mockk<IBackupConfigRepository>(relaxed = true)
+        val vm = makeVm(makeProvider(), configRepo = configRepo)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.setDisplayName("Docs")
+        vm.setSourceFolder("content://tree/docs", "docs")
+        vm.startDriveSetup("user@test.com")
+        testDispatcher.scheduler.advanceUntilIdle()
+        vm.setSyncLaterChangesOnly(true)
+        vm.save()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        val saved = slot<BackupConfig>()
+        coVerify { configRepo.save(capture(saved)) }
+        saved.captured.syncLaterChangesOnly shouldBe true
+        saved.captured.baselineCompletedAt shouldBe null
+    }
+
+    "editing preserves the stored flag and baseline timestamp verbatim" {
+        val storedConfig = encryptedConfig.copy(syncLaterChangesOnly = true, baselineCompletedAt = 123L)
+        val (vm, configRepo) = makeEditVm(storedConfig)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.form.value.syncLaterChangesOnly shouldBe true
+
+        vm.save()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        val saved = slot<BackupConfig>()
+        coVerify { configRepo.save(capture(saved)) }
+        saved.captured.syncLaterChangesOnly shouldBe true
+        saved.captured.baselineCompletedAt shouldBe 123L
     }
 })

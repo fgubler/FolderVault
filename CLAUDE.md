@@ -40,6 +40,13 @@ Crashlytics confinement: ONLY `infrastructure/logging/CrashlyticsSink.kt` may im
   unconditionally `throw e`, or pair it with a preceding `catch (X: CancellationException)`.
   Enforced by `CancellationRethrowArchitectureTest`.
 - **Serial uploads**: one file fully encrypted + uploaded + indexed before the next. No parallelism.
+- **Room migrations must drop the partial index first** (call
+  `dropPartialIndexesForValidation()` as the first statement of every new `Migration`): Room
+  validates each table's complete index set after migrating, and the hand-created partial
+  unique index on `UploadedFileIndex` (undeclarable via `@Index`) fails that validation.
+  `DatabaseCallback.onOpen` recreates it after validation. Regression-tested by
+  `DatabaseMigrationValidationTest`, which runs Room's real open path against an on-disk
+  previous-version DB — extend it when bumping `DB_VERSION`.
 - **Two run hosts**: the *initial upload* runs in `BackupForegroundService` (dataSync FGS,
   5.5 h budget, started ONLY from foreground UI via `IForegroundBackupLauncher` — never from a
   worker or sticky restart); all scheduled/background runs stay on WorkManager. Cooperative

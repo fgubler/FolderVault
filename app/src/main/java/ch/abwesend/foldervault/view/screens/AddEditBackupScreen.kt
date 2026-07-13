@@ -163,6 +163,7 @@ fun AddEditBackupScreen(
             onChangedFilePolicyChange = viewModel::setChangedFilePolicy,
             onNetworkPolicyChange = viewModel::setNetworkPolicy,
             onRequiresChargingChange = viewModel::setRequiresCharging,
+            onSyncLaterChangesOnlyChange = viewModel::setSyncLaterChangesOnly,
             onEncryptionToggle = viewModel::setEncryptionEnabled,
             onPasswordChange = viewModel::setPassword,
             onPasswordConfirmChange = viewModel::setPasswordConfirm,
@@ -301,6 +302,7 @@ private fun AddEditContent(
     onChangedFilePolicyChange: (ChangedFilePolicy) -> Unit,
     onNetworkPolicyChange: (NetworkPolicy) -> Unit,
     onRequiresChargingChange: (Boolean) -> Unit,
+    onSyncLaterChangesOnlyChange: (Boolean) -> Unit,
     onEncryptionToggle: (Boolean) -> Unit,
     onPasswordChange: (String) -> Unit,
     onPasswordConfirmChange: (String) -> Unit,
@@ -317,8 +319,11 @@ private fun AddEditContent(
         BasicsSection(
             displayName = form.displayName,
             sourceFolderName = form.sourceFolderDisplayName,
+            syncLaterChangesOnly = form.syncLaterChangesOnly,
+            isEditMode = form.isEditMode,
             onDisplayNameChange = onDisplayNameChange,
             onPickFolder = onPickFolder,
+            onSyncLaterChangesOnlyChange = onSyncLaterChangesOnlyChange,
         )
 
         HorizontalDivider()
@@ -355,13 +360,16 @@ private fun AddEditContent(
     }
 }
 
-@Suppress("MultipleEmitters")
+@Suppress("MultipleEmitters", "LongParameterList")
 @Composable
 private fun BasicsSection(
     displayName: String,
     sourceFolderName: String,
+    syncLaterChangesOnly: Boolean,
+    isEditMode: Boolean,
     onDisplayNameChange: (String) -> Unit,
     onPickFolder: () -> Unit,
+    onSyncLaterChangesOnlyChange: (Boolean) -> Unit,
 ) {
     SectionHeader(stringResource(R.string.section_basics))
     OutlinedTextField(
@@ -380,6 +388,21 @@ private fun BasicsSection(
             } else {
                 stringResource(R.string.button_select_folder)
             },
+        )
+    }
+    Spacer(modifier = Modifier.height(8.dp))
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Text(stringResource(R.string.label_sync_later_changes_only), modifier = Modifier.weight(1f))
+        InfoIconButton(
+            title = stringResource(R.string.info_sync_later_changes_only_title),
+            body = stringResource(R.string.info_sync_later_changes_only_body),
+        )
+        // Locked after creation: the first run materializes the baseline, so flipping the
+        // option later would be meaningless at best and destructive at worst.
+        Switch(
+            checked = syncLaterChangesOnly,
+            onCheckedChange = onSyncLaterChangesOnlyChange,
+            enabled = !isEditMode,
         )
     }
 }
@@ -654,7 +677,11 @@ private fun BackupSchedule.labelResId(): Int = when (this) {
 private fun AddEditBackupScreenPreview() {
     FolderVaultTheme {
         AddEditContent(
-            form = AddEditFormState(displayName = "My documents", encryptionEnabled = true),
+            form = AddEditFormState(
+                displayName = "My documents",
+                syncLaterChangesOnly = true,
+                encryptionEnabled = true,
+            ),
             onDisplayNameChange = {},
             onPickFolder = {},
             onConnectDrive = {},
@@ -662,6 +689,7 @@ private fun AddEditBackupScreenPreview() {
             onChangedFilePolicyChange = {},
             onNetworkPolicyChange = {},
             onRequiresChargingChange = {},
+            onSyncLaterChangesOnlyChange = {},
             onEncryptionToggle = {},
             onPasswordChange = {},
             onPasswordConfirmChange = {},
@@ -688,6 +716,7 @@ private fun AddEditBackupScreenLockedEncryptionPreview() {
             onChangedFilePolicyChange = {},
             onNetworkPolicyChange = {},
             onRequiresChargingChange = {},
+            onSyncLaterChangesOnlyChange = {},
             onEncryptionToggle = {},
             onPasswordChange = {},
             onPasswordConfirmChange = {},

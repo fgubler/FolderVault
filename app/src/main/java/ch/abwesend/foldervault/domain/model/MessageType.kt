@@ -10,6 +10,7 @@ enum class MessageType(val notifies: Boolean, @StringRes val labelResId: Int) {
     UPLOAD_FAILED(notifies = true, R.string.msg_upload_failed),
     ENCRYPTION_FAILED(notifies = true, R.string.msg_encryption_failed),
     INITIAL_SYNC_COMPLETE(notifies = false, R.string.msg_initial_sync_complete),
+    BASELINE_RECORDED(notifies = false, R.string.msg_baseline_recorded),
     QUOTA_EXCEEDED(notifies = true, R.string.msg_quota_exceeded),
     UNRELIABLE_TIMESTAMPS(notifies = false, R.string.msg_unreliable_timestamps),
     RATE_LIMITED(notifies = false, R.string.msg_rate_limited),

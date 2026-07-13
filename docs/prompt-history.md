@@ -7,6 +7,71 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-13 — "Only sync changes from now on" option for new backup configs
+
+### What was requested
+When creating a backup config, offer an option (default off) to skip the files already in the
+folder and only sync changes from then on. A min-date/mtime-cutoff approach was questioned and
+rejected in planning (files copied in later keep old mtimes → silently never synced; SAF mtimes
+unreliable); a **baseline snapshot** was chosen instead, with baseline rows explicitly
+recognizable in the DB.
+
+### What was done
+- **Schema v3→v4** (`MIGRATION_3_4`): `BackupConfig.syncLaterChangesOnly` (INTEGER NOT NULL
+  DEFAULT 0, immutable after creation), `BackupConfig.baselineCompletedAt` (INTEGER NULL),
+  `UploadedFileIndex.isBaseline` (INTEGER NOT NULL DEFAULT 0). Mirrored in entities, the
+  domain `BackupConfig`, and `BackupConfigRepository` mapping.
+- **Baseline pass**: new `BaselineRecorder` records every source file as a *current baseline
+  row* (`isBaseline = 1`, empty `cloudFileId`/`remoteName`) instead of uploading. Gated in
+  `BackupRunner.runBackupExclusive` **before** `authorize()` (DB-only → works offline) while
+  `syncLaterChangesOnly && baselineCompletedAt == null`. Interruption-safe: a cooperative stop
+  takes the `hitTimeBudget` path (status `INITIAL_SYNC_IN_PROGRESS` keeps FGS routing for the
+  resume), already-indexed paths are skipped on resume so originally captured mtimes survive.
+  The first run of such a config still routes to the foreground service — it hosts the baseline
+  pass instead of an initial upload and finishes quickly.
+- **Scanner seam**: SAF tree walk extracted from `FileSystemAnalyzer.collectFileInfos` into
+  `LocalFileScanner` / `ILocalFileScanner` (+ `LocalFileInfo` now top-level internal), shared by
+  analyzer and recorder, fakeable in tests.
+- **ChangeDetector**: baseline rows never yield `CHANGED`/`CHECK_CLOUD` — any divergence is
+  `NEW` (first upload: no predecessor to overwrite/duplicate, and `IGNORE` does not suppress
+  it); unusable mtime + size match is `UNCHANGED` (documented limitation: content-only change
+  without size change stays undetected on mtime-less providers — no cloud object to check).
+- **Index hygiene**: `upsertCurrentVersion` deletes superseded baseline rows in the same
+  transaction (a real upload replaces the baseline row instead of leaving a dead version).
+- **Manifest**: `buildManifestEntries` (extracted, unit-tested) filters baseline rows.
+- **Retention**: `KeepLastN` counts cloud copies only; both policies drop stray baseline rows
+  via `deleteById`, never `cloudProvider.deleteFile("")`.
+- **Run bookkeeping**: baseline run reports the recorded files as `filesSkipped`; clean pass →
+  `UP_TO_DATE` + new info message `BASELINE_RECORDED` (notifies = false).
+- **UI**: toggle "Only sync changes from now on" in the Basics section below the folder picker
+  (standard label + info-icon + switch row); shown but disabled in edit mode, setter is a no-op
+  in edit mode, `buildConfig` always carries the stored flag/timestamp verbatim on edit.
+- **Tests first throughout**: migration v1→v4 chain, 5 baseline `ChangeDetector` cases,
+  Room upsert-over-baseline + `updateBaselineCompleted`, `BaselineRecorderTest` (hand-written
+  fakes; interruption/resume/inaccessible/empty cases), `ManifestEntriesTest`, 3 retention
+  guard cases, 5 ViewModel cases (default off, create/edit setter, save wiring).
+
+### Follow-up fix: v3→v4 migration failed on-device ("Migration didn't properly handle: UploadedFileIndex")
+Room validates each table's **complete index set** after a migration; the hand-created partial
+unique index `idx_uploaded_file_index_current_version` (created in `DatabaseCallback.onCreate`,
+undeclarable via `@Index`) is not in the entity's expected set, so the first-ever real
+migration failed validation and triggered the database-reset recovery screen. Latent since v1 —
+fresh installs never validate. Fix: `MIGRATION_3_4` drops the index first
+(`dropPartialIndexesForValidation()`, a convention every future migration must follow — noted
+in `CLAUDE.md`), and the callback recreates it in `onOpen` (idempotent, runs after migrations
+*and* validation). New `DatabaseMigrationValidationTest` reproduces the failure through Room's
+real open path against an on-disk v3 database (schema replayed verbatim from
+`schemas/.../3.json` incl. partial index and identity hash) — the raw-SQL migration tests
+bypass Room's validation and could not catch this class of bug.
+
+### Decisions carried forward
+- Baseline captures the folder state at the **first run**, not the creation instant (new
+  configs auto-start immediately, so the gap is seconds; pre-auth branch keeps it minimal).
+- Baseline rows only ever exist as current versions; `isBaseline` is the semantic marker
+  (sentinel `cloudFileId = ""` is not to be relied on).
+- Every future Room migration starts with `dropPartialIndexesForValidation()`; the partial
+  index lives in `onOpen`. Extend `DatabaseMigrationValidationTest` on each `DB_VERSION` bump.
+
 ## 2026-07-13 — Review fixes RV-1, RV-3 … RV-7 (`review/develop.md`)
 
 ### What was requested

@@ -105,7 +105,7 @@ internal fun buildManifestEntries(rows: List<UploadedFileIndexEntity>): List<Man
         )
     }
 
-class BackupRunner(
+class BackupRunner internal constructor(
     private val context: Context,
     private val authorizer: ICloudAuthorizer,
     private val cipher: IFvc1Cipher,
@@ -117,6 +117,12 @@ class BackupRunner(
     private val settingsRepository: IAppSettingsRepository,
     private val dispatchers: IDispatchers,
     private val scheduler: IBackupScheduler,
+    /**
+     * The SAF source-tree walker, shared by the upload analyzer and the baseline recorder.
+     * Injectable so the baseline pass can be driven with a fake in a run-level test without the
+     * Android/SAF machinery; production uses the default [LocalFileScanner].
+     */
+    private val fileScanner: ILocalFileScanner = LocalFileScanner(context, dispatchers),
 ) {
     private val log get() = logger
 
@@ -208,7 +214,7 @@ class BackupRunner(
 
         val analyzer = FileSystemAnalyzer(
             context = context,
-            fileScanner = LocalFileScanner(context, dispatchers),
+            fileScanner = fileScanner,
             uploadedFileIndexDao = uploadedFileIndexDao,
             backupMessageDao = backupMessageDao,
             cloudProvider = cloudProvider,
@@ -372,7 +378,7 @@ class BackupRunner(
         control: BackupRunControl?,
     ): RunResult {
         val recorder = BaselineRecorder(
-            fileScanner = LocalFileScanner(context, dispatchers),
+            fileScanner = fileScanner,
             uploadedFileIndexDao = uploadedFileIndexDao,
             backupConfigDao = backupConfigDao,
         )

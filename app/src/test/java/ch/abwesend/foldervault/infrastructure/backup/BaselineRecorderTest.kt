@@ -27,7 +27,7 @@ import kotlinx.coroutines.test.runTest
  * Scripted scanner: returns the canned file list, optionally flags the source as inaccessible
  * or triggers a side effect (e.g. a stop request) when the scan happens.
  */
-private class FakeLocalFileScanner(
+internal class FakeLocalFileScanner(
     private val files: List<LocalFileInfo> = emptyList(),
     private val inaccessible: Boolean = false,
 ) : ILocalFileScanner {
@@ -146,7 +146,7 @@ private fun baselineConfig(id: String = "cfg") = BackupConfigEntity(
     networkPolicy = NetworkPolicy.ANY,
     syncLaterChangesOnly = true,
     baselineCompletedAt = null,
-    createdAt = 0L,
+    createdAt = 1_000_000L,
     lastRunAt = null,
     lastRunStatus = BackupRunStatus.IDLE,
     filesUploaded = 0,
@@ -263,6 +263,47 @@ class BaselineRecorderTest : StringSpec({
             rowA.localSize shouldBe 10L
             summary.filesSkipped shouldBe 2
             configDao.baselineCompletedAt.shouldNotBeNull()
+        }
+    }
+
+    "does not baseline files modified after the config was created — they stay unindexed for upload" {
+        runTest {
+            // createdAt is the cutoff (1_000_000L): "old.txt" predates it and is baselined;
+            // "gap.txt" was added during a resume gap (mtime after the cutoff) and must NOT be
+            // baselined, or it would be silently excluded from backup forever (RV-8).
+            val scanner = FakeLocalFileScanner(
+                listOf(
+                    fileInfo("old.txt", mtime = 500_000L),
+                    fileInfo("gap.txt", mtime = 2_000_000L),
+                )
+            )
+            val indexDao = FakeIndexDao()
+            val configDao = FakeConfigDao()
+            val summary = RunSummary()
+
+            BaselineRecorder(scanner, indexDao, configDao)
+                .recordBaseline(baselineConfig(), summary, control = null)
+
+            indexDao.rows.map { it.relativePath } shouldBe listOf("old.txt")
+            summary.filesSkipped shouldBe 1
+            summary.totalFilesDiscovered shouldBe 2
+            // A clean walk still completes even though a file was intentionally left unindexed.
+            configDao.baselineCompletedAt.shouldNotBeNull()
+        }
+    }
+
+    "baselines a file with an unusable mtime even if it might postdate creation" {
+        runTest {
+            val scanner = FakeLocalFileScanner(listOf(fileInfo("no-mtime.txt", mtime = null)))
+            val indexDao = FakeIndexDao()
+            val configDao = FakeConfigDao()
+            val summary = RunSummary()
+
+            BaselineRecorder(scanner, indexDao, configDao)
+                .recordBaseline(baselineConfig(), summary, control = null)
+
+            indexDao.rows.single().relativePath shouldBe "no-mtime.txt"
+            summary.filesSkipped shouldBe 1
         }
     }
 

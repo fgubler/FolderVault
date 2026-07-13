@@ -284,7 +284,14 @@ class AddEditBackupViewModel(
             updateForm { it.copy(isSaving = true, errorMessage = null) }
             try {
                 val subFolder = ensureSubFolder(state) ?: return@safeLaunch
-                val config = buildConfig(state, subFolder.first, subFolder.second) ?: return@safeLaunch
+                // Re-read the persisted config so run bookkeeping (baselineCompletedAt, run stats,
+                // pause flag) reflects any run that finished while the edit screen was open. The
+                // snapshot captured at load time can be stale — persisting it would clobber those
+                // columns, and resetting baselineCompletedAt to NULL would re-enter the baseline
+                // pass and silently strand files added since (RV-9). Falls back to the load-time
+                // snapshot if the row can no longer be read.
+                val persisted = existingConfigId?.let { configRepo.getById(it).first() } ?: existingConfig
+                val config = buildConfig(state, subFolder.first, subFolder.second, persisted) ?: return@safeLaunch
                 val previousTreeUri = existingConfig?.sourceTreeUri
                 configRepo.save(config)
                 // Editing may repoint a config at a different folder. The old folder's persisted
@@ -375,13 +382,20 @@ class AddEditBackupViewModel(
         return error == null
     }
 
+    /**
+     * Builds the [BackupConfig] to persist. User-editable fields come from [state]; all persisted
+     * bookkeeping and immutable fields ([persisted] — the freshly re-read config, or null for a new
+     * config) come from the fresh DB read so a run that finished while the edit screen was open is
+     * never clobbered (RV-9).
+     */
     private fun buildConfig(
         state: AddEditFormState,
         subFolderId: String,
         subFolderName: String,
+        persisted: BackupConfig?,
     ): BackupConfig? {
         val cloudState = state.cloudSetup as? CloudSetupState.Done ?: return null
-        val id = existingConfig?.id ?: UUID.randomUUID().toString()
+        val id = persisted?.id ?: UUID.randomUUID().toString()
 
         val (encryptedBlob, saltBase64) = resolveEncryptionMaterial(state) ?: return null
 
@@ -402,19 +416,19 @@ class AddEditBackupViewModel(
             networkPolicy = state.networkPolicy,
             requiresCharging = state.requiresCharging,
             // Immutable after creation: an edit can never flip the flag or reset the baseline.
-            syncLaterChangesOnly = existingConfig?.syncLaterChangesOnly ?: state.syncLaterChangesOnly,
-            baselineCompletedAt = existingConfig?.baselineCompletedAt,
-            createdAt = existingConfig?.createdAt ?: System.currentTimeMillis(),
-            lastRunAt = existingConfig?.lastRunAt,
-            lastRunStatus = existingConfig?.lastRunStatus ?: BackupRunStatus.IDLE,
-            filesUploaded = existingConfig?.filesUploaded ?: 0,
-            filesSkipped = existingConfig?.filesSkipped ?: 0,
-            filesFailed = existingConfig?.filesFailed ?: 0,
-            bytesUploaded = existingConfig?.bytesUploaded ?: 0L,
-            totalFilesDiscovered = existingConfig?.totalFilesDiscovered ?: 0,
-            filesUploadedTotal = existingConfig?.filesUploadedTotal ?: 0,
-            lastRunCompletedNormally = existingConfig?.lastRunCompletedNormally ?: false,
-            isPaused = existingConfig?.isPaused ?: false,
+            syncLaterChangesOnly = persisted?.syncLaterChangesOnly ?: state.syncLaterChangesOnly,
+            baselineCompletedAt = persisted?.baselineCompletedAt,
+            createdAt = persisted?.createdAt ?: System.currentTimeMillis(),
+            lastRunAt = persisted?.lastRunAt,
+            lastRunStatus = persisted?.lastRunStatus ?: BackupRunStatus.IDLE,
+            filesUploaded = persisted?.filesUploaded ?: 0,
+            filesSkipped = persisted?.filesSkipped ?: 0,
+            filesFailed = persisted?.filesFailed ?: 0,
+            bytesUploaded = persisted?.bytesUploaded ?: 0L,
+            totalFilesDiscovered = persisted?.totalFilesDiscovered ?: 0,
+            filesUploadedTotal = persisted?.filesUploadedTotal ?: 0,
+            lastRunCompletedNormally = persisted?.lastRunCompletedNormally ?: false,
+            isPaused = persisted?.isPaused ?: false,
         )
     }
 

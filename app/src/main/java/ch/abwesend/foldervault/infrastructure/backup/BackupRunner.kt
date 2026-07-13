@@ -313,34 +313,10 @@ class BackupRunner internal constructor(
         val completedNormally = !summary.authLost && !summary.quotaExceeded &&
             !summary.hitTimeBudget && !summary.sourceFolderInaccessible
         if (summary.sourceFolderInaccessible) {
-            backupMessageDao.coalesceInsert(
-                BackupMessageEntity(
-                    backupConfigId = config.id,
-                    runId = runId,
-                    timestamp = System.currentTimeMillis(),
-                    severity = MessageSeverity.ERROR,
-                    type = MessageType.FOLDER_UNREADABLE,
-                    messageText = context.getString(MessageType.FOLDER_UNREADABLE.labelResId),
-                    formatArgs = emptyList(),
-                    relativePath = null,
-                    readAt = null,
-                )
-            )
+            emitRunMessage(config.id, runId, MessageSeverity.ERROR, MessageType.FOLDER_UNREADABLE)
         }
         if (completedNormally && config.lastRunStatus == BackupRunStatus.INITIAL_SYNC_IN_PROGRESS) {
-            backupMessageDao.coalesceInsert(
-                BackupMessageEntity(
-                    backupConfigId = config.id,
-                    runId = runId,
-                    timestamp = System.currentTimeMillis(),
-                    severity = MessageSeverity.INFO,
-                    type = MessageType.INITIAL_SYNC_COMPLETE,
-                    messageText = context.getString(MessageType.INITIAL_SYNC_COMPLETE.labelResId),
-                    formatArgs = emptyList(),
-                    relativePath = null,
-                    readAt = null,
-                )
-            )
+            emitRunMessage(config.id, runId, MessageSeverity.INFO, MessageType.INITIAL_SYNC_COMPLETE)
         }
         commitRunStats(
             configId = config.id,

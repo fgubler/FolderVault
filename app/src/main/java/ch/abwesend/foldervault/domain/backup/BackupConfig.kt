@@ -23,8 +23,9 @@ data class BackupConfig(
     val networkPolicy: NetworkPolicy,
     val requiresCharging: Boolean,
     /**
-     * When true, files that already existed in the source folder at the first run are never
-     * uploaded — only files added or modified afterwards are synced. Immutable after creation.
+     * When true, files that already existed in the source folder at the first run are not
+     * uploaded as they are — only files added or modified afterwards are synced. Modifying a
+     * pre-existing file later still uploads that new version. Immutable after creation.
      */
     val syncLaterChangesOnly: Boolean = false,
     /**

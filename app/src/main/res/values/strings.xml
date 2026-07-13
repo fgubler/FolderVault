@@ -8,6 +8,11 @@
     <string name="backup_notification_progress_title">FolderVault Backup</string>
     <string name="backup_notification_progress_text">Uploading files…</string>
     <string name="backup_notification_progress_text_with_count">Uploading %1$d / %2$d files</string>
+    <string name="backup_notification_progress_text_with_queued">%1$s — %2$s</string>
+    <plurals name="backup_notification_progress_queued">
+        <item quantity="one">%d more backup waiting</item>
+        <item quantity="other">%d more backups waiting</item>
+    </plurals>
     <string name="backup_notification_stop_action">Stop</string>
     <string name="detail_initial_sync_incomplete">First backup not finished yet (%1$d of %2$d files uploaded). It continues automatically in the background — or finish it now while the app is open.</string>
     <string name="detail_initial_sync_continue">Continue now</string>

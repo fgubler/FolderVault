@@ -45,6 +45,9 @@ Crashlytics confinement: ONLY `infrastructure/logging/CrashlyticsSink.kt` may im
   worker or sticky restart); all scheduled/background runs stay on WorkManager. Cooperative
   stops go through `BackupRunControl.requestStop()` (clean `hitTimeBudget` path), never by
   cancelling the coroutine. Routing lives in `StartManualBackupUseCase.needsForegroundService`.
+  Starts for *other* configs while the service is busy queue inside the service and run
+  serially back-to-back (never in parallel); queued configs count as "running" in
+  `ForegroundRunState`, degrade to WorkManager on OS timeout, and are dropped on user stop.
 - **Kotest** spec DSL for unit tests (e.g. `StringSpec`, `FunSpec`). Set
   `isolationMode = IsolationMode.InstancePerTest` when using MockK to get a fresh mock per test.
 - **Konsist** architecture tests live in `src/test/.../architecture/`.

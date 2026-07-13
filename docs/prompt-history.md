@@ -7,6 +7,38 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-13 — Review fixes B2 (in-service run queue) + N1 + N2
+
+### What was requested
+Fix B2 from `review/develop.md`: a "Back up now" for a second config while the foreground
+service was busy was silently dropped. Instead of the review's suggested WorkManager fallback,
+the chosen design queues the run *inside* the service (runs stay strictly serial — parallel
+uploads would share the same ~6 h dataSync budget and uplink without finishing sooner, and
+would break the serial-upload convention). Also fix nitpicks N1 and N2.
+
+### What was done
+- **B2** — `BackupForegroundService` now holds a FIFO queue of `RunParameters` guarded by a
+  lock shared with the active-run state. A start for a different config while busy is queued
+  and launched back-to-back in the same service session (full FGS budget); a start for a
+  config already active or queued is ignored as a duplicate. Queued configs are marked in
+  `ForegroundRunState` immediately (the UI shows the accepted tap as running), the progress
+  notification appends "N more backups waiting" (live via a `pendingRunCount` StateFlow
+  combined into `publishProgress`), an OS timeout hands queued runs to
+  `scheduler.scheduleOneTime`, and a user stop drops them. The service stops itself only when
+  the active slot and the queue are both empty; `onDestroy` drains the queue so queued configs
+  never stay marked as running. The `startForeground` re-post on a second start now re-uses
+  the active run's latest notification instead of building one for the incoming config
+  (fixes B2's notification-flip side issue); a start without a config id no longer kills a
+  live run (`stopWhenIdle`).
+- **N1** — `onTimeout`'s drain check now distinguishes "no job" (stop the idle service) from
+  "did not drain" via `withTimeoutOrNull { job.join(); true }`, so a boundary-timed join can
+  no longer double-schedule the continuation.
+- **N2** — `NetworkStateMonitor` registered in the Koin module and injected like the service's
+  other collaborators.
+- **Tests**: `BackupForegroundServiceTest` extended with queue-then-run (incl. queued count in
+  the notification and `ForegroundRunState` feedback), duplicate-start, user-stop-drains-queue,
+  and OS-timeout-hands-over-queued-runs scenarios.
+
 ## 2026-07-13 — Review fixes B1 + B3 on the foreground-service commit
 
 ### What was requested

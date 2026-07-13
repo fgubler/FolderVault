@@ -7,7 +7,9 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 
 /**
- * In-process registry of backup configs currently running inside the foreground service.
+ * In-process registry of backup configs currently running — or queued to run — inside the
+ * foreground service. Queued configs count as running on purpose: the user's tap was accepted
+ * and the service owns the run, so the UI must reflect it instead of offering another start.
  *
  * WorkManager-run backups are visible to the UI through `getWorkInfosForUniqueWorkFlow`, but a
  * service run has no WorkInfo — this singleton is the equivalent signal, merged into

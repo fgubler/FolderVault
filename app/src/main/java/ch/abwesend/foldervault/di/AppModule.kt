@@ -37,6 +37,7 @@ import ch.abwesend.foldervault.infrastructure.crypto.Fvc1Cipher
 import ch.abwesend.foldervault.infrastructure.logging.FirebaseTelemetryToggle
 import ch.abwesend.foldervault.infrastructure.logging.LocalLogFiles
 import ch.abwesend.foldervault.infrastructure.network.AndroidNetworkConnectivityChecker
+import ch.abwesend.foldervault.infrastructure.network.NetworkStateMonitor
 import ch.abwesend.foldervault.infrastructure.restore.RestoreEngine
 import ch.abwesend.foldervault.infrastructure.room.DatabaseRecoveryService
 import ch.abwesend.foldervault.infrastructure.room.FolderVaultDatabase
@@ -94,6 +95,7 @@ val appModule = module {
     single<IForegroundBackupLauncher> { ForegroundBackupLauncher(androidContext(), get()) }
     single { StartManualBackupUseCase(get(), get()) }
     single<INetworkConnectivityChecker> { AndroidNetworkConnectivityChecker(androidContext()) }
+    single { NetworkStateMonitor(androidContext()) }
     single<IChargingStateChecker> { AndroidChargingStateChecker(androidContext()) }
     single<IBackgroundRestrictionChecker> { AndroidBackgroundRestrictionChecker(androidContext()) }
     single<ISafPermissionManager> { AndroidSafPermissionManager(androidContext()) }

@@ -95,10 +95,10 @@ class BackupForegroundServiceTest {
             .setSmallIcon(android.R.drawable.stat_sys_upload)
             .build()
         every {
-            notificationManager.buildProgressNotification(any(), any(), any(), any(), any())
+            notificationManager.buildProgressNotification(any(), any(), any(), any(), any(), any())
         } returns progressNotification
         every {
-            notificationManager.updateProgressNotification(any(), any(), any(), any(), any())
+            notificationManager.updateProgressNotification(any(), any(), any(), any(), any(), any())
         } returns progressNotification
         every { scheduler.scheduleOneTime(any(), any(), any(), any()) } answers {
             continuationScheduled.countDown()
@@ -158,7 +158,7 @@ class BackupForegroundServiceTest {
         // The config row snapshot has totalFilesDiscovered = 0 (first run) — counts can only
         // come from the run control's live flows.
         every {
-            notificationManager.updateProgressNotification(any(), any(), any(), any(), any())
+            notificationManager.updateProgressNotification(any(), any(), any(), any(), any(), any())
         } answers {
             val filesUploaded = arg<Int>(1)
             val totalDiscovered = arg<Int>(2)
@@ -191,12 +191,49 @@ class BackupForegroundServiceTest {
     }
 
     @Test
+    fun `baseline pass shows the indexing notification instead of upload counts`() {
+        val indexingShown = CountDownLatch(1)
+        // A "only sync changes from now on" config whose baseline is still pending: the run
+        // records metadata and uploads nothing, so the notification must not read "0 / N".
+        coEvery { configDao.getByIdOnce(configId) } returns
+            backupConfigEntity(configId).copy(syncLaterChangesOnly = true, baselineCompletedAt = null)
+        every {
+            notificationManager.updateProgressNotification(any(), any(), any(), any(), any(), any())
+        } answers {
+            if (arg<Boolean>(5)) {
+                indexingShown.countDown()
+            }
+            progressNotification
+        }
+        coEvery { runner.runBackup(configId, any()) } coAnswers {
+            val control = secondArg<BackupRunControl?>()
+            runStarted.countDown()
+            control?.reportFilesDiscovered(42)
+            while (control?.shouldStop() != true) {
+                delay(20)
+            }
+            RunResult.Success(summary = RunSummary().apply { hitTimeBudget = true }, runId = "run-1")
+        }
+
+        val service = Robolectric.buildService(BackupForegroundService::class.java).create().get()
+        service.onStartCommand(startIntent(), 0, 1)
+        assertTrue(runStarted.await(10, TimeUnit.SECONDS), "the backup run should have started")
+
+        assertTrue(
+            indexingShown.await(10, TimeUnit.SECONDS),
+            "a baseline (only-sync-changes) run should show the indexing notification, not upload counts",
+        )
+
+        service.onStartCommand(stopIntent(), 0, 2)
+    }
+
+    @Test
     fun `a second config started while busy is queued and runs after the active run completes`() {
         val releaseFirstRun = CountDownLatch(1)
         val secondRunStarted = CountDownLatch(1)
         val queuedCountShown = CountDownLatch(1)
         every {
-            notificationManager.updateProgressNotification(any(), any(), any(), any(), any())
+            notificationManager.updateProgressNotification(any(), any(), any(), any(), any(), any())
         } answers {
             if (arg<Int>(3) == 1) {
                 queuedCountShown.countDown()

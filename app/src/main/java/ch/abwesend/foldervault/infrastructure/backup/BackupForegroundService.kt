@@ -408,6 +408,7 @@ class BackupForegroundService : Service() {
                 totalDiscovered = if (discoveredThisRun > 0) discoveredThisRun else config.totalFilesDiscovered,
                 queuedRuns = queuedRuns,
                 stopIntent = stopPendingIntent(),
+                indexing = config.isBaselinePending,
             )
             delay(PROGRESS_UPDATE_INTERVAL_MS)
         }

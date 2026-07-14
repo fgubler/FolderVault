@@ -8,7 +8,8 @@
     <string name="backup_notification_progress_title">FolderVault Backup</string>
     <string name="backup_notification_progress_text">Uploading files…</string>
     <string name="backup_notification_progress_text_with_count">Uploading %1$d / %2$d files</string>
-    <string name="backup_notification_progress_text_with_queued">%1$s — %2$s</string>
+    <string name="backup_notification_indexing_text">Checking which files are already there…</string>
+    <string name="backup_notification_progress_separator">" — "</string>
     <plurals name="backup_notification_progress_queued">
         <item quantity="one">%d more backup waiting</item>
         <item quantity="other">%d more backups waiting</item>
@@ -16,6 +17,8 @@
     <string name="backup_notification_stop_action">Stop</string>
     <string name="detail_initial_sync_incomplete">First backup not finished yet (%1$d of %2$d files uploaded). It continues automatically in the background — or finish it now while the app is open.</string>
     <string name="detail_initial_sync_incomplete_manual">First backup not finished yet (%1$d of %2$d files uploaded). Finish it now while the app is open.</string>
+    <string name="detail_initial_sync_indexing">Still checking which files are already in the folder, so they can be skipped later. It continues automatically in the background — or finish it now while the app is open.</string>
+    <string name="detail_initial_sync_indexing_manual">Still checking which files are already in the folder, so they can be skipped later. Finish it now while the app is open.</string>
     <string name="detail_initial_sync_continue">Continue now</string>
     <string name="notification_channel_problems_name">Backup problems</string>
     <string name="notification_channel_problems_description">Alerts when a backup stops working or needs your attention</string>
@@ -124,6 +127,7 @@
     <string name="home_empty_restore_action">Restore your data</string>
     <string name="home_status_paused">Disabled</string>
     <string name="home_status_initial_sync">Initial backup: %1$d / %2$d files — continues in next run</string>
+    <string name="home_status_indexing">Checking existing files — continues in next run</string>
     <string name="home_status_running">Running…</string>
     <string name="home_status_never_run">Never run</string>
     <string name="time_ago_just_now">just now</string>

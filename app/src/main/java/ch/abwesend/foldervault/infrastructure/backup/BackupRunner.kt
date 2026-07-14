@@ -363,6 +363,9 @@ class BackupRunner internal constructor(
         } catch (e: CancellationException) {
             // Mirrors the upload path: the DB writes must run NonCancellable, otherwise the
             // RUNNING row would stay stuck forever (this coroutine is already cancelled).
+            // Unlike the upload path this deliberately does NOT consult ChargingFallbackTrigger:
+            // a baseline pass is a DB-only tree walk (no network, no charge-hungry uploads), so a
+            // charging-only fallback run would buy nothing — the next ordinary run resumes it.
             log.warning("Baseline pass cancelled for config ${config.id}")
             withContext(NonCancellable) {
                 commitRunStats(config.id, runId, BackupRunStatus.CANCELLED, summary, completedNormally = false)

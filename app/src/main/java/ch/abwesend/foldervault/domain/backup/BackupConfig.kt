@@ -44,4 +44,12 @@ data class BackupConfig(
     val filesUploadedTotal: Int,
     val lastRunCompletedNormally: Boolean,
     val isPaused: Boolean,
-)
+) {
+    /**
+     * True while a "only sync changes from now on" config still owes its baseline pass — the run
+     * only records the pre-existing files instead of uploading them. UI surfaces use this to show
+     * "checking existing files" wording instead of upload progress ([syncLaterChangesOnly] /
+     * [baselineCompletedAt]).
+     */
+    val isBaselinePending: Boolean get() = syncLaterChangesOnly && baselineCompletedAt == null
+}

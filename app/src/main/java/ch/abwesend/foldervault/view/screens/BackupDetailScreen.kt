@@ -482,7 +482,9 @@ private fun showInitialSyncBanner(config: BackupConfig, isRunning: Boolean): Boo
  * Reassuring "this is not an error" banner for an interrupted initial sync (spec §7.6), with a
  * one-tap way to continue in the foreground service — going through the same prompt chain as
  * the "Back up now" button. A manual-only config gets a text without the "continues
- * automatically" promise: nothing is scheduled for it, so only the tap continues the sync.
+ * automatically" promise: nothing is scheduled for it, so only the tap continues the sync. An
+ * interrupted baseline pass ([BackupConfig.isBaselinePending]) gets "checking existing files"
+ * wording without an upload count — the pass records metadata and uploads nothing.
  */
 @Composable
 private fun InitialSyncIncompleteBanner(
@@ -490,10 +492,16 @@ private fun InitialSyncIncompleteBanner(
     continuesAutomatically: Boolean,
     onContinue: () -> Unit,
 ) {
-    val textRes = if (continuesAutomatically) {
-        R.string.detail_initial_sync_incomplete
+    val textRes = when {
+        config.isBaselinePending && continuesAutomatically -> R.string.detail_initial_sync_indexing
+        config.isBaselinePending -> R.string.detail_initial_sync_indexing_manual
+        continuesAutomatically -> R.string.detail_initial_sync_incomplete
+        else -> R.string.detail_initial_sync_incomplete_manual
+    }
+    val bannerText = if (config.isBaselinePending) {
+        stringResource(textRes)
     } else {
-        R.string.detail_initial_sync_incomplete_manual
+        stringResource(textRes, config.filesUploadedTotal, config.totalFilesDiscovered)
     }
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -501,11 +509,7 @@ private fun InitialSyncIncompleteBanner(
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             Text(
-                text = stringResource(
-                    textRes,
-                    config.filesUploadedTotal,
-                    config.totalFilesDiscovered,
-                ),
+                text = bannerText,
                 style = MaterialTheme.typography.bodyMedium,
             )
             Row(

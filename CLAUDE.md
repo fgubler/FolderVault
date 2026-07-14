@@ -55,6 +55,12 @@ Crashlytics confinement: ONLY `infrastructure/logging/CrashlyticsSink.kt` may im
   Starts for *other* configs while the service is busy queue inside the service and run
   serially back-to-back (never in parallel); queued configs count as "running" in
   `ForegroundRunState`, degrade to WorkManager on OS timeout, and are dropped on user stop.
+  `BackupWorker` defers (retry + backoff) while `ForegroundRunState` reports its config as
+  running *or queued* — a queued config holds no `BackupRunner` lock, so without this guard a
+  worker could steal the run from the service. A fresh periodic enqueue carries a 30 s initial
+  delay whose only job is losing the config-creation race to the FGS auto-start; keep it
+  uniform across callers (`ExistingPeriodicWorkPolicy.UPDATE` recomputes the next run from the
+  new request's delay, so mixed delays would shift preserved schedules).
 - **Kotest** spec DSL for unit tests (e.g. `StringSpec`, `FunSpec`). Set
   `isolationMode = IsolationMode.InstancePerTest` when using MockK to get a fresh mock per test.
 - **Konsist** architecture tests live in `src/test/.../architecture/`.

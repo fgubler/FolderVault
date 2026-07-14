@@ -20,13 +20,16 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Verifies the periodic-schedule fix that keeps a freshly-created config's initial upload on the
- * foreground service (see review finding RV-15): the first periodic run must be deferred by one
- * full period so the FGS auto-start wins the per-config run lock instead of an immediately-firing
- * background worker — and, because [ch.abwesend.foldervault.FolderVaultApp] re-registers every
- * schedule with [androidx.work.ExistingPeriodicWorkPolicy.UPDATE] on every app start, that UPDATE
- * must preserve the already-computed next-run time rather than push it out by another period each
- * time. Drives the real [BackupScheduler] against the WorkManager test harness with an injectable
- * clock so the two enqueues can be separated in (virtual) time.
+ * foreground service (see review findings RV-15 / RV-18): the first periodic run is deferred by a
+ * short fixed delay — long enough for the FGS auto-start (~1 s) to win the per-config run lock
+ * over an immediately-firing background worker, short enough that a fresh enqueue after unpausing
+ * or a lost re-registration still runs promptly (once the service run is underway,
+ * [BackupWorker]'s foreground-run guard takes over the protection). And because
+ * [ch.abwesend.foldervault.FolderVaultApp] re-registers every schedule with
+ * [androidx.work.ExistingPeriodicWorkPolicy.UPDATE] on every app start, that UPDATE must preserve
+ * the already-computed next-run time rather than re-apply the delay each time. Drives the real
+ * [BackupScheduler] against the WorkManager test harness with an injectable clock so the two
+ * enqueues can be separated in (virtual) time.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class)
@@ -48,7 +51,10 @@ class BackupSchedulerTest {
     private fun WorkManager.nextRunOf(configId: String): Long =
         getWorkInfosForUniqueWork(BackupWorker.workName(configId)).get().single().nextScheduleTimeMillis
 
-    private fun BackupScheduler.schedule(configId: String, schedule: BackupSchedule) = schedulePeriodicIfNeeded(
+    private fun BackupScheduler.schedule(
+        configId: String,
+        schedule: BackupSchedule,
+    ) = schedulePeriodicIfNeeded(
         configId = configId,
         schedule = schedule,
         networkPolicy = NetworkPolicy.WIFI_ONLY,
@@ -62,22 +68,21 @@ class BackupSchedulerTest {
 
         scheduler.schedule("cfg-1", BackupSchedule.DAILY)
 
-        // The first run is deferred by a day, so it cannot grab the run lock before the
+        // The first run is deferred briefly, so it cannot grab the run lock before the
         // foreground-service auto-start does at config-creation time.
-        workManager.nextRunOf("cfg-1") shouldBeGreaterThanOrEqual nowMillis + TimeUnit.HOURS.toMillis(23)
+        workManager.nextRunOf("cfg-1") shouldBeGreaterThanOrEqual nowMillis + TimeUnit.SECONDS.toMillis(29)
     }
 
     @Test
-    fun `the first-run delay is a fixed day even for a longer cadence`() {
+    fun `the first-run delay is short regardless of cadence, so an unpaused schedule runs promptly`() {
         val (scheduler, workManager) = newScheduler()
 
         scheduler.schedule("cfg-1", BackupSchedule.WEEKLY)
 
-        // Regardless of periodicity the first run is deferred by ~a day (not ~a week), so the
-        // delay's only effect is losing the creation-time race with the foreground service.
-        val firstRun = workManager.nextRunOf("cfg-1")
-        firstRun shouldBeGreaterThanOrEqual nowMillis + TimeUnit.HOURS.toMillis(23)
-        firstRun shouldBeLessThan nowMillis + TimeUnit.HOURS.toMillis(48)
+        // Unpausing (like any fresh enqueue) must run the overdue backup as soon as constraints
+        // allow — deferring it by a period (or a day, RV-18) would silently stall the backup the
+        // user just re-enabled. Losing the creation race only needs seconds, not hours.
+        workManager.nextRunOf("cfg-1") shouldBeLessThan nowMillis + TimeUnit.MINUTES.toMillis(15)
     }
 
     @Test
@@ -87,11 +92,11 @@ class BackupSchedulerTest {
         scheduler.schedule("cfg-1", BackupSchedule.DAILY)
         val firstNextRun = workManager.nextRunOf("cfg-1")
 
-        // Simulate an app restart an hour later: FolderVaultApp re-registers every schedule.
-        nowMillis += TimeUnit.HOURS.toMillis(1)
+        // Simulate an app restart shortly after: FolderVaultApp re-registers every schedule.
+        nowMillis += TimeUnit.SECONDS.toMillis(10)
         scheduler.schedule("cfg-1", BackupSchedule.DAILY)
 
-        // If UPDATE re-applied the fresh initial delay, this would jump to ~now+24h; it must not.
+        // If UPDATE re-applied the fresh initial delay, this would jump to ~now+30s; it must not.
         workManager.nextRunOf("cfg-1") shouldBe firstNextRun
     }
 }

@@ -480,4 +480,29 @@ class BackupDetailViewModelTest : StringSpec({
         }
         job.cancel()
     }
+
+    "unpausing re-registers the periodic schedule" {
+        val configId = "cfg-21"
+        val config = makeConfig(configId, isPaused = true)
+        val configRepo = mockk<IBackupConfigRepository>(relaxed = true) {
+            every { getById(configId) } returns flowOf(config)
+        }
+        val (vm, scheduler) = buildVm(configId, config, configRepo = configRepo)
+        val job = vm.config.launchIn(CoroutineScope(testDispatcher))
+
+        vm.togglePause()
+
+        // Pausing cancelled the periodic slot, so unpausing must enqueue it afresh; the
+        // scheduler's short first-run delay then lets the overdue backup run promptly (RV-18).
+        verify(exactly = 1) {
+            scheduler.schedulePeriodicIfNeeded(
+                configId = configId,
+                schedule = BackupSchedule.DAILY,
+                networkPolicy = NetworkPolicy.WIFI_ONLY,
+                requiresCharging = false,
+                globalDefault = BackupSchedule.DAILY,
+            )
+        }
+        job.cancel()
+    }
 })

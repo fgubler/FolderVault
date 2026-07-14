@@ -57,6 +57,7 @@ class BackupWorkerErrorSurfaceTest {
                     single { messageDao }
                     single { runner }
                     single { notificationManager }
+                    single { ForegroundRunState() }
                 }
             )
         }

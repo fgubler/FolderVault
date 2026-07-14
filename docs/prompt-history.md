@@ -7,6 +7,34 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-14 — Review fix RV-18: first-run delay shortened to 30 s + worker foreground guard
+
+### What was requested
+Fix RV-18 from `review/develop.md`: re-enabling (unpausing) a backup should run it promptly, not
+wait for the one-day `FIRST_RUN_DELAY_HOURS` that RV-15 introduced. A first attempt added a
+`deferFirstRun` flag (delay only on the creation path); on review the user preferred the simpler
+uniform alternative: keep the delay for every fresh enqueue but shrink it to 30 s, which still
+lets the foreground service start first without ever being user-visible.
+
+### What was done
+- **`BackupScheduler`**: `FIRST_RUN_DELAY_HOURS = 24` → `FIRST_RUN_DELAY_SECONDS = 30`, applied
+  unconditionally; the `deferFirstRun` flag was reverted. A uniform delay also keeps
+  `ExistingPeriodicWorkPolicy.UPDATE` a no-op on app-start re-registration (UPDATE recomputes the
+  next-run time from the *new* request's initial delay, so mixed per-caller delays could pull a
+  deferred first run forward).
+- **`BackupWorker`**: new foreground-run guard — before running, the worker checks
+  `ForegroundRunState.isRunning(configId)` (which includes configs *queued* in the busy service)
+  and defers with retry+backoff. This closes the hole the 24 h delay was silently covering: a
+  queued config doesn't hold `BackupRunner`'s per-config lock, so its periodic worker firing 30 s
+  after creation could otherwise steal the initial upload into 8-minute background windows.
+- Tests: `BackupSchedulerTest` updated (first run ≥ 29 s and < 15 min out; UPDATE re-registration
+  10 s later preserves the next-run time); new `BackupWorkerForegroundGuardTest` (worker retries
+  without running while the service owns the config, runs once released);
+  `BackupDetailViewModelTest` pins that unpause re-registers the schedule.
+
+### Verification
+`assembleDebug`, full `test`, and `detekt` all green.
+
 ## 2026-07-14 — Review fix RV-17: mid-scan cancel must not wipe `totalFilesDiscovered`
 
 ### What was requested

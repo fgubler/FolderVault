@@ -36,13 +36,18 @@ class BackupScheduler(
         private const val BACKOFF_INITIAL_DELAY_SECONDS = 30L
 
         /**
-         * Delay before a newly-scheduled periodic backup's first run — always one day, regardless
-         * of the [BackupSchedule] cadence. Its only job is to lose the config-creation race with
-         * the foreground-service auto-start (which fires within ~1 s), so the initial upload runs
-         * on the service rather than an immediately-firing background worker; the exact value just
-         * has to comfortably clear that window.
+         * Delay before a newly-scheduled periodic backup's first run, regardless of the
+         * [BackupSchedule] cadence. Its only job is to lose the config-creation race with the
+         * foreground-service auto-start (which fires within ~1 s), so the initial upload runs on
+         * the service rather than an immediately-firing background worker. Deliberately short:
+         * it applies to *every* fresh enqueue (config save, unpause, app-start re-registration
+         * after WorkManager lost the work), and those must run the overdue backup promptly —
+         * 30 s comfortably clears the auto-start window without a user-visible wait. Once the
+         * service run is underway, [BackupWorker]'s foreground-run guard keeps the worker off
+         * the config, so the delay only needs to bridge the gap until [ForegroundRunState]
+         * registers the run.
          */
-        private const val FIRST_RUN_DELAY_HOURS = 24L
+        private const val FIRST_RUN_DELAY_SECONDS = 30L
     }
 
     override fun schedulePeriodicIfNeeded(
@@ -68,7 +73,7 @@ class BackupScheduler(
                 .setConstraints(buildConstraints(networkPolicy, requiresCharging))
                 .setInputData(workDataOf(BackupWorker.KEY_CONFIG_ID to configId))
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, BACKOFF_INITIAL_DELAY_SECONDS, TimeUnit.SECONDS)
-                // Defer the first occurrence by a fixed day (see FIRST_RUN_DELAY_HOURS). Without a
+                // Defer the first occurrence briefly (see FIRST_RUN_DELAY_SECONDS). Without a
                 // delay WorkManager runs a freshly-enqueued periodic request almost immediately, so
                 // a config created with a periodic schedule fires a background run the instant it is
                 // saved — that run grabs BackupRunner's per-config lock before the foreground-service
@@ -78,7 +83,7 @@ class BackupScheduler(
                 // periodic cadence takes over afterward. ExistingPeriodicWorkPolicy.UPDATE preserves
                 // the already-scheduled run time on app restart, so the delay only ever applies to
                 // the very first enqueue.
-                .setInitialDelay(FIRST_RUN_DELAY_HOURS, TimeUnit.HOURS)
+                .setInitialDelay(FIRST_RUN_DELAY_SECONDS, TimeUnit.SECONDS)
                 .build()
             workManager.enqueueUniquePeriodicWork(
                 BackupWorker.workName(configId),

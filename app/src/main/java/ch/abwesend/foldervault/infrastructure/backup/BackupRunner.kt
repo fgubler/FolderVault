@@ -615,11 +615,19 @@ class BackupRunner internal constructor(
         when (resolveCrossRunProgress(status, summary, completedNormally)) {
             CrossRunProgress.PERSIST -> {
                 val prev = backupConfigDao.getByIdOnce(configId)
-                val prevTotal = prev?.filesUploadedTotal ?: 0
+                val prevUploaded = prev?.filesUploadedTotal ?: 0
+                // A run hard-cancelled mid-scan never completed the tree walk, so its discovered
+                // total is still 0 — keep the previous run's count instead of regressing it (which
+                // would drop the next run back from the foreground service to WorkManager).
+                val discovered = if (summary.totalFilesDiscovered > 0) {
+                    summary.totalFilesDiscovered
+                } else {
+                    prev?.totalFilesDiscovered ?: 0
+                }
                 backupConfigDao.updateCrossRunProgress(
                     id = configId,
-                    totalFilesDiscovered = summary.totalFilesDiscovered,
-                    filesUploadedTotal = prevTotal + summary.filesUploaded,
+                    totalFilesDiscovered = discovered,
+                    filesUploadedTotal = prevUploaded + summary.filesUploaded,
                 )
             }
             CrossRunProgress.RESET -> backupConfigDao.updateCrossRunProgress(

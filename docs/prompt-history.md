@@ -7,6 +7,29 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-14 — Review fix RV-17: mid-scan cancel must not wipe `totalFilesDiscovered`
+
+### What was requested
+Fix RV-17 from `review/develop.md`: a run hard-cancelled *during* the SAF tree walk commits the
+`CrossRunProgress.PERSIST` branch with `summary.totalFilesDiscovered` still `0`, overwriting the
+previous run's non-zero count — so `needsForegroundService` routes the next resume of an in-flight
+initial sync back to WorkManager's short windows (the exact regression the previous commit fixed),
+and the counters can end up with `uploaded > total`.
+
+### What was done
+- **`BackupRunner.commitRunStats`** (`PERSIST` branch): the discovered total never regresses — when
+  the summary's count is `0` (scan never completed), the previous config row's
+  `totalFilesDiscovered` is kept; a completed scan's fresh count still wins.
+- **New `BackupRunnerCancelledScanTest`**: drives the real `runBackup` pipeline (fake
+  `ILocalFileScanner`, relaxed DAO mocks, stubbed authorizer/settings/dispatchers) and hard-cancels
+  the run coroutine. Two cases: cancel *mid-scan* (scanner suspends via `awaitCancellation`) keeps
+  the previous total of 42; cancel *after* the scan (analyzer hangs on `getCurrentVersion`) persists
+  the fresh total — the latter also closes RV-16's optional end-to-end persistence test.
+- `review/develop.md`: RV-16 and RV-17 marked fixed.
+
+### Verification
+`assembleDebug`, full `test`, and `detekt` all green.
+
 ## 2026-07-14 — Fix: periodic worker stealing the initial upload from the foreground service
 
 ### What was requested

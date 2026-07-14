@@ -121,6 +121,7 @@ it is the sandbox — report it and ask, don't adapt the code around it.
 - [ ] UI screens visually verified via screenshots (§12.1)
 - [ ] `docs/prompt-history.md` updated with a dated entry (§12.3)
 - [ ] `CLAUDE.md` updated if a durable convention changed
+- [ ] use the `/code-review` skill to review the code changes you just made
 - [ ] Slice summarized and handed back for review before the next (§12.0)
 
 ## Spec reference

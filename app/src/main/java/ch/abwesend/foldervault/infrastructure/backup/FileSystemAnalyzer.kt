@@ -28,8 +28,9 @@ internal class FileSystemAnalyzer(
     /**
      * Walks the source tree and sends upload tasks to the appropriate tier channel.
      * Closes neither channel — the caller is responsible for closing both after this returns.
-     * Reports the scanned file total to [control] as soon as the tree walk completes, so the
-     * run's host can display "N / M files" hours before the count is persisted at run end.
+     * Records the scanned file total on [summary] and reports it to [control] as soon as the tree
+     * walk completes, so the run's host can display "N / M files" hours before the count is
+     * persisted at run end — and so an interrupted run still carries the count for its commit.
      */
     @Suppress("LongParameterList")
     suspend fun analyze(
@@ -41,8 +42,14 @@ internal class FileSystemAnalyzer(
         folderCache: FolderPathCache,
         summary: RunSummary,
         control: BackupRunControl? = null,
-    ): Int {
+    ) {
         val fileInfoList = collectFileInfos(config, summary)
+        // Record the discovered total on the summary the moment the scan completes — not only
+        // once the whole pipeline returns. A hard cancellation (OS killing a background worker
+        // mid-upload) unwinds before the caller can assign it, and the CANCELLED commit needs
+        // this count to remember that an initial sync is still in flight (see BackupRunner's
+        // cross-run progress handling and StartManualBackupUseCase routing).
+        summary.totalFilesDiscovered = fileInfoList.size
         control?.reportFilesDiscovered(fileInfoList.size)
         // Collect into two lists first to avoid a producer/consumer deadlock: if we sent normal
         // and oversized tasks interleaved and the oversized channel (cap=8) filled up, the producer
@@ -54,7 +61,6 @@ internal class FileSystemAnalyzer(
         normalChannel.close()
         for (task in oversizedTasks) oversizedChannel.send(task)
         log.debug("Analyzer finished for config ${config.id}: ${fileInfoList.size} files scanned")
-        return fileInfoList.size
     }
 
     private suspend fun collectFileInfos(config: BackupConfigEntity, summary: RunSummary): List<LocalFileInfo> =

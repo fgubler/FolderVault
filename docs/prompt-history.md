@@ -7,6 +7,46 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-14 — Fix: periodic worker stealing the initial upload from the foreground service
+
+### What was requested
+Analyse a device log (`foldervault-log-1783960727872.log.txt`) from creating a new backup config:
+no foreground-service notification appeared and the run was cancelled several times. Explain what
+happened and fix it.
+
+### Diagnosis (from the log)
+On config save, `AddEditBackupViewModel.save()` calls `schedulePeriodicIfNeeded`, which enqueued a
+`PeriodicWorkRequest` with **no initial delay** — WorkManager runs the first occurrence immediately.
+That background worker grabbed `BackupRunner`'s per-config lock ~40 ms before the foreground-service
+auto-start (`StartManualBackupUseCase` → `ForegroundBackupLauncher`) could, so the FGS's `runBackup`
+returned `SkippedConcurrentRun` and the service stopped (notification only flashed). The initial
+upload then crawled inside the 8-min WorkManager window and was cancelled/restarted repeatedly
+(analyzer re-ran at 18:31, 18:33, 18:38; the flaky network in the test amplified the churn).
+Secondary bug: a hard-cancelled initial run committed `CANCELLED` but never persisted
+`totalFilesDiscovered`, so `needsForegroundService` (which relies on that counter) wrongly routed the
+next run to the background too.
+
+### What was done
+- **`BackupScheduler.schedulePeriodicIfNeeded`**: added a fixed `FIRST_RUN_DELAY_HOURS = 24` initial
+  delay (regardless of DAILY/WEEKLY/MONTHLY cadence) so a freshly-created periodic schedule defers
+  its first run by a day, handing the initial sync to the FGS. `ExistingPeriodicWorkPolicy.UPDATE`
+  preserves the scheduled run time on the app-start re-registration, so the delay only ever applies
+  to the first enqueue.
+- **`FileSystemAnalyzer.analyze`**: records `summary.totalFilesDiscovered` the moment the scan
+  completes (was only assigned after the whole pipeline returned, which a hard cancellation skips);
+  return type dropped to `Unit` as the count is no longer read back.
+- **`BackupRunner`**: extracted a pure `resolveCrossRunProgress(status, summary, completedNormally)`
+  → `CrossRunProgress {PERSIST, RESET, UNCHANGED}` and used it in `commitRunStats`. A hard-cancelled
+  run now PERSISTs its discovered/uploaded progress (like a time-budget stop) instead of leaving the
+  counters unchanged, so an interrupted initial sync keeps routing to the FGS.
+- **Tests**: `CrossRunProgressResolverTest` (pure decision matrix) and `BackupSchedulerTest`
+  (Robolectric + `WorkManagerTestInitHelper` with an injected `Clock`) — the latter verifies the
+  first run is deferred ~24 h and that `UPDATE` preserves the next-run time (resolves review RV-15).
+- Review findings logged in `review/develop.md` (RV-15 verified/fixed, RV-16 accepted behaviour).
+
+### Verification
+`./gradlew assembleDebug`, `testDebugUnitTest`, `detekt` all green.
+
 ## 2026-07-13 — "Only sync changes from now on" option for new backup configs
 
 ### What was requested

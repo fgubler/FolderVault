@@ -7,6 +7,34 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-15 — Code-review follow-ups F-14/F-15 (delete-while-running guard)
+
+### What was requested
+Fix findings F-14 and F-15 from `review/develop.md` (the re-review of the delete-while-running
+guard), using a fresh `first()` read for F-14.
+
+### What was done
+- **F-14** (`BackupDetailViewModel.deleteBackup`): the guard now reads the scheduler's live state
+  (`scheduler.observeIsRunning(configId).first()`) instead of `isRunning.value` — the
+  `WhileSubscribed` stateIn cache is only fresh while the screen collects it, so a future caller
+  without an active collector would have read the initial `false` and bypassed the guard.
+- **F-15** (`BackupDetailViewModel` + `BackupDetailScreen`): a refused delete now emits
+  `DetailEvent.DeleteRefusedWhileRunning`; the screen shows it as a snackbar ("A backup is running
+  right now. Try again when it finishes." — new `SnackbarHost` on the detail `Scaffold`, the app's
+  first). Event handling moved into a `DetailEventsHandler` composable (also keeps
+  `BackupDetailScreen` under detekt's LongMethod limit).
+- **Test split** (detekt LargeClass): `BackupDetailViewModelTest` had outgrown the threshold —
+  the shared fixtures (`makeConfig`, `buildVm`, `cloudDeps`) moved to
+  `BackupDetailViewModelTestFixtures.kt` (internal top-level functions) and the eight delete tests
+  into a new `BackupDetailViewModelDeleteTest` spec. The refused-while-running test now runs with
+  deliberately NO collector on `vm.isRunning` (proving the F-14 fix) and asserts one
+  `DeleteRefusedWhileRunning` event per refused call.
+
+### Verification status
+- `./gradlew assembleDebug` ✅ · full `./gradlew test` ✅ · `./gradlew detekt` ✅ (interim detekt
+  findings — LongMethod on the screen, LargeClass on the test, past-tense composable lambda — all
+  resolved as described above, not suppressed).
+
 ## 2026-07-15 — Code-review follow-ups F-9…F-13 (optional Drive-folder deletion)
 
 ### What was requested

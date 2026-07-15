@@ -40,6 +40,13 @@ import kotlinx.coroutines.flow.stateIn
 
 sealed interface DetailEvent {
     data object Deleted : DetailEvent
+
+    /**
+     * A confirmed delete was refused because a backup run is active. Only reachable through the
+     * race where a run starts after the confirm dialog opened (the delete action is disabled while
+     * a run is visible) — the screen shows a transient notice so the refusal is not silent.
+     */
+    data object DeleteRefusedWhileRunning : DetailEvent
 }
 
 /**
@@ -292,12 +299,16 @@ class BackupDetailViewModel(
      * Deletion is refused while a backup is running (either host): the UI disables the delete action
      * for that window, and this guard additionally covers the race where a run starts between the
      * confirm dialog opening and this call — deleting the config, or its Drive folder, mid-upload
-     * would fail or orphan the in-flight run.
+     * would fail or orphan the in-flight run. A refused delete emits
+     * [DetailEvent.DeleteRefusedWhileRunning] so the screen can tell the user why nothing happened.
+     * The guard reads the scheduler's live state rather than [isRunning] — that `WhileSubscribed`
+     * cache is only fresh while the screen collects it.
      */
     fun deleteBackup(alsoDeleteCloudFolder: Boolean) = safeLaunch {
         val current = config.value
-        if (isRunning.value) {
+        if (scheduler.observeIsRunning(configId).first()) {
             logger.warning("Ignoring delete of config $configId: a backup is currently running")
+            _events.emit(DetailEvent.DeleteRefusedWhileRunning)
         } else if (!alsoDeleteCloudFolder || current == null) {
             performLocalDelete(current?.sourceTreeUri)
         } else {

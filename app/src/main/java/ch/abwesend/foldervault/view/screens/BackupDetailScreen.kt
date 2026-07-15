@@ -40,6 +40,8 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -81,6 +83,8 @@ import ch.abwesend.foldervault.view.util.formatRelativeAgo
 import ch.abwesend.foldervault.view.viewmodel.BackupDetailViewModel
 import ch.abwesend.foldervault.view.viewmodel.CloudDeleteState
 import ch.abwesend.foldervault.view.viewmodel.DetailEvent
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
 import java.time.Instant
@@ -134,15 +138,11 @@ fun BackupDetailScreen(
     val unexpectedError by viewModel.unexpectedError.collectAsState()
     val showMeteredOverridePrompt by viewModel.showMeteredOverridePrompt.collectAsState()
     val showChargingOverridePrompt by viewModel.showChargingOverridePrompt.collectAsState()
-    val currentOnDelete by rememberUpdatedState(onDelete)
 
     UnexpectedErrorDialog(error = unexpectedError, onDismiss = viewModel::dismissUnexpectedError)
 
-    LaunchedEffect(Unit) {
-        viewModel.events.collect { event ->
-            if (event is DetailEvent.Deleted) currentOnDelete()
-        }
-    }
+    val snackbarHostState = remember { SnackbarHostState() }
+    DetailEventsHandler(events = viewModel.events, snackbarHostState = snackbarHostState, onDelete = onDelete)
 
     val cloudDeleteState by viewModel.cloudDeleteState.collectAsState()
     CloudFolderDeleteHandler(
@@ -178,6 +178,7 @@ fun BackupDetailScreen(
 
     Scaffold(
         modifier = modifier,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             BackupDetailTopBar(
                 title = config?.displayName ?: stringResource(R.string.detail_default_title),
@@ -739,6 +740,31 @@ private fun DeleteConfirmDialog(onConfirm: (alsoDeleteCloudFolder: Boolean) -> U
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.button_cancel)) } },
     )
+}
+
+/**
+ * Reacts to the ViewModel's one-shot [DetailEvent]s: navigates back (via [onDelete]) after a
+ * completed delete, and shows a snackbar when a confirmed delete was refused because a backup run
+ * is active — the refusal must not be silent.
+ */
+@Composable
+private fun DetailEventsHandler(
+    events: SharedFlow<DetailEvent>,
+    snackbarHostState: SnackbarHostState,
+    onDelete: () -> Unit,
+) {
+    val currentOnDelete by rememberUpdatedState(onDelete)
+    val deleteRefusedMessage = stringResource(R.string.snackbar_delete_refused_running)
+    LaunchedEffect(Unit) {
+        events.collect { event ->
+            when (event) {
+                DetailEvent.Deleted -> currentOnDelete()
+                // launch so the snackbar's display time doesn't block collecting further events
+                DetailEvent.DeleteRefusedWhileRunning ->
+                    launch { snackbarHostState.showSnackbar(deleteRefusedMessage) }
+            }
+        }
+    }
 }
 
 /**

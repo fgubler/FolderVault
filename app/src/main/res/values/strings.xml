@@ -178,7 +178,7 @@
     <string name="button_discard">Leave</string>
     <string name="button_keep_editing">Keep editing</string>
     <string name="info_requires_charging_title">Only run while charging</string>
-    <string name="info_requires_charging_body">When on, backups only run while the phone is plugged in and an internet connection is available. When off, backups also run on battery.</string>
+    <string name="info_requires_charging_body">When on, backups only run while the phone is plugged in. When off, backups also run on battery — though if several attempts in a row get cut short, one extra attempt will wait for the charger.</string>
     <string name="info_sync_later_changes_only_title">Only sync changes from now on</string>
     <string name="info_sync_later_changes_only_body">When on, the files already in the folder are not uploaded. The first run just takes note of what is there; from then on, only files you add or change get backed up. The files present now stay on your phone and are never uploaded — as long as you don\'t change them. If you edit one later, that new version does get backed up. This choice is fixed once the backup is created. When off, everything in the folder is backed up.</string>
     <string name="info_changed_file_policy_title">Changed-file policy</string>

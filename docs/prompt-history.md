@@ -7,6 +7,23 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-15 — Code-review follow-up F-16 (charging-popup wording)
+
+### What was requested
+Branch-vs-remote review of `develop` (6 commits) found F-16: the simplified
+`info_requires_charging_body` tied the network requirement to the charging toggle (it applies in
+both modes) and dropped the only user-facing mention of the still-existing charging-only fallback
+run. Fix by dropping the internet mention and adding a short, non-technical note on the fallback.
+
+### What was done
+- `strings.xml` — `info_requires_charging_body`: "When on, backups only run while the phone is
+  plugged in. When off, backups also run on battery — though if several attempts in a row get cut
+  short, one extra attempt will wait for the charger."
+
+### Verification status
+- `./gradlew assembleDebug` ✅ (string-only change; tests + detekt green on the same tree in the
+  F-14/F-15 round).
+
 ## 2026-07-15 — Code-review follow-ups F-14/F-15 (delete-while-running guard)
 
 ### What was requested

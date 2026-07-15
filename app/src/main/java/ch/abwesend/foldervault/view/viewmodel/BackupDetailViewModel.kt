@@ -2,12 +2,16 @@ package ch.abwesend.foldervault.view.viewmodel
 
 import android.app.PendingIntent
 import android.content.Intent
+import android.os.Build
 import androidx.lifecycle.viewModelScope
 import ch.abwesend.foldervault.domain.backup.BackupConfig
 import ch.abwesend.foldervault.domain.backup.BackupMessage
+import ch.abwesend.foldervault.domain.backup.ExecutionStrategySelector
 import ch.abwesend.foldervault.domain.backup.IBackupConfigRepository
 import ch.abwesend.foldervault.domain.backup.IBackupMessageRepository
 import ch.abwesend.foldervault.domain.backup.IBackupScheduler
+import ch.abwesend.foldervault.domain.backup.IFgsLaunchScheduler
+import ch.abwesend.foldervault.domain.backup.ScheduledExecutionMode
 import ch.abwesend.foldervault.domain.backup.StartManualBackupUseCase
 import ch.abwesend.foldervault.domain.cloud.CloudAuthResult
 import ch.abwesend.foldervault.domain.cloud.CloudNotFoundException
@@ -36,6 +40,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 
 sealed interface DetailEvent {
@@ -78,6 +83,7 @@ class BackupDetailViewModel(
     private val configRepo: IBackupConfigRepository,
     private val messageRepo: IBackupMessageRepository,
     private val scheduler: IBackupScheduler,
+    private val fgsLaunchScheduler: IFgsLaunchScheduler,
     private val startManualBackup: StartManualBackupUseCase,
     private val authorizer: ICloudAuthorizer,
     private val encryptionRepo: IEncryptionRepository,
@@ -120,6 +126,22 @@ class BackupDetailViewModel(
         }
         effectiveSchedule != BackupSchedule.MANUAL_ONLY
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    /**
+     * Whether this install would run a long backup via the "extended run time" enhancement — the
+     * opt-in is on *and* the `SCHEDULE_EXACT_ALARM` permission is granted (always available below
+     * API 31). Drives the detail-screen run-time line. Recomputed on every settings change; a bare
+     * permission change without a settings change is picked up when the screen is next recreated.
+     */
+    val reliableExecutionActive: StateFlow<Boolean> = settingsRepo.settings
+        .map { settings ->
+            ExecutionStrategySelector.scheduledMode(
+                apiLevel = Build.VERSION.SDK_INT,
+                exactAlarmUserEnabled = settings.exactAlarmBackupsEnabled,
+                canScheduleExactAlarms = fgsLaunchScheduler.isExactAlarmPermitted(),
+            ) == ScheduledExecutionMode.EXACT_ALARM
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     private val _passwordCheckResult = MutableStateFlow<Boolean?>(null)
     val passwordCheckResult: StateFlow<Boolean?> = _passwordCheckResult.asStateFlow()
@@ -256,6 +278,7 @@ class BackupDetailViewModel(
         configRepo.setPaused(configId, newPaused)
         if (newPaused) {
             scheduler.cancel(configId)
+            fgsLaunchScheduler.cancel(configId)
         } else {
             val globalDefault = settingsRepo.settings.first().defaultSchedule
             scheduler.schedulePeriodicIfNeeded(
@@ -402,6 +425,7 @@ class BackupDetailViewModel(
      */
     private suspend fun performLocalDelete(sourceTreeUri: String?) {
         scheduler.cancel(configId)
+        fgsLaunchScheduler.cancel(configId)
         messageRepo.deleteAllForConfig(configId)
         configRepo.deleteById(configId)
         if (sourceTreeUri != null) {

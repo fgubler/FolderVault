@@ -7,6 +7,79 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-15 — More reliable backup execution (exact-alarm trampoline + watchdog)
+
+### What was requested
+Add an **opt-in** enhancement so scheduled backups that need a long window can run in the existing
+`dataSync` foreground service even when fired from the background — where Android 12+ forbids
+starting an FGS. Built in 6 slices, each with a checkpoint + `/code-review` hand-back (§12.0). The
+idea was questioned thoroughly first, which produced the **trampoline** design (below) over a second
+scheduler.
+
+### Design (locked with the user)
+- **WorkManager stays the single scheduler** for every config. The exact alarm is demoted to an
+  FGS-launch *trampoline*: when `BackupWorker` fires for a run needing a long window
+  (`StartManualBackupUseCase.needsForegroundService`) and the user opted in and holds
+  `SCHEDULE_EXACT_ALARM`, it sets a one-shot ~10 s exact alarm (`FgsLaunchScheduler`) whose receiver
+  (`BackupAlarmReceiver`, not exported) starts `BackupForegroundService` from the launch-exempt
+  callback, then returns without running the backup. Otherwise it runs inline exactly as before.
+- **Opt-in, OFF by default.** `SCHEDULE_EXACT_ALARM` (not the Play-restricted `USE_EXACT_ALARM`);
+  degrades cleanly for the majority who never grant it.
+- **Watchdog runs entirely in WorkManager** — a daily backstop that enqueues an ordinary one-time
+  catch-up run for overdue configs; it never needs a service.
+
+### What was done (by slice)
+- **Slice 1 — pure logic:** `NextTriggerCalculator` (interval math, overdue detection, deterministic
+  stagger) and `ExecutionStrategySelector.scheduledMode` (`EXACT_ALARM` iff opted-in AND permitted;
+  API < 31 needs no grant) + `ScheduledExecutionMode`. Full Kotest matrices.
+- **Slice 2 — trampoline:** `IFgsLaunchScheduler` + `FgsLaunchScheduler` — one `PendingIntent` per
+  config (request code = configId hash, per-config data `Uri` so `cancel` never hits the wrong
+  alarm), `setExactAndAllowWhileIdle`, `canScheduleExactAlarms()` guarded at every call.
+- **Slice 3 — worker/receiver/guard:** trampoline-vs-inline decision at the top of `doWork()`;
+  `BackupAlarmReceiver`; `BackupForegroundService.startForeground` wrapped in try/catch — on
+  `ForegroundServiceStartNotAllowedException` (shared dataSync budget exhausted) it degrades via
+  `scheduleOneTime(forceInline = true)`, the flag stopping the degraded run from trampolining back
+  and looping. Config delete cancels any pending trampoline alarm. Manifest: `SCHEDULE_EXACT_ALARM`
+  + the non-exported receiver.
+- **Slice 4 — messages + permission UX:** `MessageType.FGS_TIME_BUDGET_REACHED` (INFO, emitted
+  best-effort from the degrade path); settings opt-in row inside `ReliableBackupsSection`
+  (`ExactAlarmBackupsRow` toggle + info popup + live grant status on resume + "Allow extended run
+  time" button → `ACTION_REQUEST_SCHEDULE_EXACT_ALARM`); detail-screen "Run time: Extended" line
+  shown only while the enhancement is active. Dropped `EXACT_ALARM_PERMISSION_REVOKED` (no
+  config-scoped UI home; the settings status + per-run re-check cover it) and skipped the optional
+  `ExactAlarmPermissionReceiver`.
+- **Slice 5 — watchdog:** `BackupWatchdogWorker` (WorkManager-only, daily, unique-name KEEP,
+  registered once from `FolderVaultApp.ensureWatchdogScheduled`). Selects non-paused configs overdue
+  by more than a *full extra* interval (`NextTriggerCalculator.isOverdue`, anchored on
+  `lastRunAt ?: createdAt`); because `commitRunStats` writes `lastRunAt` at the end of every window
+  (continuations + cancellations included), a progressing run is never mis-flagged, so the watchdog
+  only catches schedules that genuinely never fired. Emits one `WATCHDOG_TRIGGERED_RUN` (WARNING,
+  non-notifying) per config, throttled by presence (a null-`runId` message cannot coalesce).
+- **Slice 6 — docs + DoD:** this entry; `CLAUDE.md` "Two run hosts" section extended with the
+  opt-in trampoline + watchdog + alarm-origin invariant relaxation; README "Publishing: Play Console
+  declarations" section (dataSync justification + the borderline `SCHEDULE_EXACT_ALARM` declaration,
+  flagged honestly with its clean-degradation fallback).
+
+### Verification status
+- `./gradlew assembleDebug` ✅ · full `./gradlew test` ✅ · `./gradlew detekt` ✅ · `./gradlew lint`
+  ✅ (exit 0; **no** `ExactAlarm` finding — F-21 confirmed; none of the new strings/resources flagged
+  unused).
+- `/code-review` run per slice; findings tracked in `review/develop.md` (F-22 FGS message
+  best-effort, F-23/F-24 scoped Slice 4 deviations, F-25 watchdog breadcrumb throttled globally not
+  per-incident). No blocking findings.
+- **Sight-loop NOT run** — CPST is commented out in `app/build.gradle.kts` and there is no
+  Roborazzi/Paparazzi, so screenshots cannot render in the sandbox (enabling CPST needs a blocked
+  Maven download). Handed to the user for on-device visual verification of the settings row +
+  detail line (light + dark), plus the emulator end-to-end steps in the plan (grant → alarm fires →
+  FGS runs; constraint-deferral; budget-exhaustion degrade; revoke; watchdog catch-up).
+
+### Decisions carried forward
+- The FGS "foreground-UI-only start" invariant is relaxed *only* for the launch-exempt alarm origin.
+- `WATCHDOG_TRIGGERED_RUN` throttles by presence, not per-incident — acceptable while the catch-up
+  run (the guaranteed part) is always enqueued and the unread-WARNING badge stays visible.
+- The exact-alarm feature can be dropped wholesale with no impact on the default WorkManager path if
+  Play rejects the permission declaration.
+
 ## 2026-07-15 — Code-review follow-up F-16 (charging-popup wording)
 
 ### What was requested

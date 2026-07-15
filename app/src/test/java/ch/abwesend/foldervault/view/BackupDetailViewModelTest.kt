@@ -2,6 +2,7 @@ package ch.abwesend.foldervault.view
 
 import ch.abwesend.foldervault.domain.backup.IBackupConfigRepository
 import ch.abwesend.foldervault.domain.backup.IForegroundBackupLauncher
+import ch.abwesend.foldervault.domain.model.AppSettings
 import ch.abwesend.foldervault.domain.model.BackupRunStatus
 import ch.abwesend.foldervault.domain.model.BackupSchedule
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
@@ -76,6 +77,35 @@ class BackupDetailViewModelTest : StringSpec({
 
         verify(exactly = 0) { launcher.start(any(), any(), any()) }
         verify(exactly = 0) { scheduler.scheduleOneTime(any(), any(), any()) }
+        job.cancel()
+    }
+
+    "reliableExecutionActive is false when the extended-run-time opt-in is off" {
+        val configId = "cfg-ra1"
+        val (vm, _) = buildVm(
+            configId,
+            makeConfig(configId, isPaused = false),
+            appSettings = AppSettings(exactAlarmBackupsEnabled = false),
+        )
+        val job = vm.reliableExecutionActive.launchIn(CoroutineScope(testDispatcher))
+
+        vm.reliableExecutionActive.value shouldBe false
+        job.cancel()
+    }
+
+    "reliableExecutionActive is true when the opt-in is on and exact alarms are available" {
+        val configId = "cfg-ra2"
+        // Plain JVM tests report SDK_INT = 0 (< 31), where the permission is irrelevant and the
+        // opt-in alone activates the enhancement — matching ExecutionStrategySelector's own matrix.
+        val (vm, _) = buildVm(
+            configId,
+            makeConfig(configId, isPaused = false),
+            fgsLaunchScheduler = mockk(relaxed = true) { every { isExactAlarmPermitted() } returns true },
+            appSettings = AppSettings(exactAlarmBackupsEnabled = true),
+        )
+        val job = vm.reliableExecutionActive.launchIn(CoroutineScope(testDispatcher))
+
+        vm.reliableExecutionActive.value shouldBe true
         job.cancel()
     }
 

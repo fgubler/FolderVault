@@ -61,6 +61,29 @@ Crashlytics confinement: ONLY `infrastructure/logging/CrashlyticsSink.kt` may im
   delay whose only job is losing the config-creation race to the FGS auto-start; keep it
   uniform across callers (`ExistingPeriodicWorkPolicy.UPDATE` recomputes the next run from the
   new request's delay, so mixed delays would shift preserved schedules).
+- **Opt-in "more reliable backups" (exact-alarm trampoline)**: WorkManager stays the *single
+  scheduler* for every config. When a background worker fires for a run that needs a long window
+  (`StartManualBackupUseCase.needsForegroundService`) AND the user opted in
+  (`AppSettings.exactAlarmBackupsEnabled`) AND the `SCHEDULE_EXACT_ALARM` grant holds, the worker
+  sets a one-shot ~10 s exact alarm (`FgsLaunchScheduler`) whose receiver (`BackupAlarmReceiver`,
+  not exported) starts `BackupForegroundService` from its launch-exempt callback, then returns
+  *without running the backup*; otherwise it runs inline. Only an exact-alarm callback is exempt
+  from the Android 12+ background-FGS-start restriction — hence the alarm hop and the permission.
+  The decision is pure (`ExecutionStrategySelector.scheduledMode`; API < 31 needs no grant). The
+  service's `startForeground` is guarded: on `ForegroundServiceStartNotAllowedException` (shared
+  dataSync budget exhausted) it degrades via `scheduleOneTime(forceInline = true)` — `forceInline`
+  stops the degraded run from trampolining straight back and looping. The service's
+  "foreground-UI-only start" invariant is relaxed *only* for this alarm origin. Feature is OFF by
+  default and degrades cleanly (unpermitted / un-opted installs are unaffected). See
+  `docs/prompt-history.md` 2026-07-15 for the full design.
+- **Watchdog** (`BackupWatchdogWorker`, WorkManager-only, daily, unique-name KEEP, registered once
+  from `FolderVaultApp.ensureWatchdogScheduled`): backstops the periodic schedule. Enqueues a
+  one-time catch-up run (never an FGS — a background worker can't start one) for every non-paused
+  config that is overdue by more than a *full extra* interval (`NextTriggerCalculator.isOverdue`,
+  anchored on `lastRunAt ?: createdAt`). Because `commitRunStats` writes `lastRunAt` at the end of
+  every window (continuations + cancellations included), a progressing run is never mis-flagged.
+  Emits one `WATCHDOG_TRIGGERED_RUN` message per config, throttled by presence
+  (`getCountForType`), since a null-`runId` message cannot coalesce.
 - **Kotest** spec DSL for unit tests (e.g. `StringSpec`, `FunSpec`). Set
   `isolationMode = IsolationMode.InstancePerTest` when using MockK to get a fresh mock per test.
 - **Konsist** architecture tests live in `src/test/.../architecture/`.

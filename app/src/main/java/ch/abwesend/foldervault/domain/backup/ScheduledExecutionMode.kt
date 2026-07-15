@@ -2,8 +2,8 @@ package ch.abwesend.foldervault.domain.backup
 
 /**
  * Which mechanism hosts a config's *scheduled* (periodic) backups. Exactly one is ever active for
- * a given config (see the execution-mode coordinator). The manual "back up now" routing is a
- * separate decision made by [StartManualBackupUseCase].
+ * a given config, re-evaluated per run by [ExecutionStrategySelector.scheduledMode]. The manual
+ * "back up now" routing is a separate decision made by [StartManualBackupUseCase].
  */
 enum class ScheduledExecutionMode {
     /**

@@ -7,6 +7,35 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-15 — Code-review follow-ups F-9…F-13 (optional Drive-folder deletion)
+
+### What was requested
+Fix findings F-9 and later from `review/develop.md` (the post-commit review of the optional
+Drive-folder deletion feature).
+
+### What was done
+- **F-9** (`BackupDetailViewModel.handleDriveConsentResult`): set
+  `_cloudDeleteState.value = CloudDeleteState.InProgress` as the first statement so the blocking
+  progress dialog shows during the *resume* path (after re-consent), not just the first attempt.
+  Previously the screen stayed interactive during a slow Drive delete, allowing a second
+  `deleteBackup` or a backup started into the folder being deleted.
+- **F-10** (`strings.xml`): reworded `dialog_delete_cloud_failed_body` to future tense — the local
+  delete only happens on acknowledgment, so the old "The backup was removed" claim was premature.
+- **F-11** (`BackupDetailViewModelTest`): new test pinning the BUG-12 SAF-release ordering
+  (`configRepo.deleteById` → `releaseSaf.invoke(treeUri, excludingConfigId = configId)`),
+  exercising the previously-unused `releaseSaf` hook in `buildVm`.
+- **F-12** (`BackupDetailViewModelTest`): imported `BinaryResult` and use the short name in
+  `cloudDeps` instead of the fully-qualified path.
+- **F-13** (`BackupDetailScreen.DeleteConfirmDialog`): replaced the row `.clickable` + the
+  `Checkbox`'s own `onCheckedChange` with `Modifier.toggleable(role = Role.Checkbox)` on the row
+  and `onCheckedChange = null` on the `Checkbox`, so TalkBack sees one toggle target with
+  checkbox semantics.
+
+### Verification status
+- `./gradlew assembleDebug` ✅ · full `./gradlew test` ✅ · `./gradlew detekt` ✅ (initial
+  ImportOrdering hit from the swapped import, fixed by moving `selection.toggleable` after the
+  `foundation.lazy.*` imports).
+
 ## 2026-07-15 — Optional Drive-folder deletion when deleting a backup config
 
 ### What was requested

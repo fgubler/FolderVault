@@ -20,6 +20,7 @@ import ch.abwesend.foldervault.domain.model.ChangedFilePolicy
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.model.RetentionPolicy
 import ch.abwesend.foldervault.domain.network.INetworkConnectivityChecker
+import ch.abwesend.foldervault.domain.result.BinaryResult
 import ch.abwesend.foldervault.domain.result.ErrorResult
 import ch.abwesend.foldervault.domain.result.SuccessResult
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
@@ -164,7 +165,7 @@ class BackupDetailViewModelTest : StringSpec({
     fun cloudDeps(
         account: String = "user@test.com",
         folderId: String = "fid",
-        deleteResult: ch.abwesend.foldervault.domain.result.BinaryResult<Unit, Exception> = SuccessResult(Unit),
+        deleteResult: BinaryResult<Unit, Exception> = SuccessResult(Unit),
     ): Pair<ICloudAuthorizer, ICloudStorageProvider> {
         val provider = mockk<ICloudStorageProvider> {
             coEvery { deleteFile(folderId) } returns deleteResult
@@ -576,6 +577,34 @@ class BackupDetailViewModelTest : StringSpec({
         vm.cloudDeleteState.value shouldBe CloudDeleteState.Idle
         job.cancel()
         eventsJob.cancel()
+    }
+
+    "deleteBackup releases the SAF permission after deleting the config (BUG-12)" {
+        val configId = "cfg-del-saf"
+        val treeUri = "content://tree/docs"
+        val config = makeConfig(configId, isPaused = false).copy(sourceTreeUri = treeUri)
+        val configRepo = mockk<IBackupConfigRepository>(relaxed = true) {
+            every { getById(configId) } returns flowOf(config)
+        }
+        val releaseSaf = mockk<ReleaseSafPermissionIfUnusedUseCase>(relaxed = true)
+        val (vm, _) = buildVm(
+            configId,
+            config,
+            configRepo = configRepo,
+            releaseSaf = releaseSaf,
+        )
+        val job = vm.config.launchIn(CoroutineScope(testDispatcher))
+
+        vm.deleteBackup(alsoDeleteCloudFolder = false)
+
+        // BUG-12: the config must be removed before its tree URI is handed back, and it is
+        // additionally excluded from the in-use check so its own (now stale) URI can't keep the
+        // persisted SAF grant alive.
+        coVerifyOrder {
+            configRepo.deleteById(configId)
+            releaseSaf.invoke(treeUri, excludingConfigId = configId)
+        }
+        job.cancel()
     }
 
     "deleteBackup is refused while a backup is running" {

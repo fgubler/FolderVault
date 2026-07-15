@@ -322,8 +322,14 @@ class BackupDetailViewModel(
      * Resumes the cloud-folder deletion after the user completed (or cancelled) the re-consent
      * screen launched for [CloudDeleteState.ConsentRequired]. A cancelled or failed consent is
      * treated as a cloud-delete failure — the config is still removed once the user acknowledges.
+     *
+     * Moves back to [CloudDeleteState.InProgress] first so the screen shows the blocking progress
+     * dialog again while the (possibly slow) Drive delete + local delete run: leaving the state at
+     * [CloudDeleteState.ConsentRequired] would keep the screen fully interactive, letting the user
+     * tap delete again or start a backup into the folder being deleted.
      */
     fun handleDriveConsentResult(data: Intent?) = safeLaunch {
+        _cloudDeleteState.value = CloudDeleteState.InProgress
         val current = config.value
         val authResult = authorizer.authorizeFromIntent(data)
         if (current != null && authResult is SuccessResult) {

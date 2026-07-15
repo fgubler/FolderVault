@@ -7,7 +7,6 @@ import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.StringRes
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -21,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
@@ -57,6 +57,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -703,11 +704,17 @@ private fun DeleteConfirmDialog(onConfirm: (alsoDeleteCloudFolder: Boolean) -> U
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { alsoDeleteCloudFolder = !alsoDeleteCloudFolder },
+                        .toggleable(
+                            value = alsoDeleteCloudFolder,
+                            role = Role.Checkbox,
+                            onValueChange = { alsoDeleteCloudFolder = it },
+                        ),
                 ) {
+                    // onCheckedChange is null: the row's toggleable carries the checkbox semantics,
+                    // so screen readers see a single toggle target rather than two.
                     Checkbox(
                         checked = alsoDeleteCloudFolder,
-                        onCheckedChange = { alsoDeleteCloudFolder = it },
+                        onCheckedChange = null,
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(

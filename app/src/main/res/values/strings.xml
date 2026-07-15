@@ -255,7 +255,7 @@
     <string name="dialog_delete_cloud_warning">The backed-up files on Google Drive will be permanently deleted. This can\'t be undone.</string>
     <string name="dialog_delete_in_progress">Deleting the folder on Google Drive…</string>
     <string name="dialog_delete_cloud_failed_title">Drive folder not deleted</string>
-    <string name="dialog_delete_cloud_failed_body">The backup was removed, but the folder on Google Drive couldn\'t be deleted. You can delete it yourself in the Google Drive app.</string>
+    <string name="dialog_delete_cloud_failed_body">The folder on Google Drive couldn\'t be deleted — the backup will still be removed from this app. You can delete the folder yourself in the Google Drive app.</string>
     <string name="dialog_check_password_title">Check my password</string>
     <string name="dialog_check_password_body">Enter your backup password to verify you still remember it.</string>
     <string name="password_correct">✓ Password is correct</string>

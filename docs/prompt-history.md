@@ -7,6 +7,172 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-15 — Code-review follow-up F-16 (charging-popup wording)
+
+### What was requested
+Branch-vs-remote review of `develop` (6 commits) found F-16: the simplified
+`info_requires_charging_body` tied the network requirement to the charging toggle (it applies in
+both modes) and dropped the only user-facing mention of the still-existing charging-only fallback
+run. Fix by dropping the internet mention and adding a short, non-technical note on the fallback.
+
+### What was done
+- `strings.xml` — `info_requires_charging_body`: "When on, backups only run while the phone is
+  plugged in. When off, backups also run on battery — though if several attempts in a row get cut
+  short, one extra attempt will wait for the charger."
+
+### Verification status
+- `./gradlew assembleDebug` ✅ (string-only change; tests + detekt green on the same tree in the
+  F-14/F-15 round).
+
+## 2026-07-15 — Code-review follow-ups F-14/F-15 (delete-while-running guard)
+
+### What was requested
+Fix findings F-14 and F-15 from `review/develop.md` (the re-review of the delete-while-running
+guard), using a fresh `first()` read for F-14.
+
+### What was done
+- **F-14** (`BackupDetailViewModel.deleteBackup`): the guard now reads the scheduler's live state
+  (`scheduler.observeIsRunning(configId).first()`) instead of `isRunning.value` — the
+  `WhileSubscribed` stateIn cache is only fresh while the screen collects it, so a future caller
+  without an active collector would have read the initial `false` and bypassed the guard.
+- **F-15** (`BackupDetailViewModel` + `BackupDetailScreen`): a refused delete now emits
+  `DetailEvent.DeleteRefusedWhileRunning`; the screen shows it as a snackbar ("A backup is running
+  right now. Try again when it finishes." — new `SnackbarHost` on the detail `Scaffold`, the app's
+  first). Event handling moved into a `DetailEventsHandler` composable (also keeps
+  `BackupDetailScreen` under detekt's LongMethod limit).
+- **Test split** (detekt LargeClass): `BackupDetailViewModelTest` had outgrown the threshold —
+  the shared fixtures (`makeConfig`, `buildVm`, `cloudDeps`) moved to
+  `BackupDetailViewModelTestFixtures.kt` (internal top-level functions) and the eight delete tests
+  into a new `BackupDetailViewModelDeleteTest` spec. The refused-while-running test now runs with
+  deliberately NO collector on `vm.isRunning` (proving the F-14 fix) and asserts one
+  `DeleteRefusedWhileRunning` event per refused call.
+
+### Verification status
+- `./gradlew assembleDebug` ✅ · full `./gradlew test` ✅ · `./gradlew detekt` ✅ (interim detekt
+  findings — LongMethod on the screen, LargeClass on the test, past-tense composable lambda — all
+  resolved as described above, not suppressed).
+
+## 2026-07-15 — Code-review follow-ups F-9…F-13 (optional Drive-folder deletion)
+
+### What was requested
+Fix findings F-9 and later from `review/develop.md` (the post-commit review of the optional
+Drive-folder deletion feature).
+
+### What was done
+- **F-9** (`BackupDetailViewModel.handleDriveConsentResult`): set
+  `_cloudDeleteState.value = CloudDeleteState.InProgress` as the first statement so the blocking
+  progress dialog shows during the *resume* path (after re-consent), not just the first attempt.
+  Previously the screen stayed interactive during a slow Drive delete, allowing a second
+  `deleteBackup` or a backup started into the folder being deleted.
+- **F-10** (`strings.xml`): reworded `dialog_delete_cloud_failed_body` to future tense — the local
+  delete only happens on acknowledgment, so the old "The backup was removed" claim was premature.
+- **F-11** (`BackupDetailViewModelTest`): new test pinning the BUG-12 SAF-release ordering
+  (`configRepo.deleteById` → `releaseSaf.invoke(treeUri, excludingConfigId = configId)`),
+  exercising the previously-unused `releaseSaf` hook in `buildVm`.
+- **F-12** (`BackupDetailViewModelTest`): imported `BinaryResult` and use the short name in
+  `cloudDeps` instead of the fully-qualified path.
+- **F-13** (`BackupDetailScreen.DeleteConfirmDialog`): replaced the row `.clickable` + the
+  `Checkbox`'s own `onCheckedChange` with `Modifier.toggleable(role = Role.Checkbox)` on the row
+  and `onCheckedChange = null` on the `Checkbox`, so TalkBack sees one toggle target with
+  checkbox semantics.
+
+### Verification status
+- `./gradlew assembleDebug` ✅ · full `./gradlew test` ✅ · `./gradlew detekt` ✅ (initial
+  ImportOrdering hit from the swapped import, fixed by moving `selection.toggleable` after the
+  `foundation.lazy.*` imports).
+
+## 2026-07-15 — Optional Drive-folder deletion when deleting a backup config
+
+### What was requested
+When the user deletes a backup config, offer a choice to also delete its cloud (Google Drive)
+folder — with the UX deliberately leading toward *keeping* the folder, so nothing on Drive is
+removed by accident.
+
+### What was done
+- **UX**: the delete-confirm dialog (`BackupDetailScreen.DeleteConfirmDialog`) now has an
+  **unchecked-by-default** checkbox "Also delete the backup folder on Google Drive". Checking it
+  reveals a red caption warning the deletion is permanent. Default (unchecked) = keep the folder,
+  same as before.
+- **ViewModel** (`BackupDetailViewModel`): `deleteBackup()` → `deleteBackup(alsoDeleteCloudFolder)`.
+  When true it authorizes for the config's account (`ICloudAuthorizer.authorize`, injected) and
+  deletes the sub-folder via `ICloudStorageProvider.deleteFile(cloudSubFolderId)` **before** the
+  local delete. In Drive v3, deleting a folder cascades to all descendants owned by the user, so
+  one `deleteFile` removes the whole sub-folder tree; the shared account root is left untouched.
+  A new `CloudDeleteState` StateFlow drives progress / consent / failure UI.
+- **Re-consent**: if silent authorization returns `ConsentRequired`, the screen launches the
+  PendingIntent (`CloudFolderDeleteHandler`, mirroring `AddEditBackupScreen`) and resumes via
+  `handleDriveConsentResult`.
+- **Failure handling** (confirmed with the user): a failed Drive delete (network error or declined
+  consent) does not block the delete — the user sees a "Drive folder not deleted" warning and the
+  config is still removed locally on acknowledgement (`acknowledgeFolderDeleteFailure`). An
+  already-gone folder (`CloudNotFoundException`) counts as success.
+- **Guard (review F-7)**: deletion is refused while a backup is running (either host) — the
+  top-bar delete button is disabled while `isRunning`, and `deleteBackup` no-ops defensively to
+  cover the dialog-open→run-starts race. Deleting the config (or its Drive folder) mid-upload would
+  fail or orphan the in-flight run.
+- **Tests**: 7 new `BackupDetailViewModelTest` cases (keep-folder, happy path ordering,
+  already-gone, failure→ack, consent→resume, consent-cancelled→ack, refused-while-running).
+- Docs: this entry; CLAUDE.md v1 note updated (config delete now optionally removes the Drive
+  sub-folder). `assembleDebug` / `test` / `detekt` all green.
+
+## 2026-07-15 — Fix: a second first-time backup overrode the first's foreground notification
+
+### What was requested
+The initial-upload foreground service works in normal conditions, but starting a *second* backup
+for the first time while the first is still uploading did not behave as a queue: the second run
+"seemed to override the first" (at least its notification). Expected: the second run waits in the
+queue until the first finishes, and ideally the ongoing notification shows the current progress
+plus that another backup is waiting.
+
+### Root cause
+The queue mechanism itself was correct (`enqueueOrLaunch` queues the second config, `advanceQueue`
+runs it back-to-back). The defect was in the ongoing-notification handoff:
+- `startRun` posts `latestProgressNotification ?: buildProgressNotification(incomingConfig)` on
+  every `startForegroundService`. `latestProgressNotification` was only ever populated
+  *asynchronously* by `publishProgress`, which runs on `dispatchers.default` — the same dispatcher
+  the analyzer scan can saturate. If the active run's first progress tick hadn't landed (or was
+  starved), the field was still `null`, so the second start built and posted the **queued** (incoming)
+  config's notification — the visible "override".
+- The queued-run count likewise only refreshed on the next `publishProgress` tick, so it lagged.
+
+### What was done (`BackupForegroundService`)
+- Added a `@Volatile activeProgress: ProgressSnapshot?` (configId + counts + indexing) and a
+  `postProgressNotification()` that rebuilds the ongoing notification for the **active** run from
+  that snapshot plus the live `pendingRunCount`, caching it in `latestProgressNotification`.
+- `launchRun` now seeds `activeProgress` and posts synchronously, so `latestProgressNotification`
+  is non-null the moment a run becomes active (before any later `onStartCommand` can run — starts
+  are serialized on the main thread). The fallback build in `startRun` now only ever fires for the
+  genuinely-first start.
+- The queue branch of `enqueueOrLaunch` calls `postProgressNotification()` so the "N waiting"
+  count appears immediately on the active run's notification, not on the next tick.
+- `publishProgress` now updates `activeProgress` then posts; `pendingRunCount` stays in the
+  `combine` purely to re-trigger the collector. `advanceQueue` clears `activeProgress` when going
+  idle.
+- Test: `BackupForegroundServiceTest` gains "a queued second config never takes over the active
+  run's ongoing notification" — verifies the progress notification is never built/updated for the
+  merely-queued config while the first run is held open.
+
+### Verification status
+- `./gradlew assembleDebug`, full `./gradlew test`, and `./gradlew detekt` all green.
+
+### Review follow-ups (`review/develop.md`, 2026-07-15)
+- **F-1**: hardened the new regression test into a deterministic tripwire — it now records the
+  calling thread of every `updateProgressNotification` and asserts the synchronous main-thread
+  re-post of the *active* run's notification with `queuedRuns = 1`, which only exists post-fix
+  (pre-fix the queued count arrived solely on the async `publishProgress` tick).
+- **F-2**: `advanceQueue` now nils `latestProgressNotification` alongside `activeProgress` when
+  going idle, so an in-flight start can't re-post the finished session's stale notification.
+- **F-4**: `drainQueue` re-posts the notification after zeroing `pendingRunCount` so "N waiting"
+  clears immediately instead of lingering a tick; this prompt-history entry corrected.
+- **F-3** left as-is: the lock-free `postProgressNotification` from `publishProgress` is a known,
+  accepted trade-off (self-correcting within one tick; both callers target the active config).
+- **F-5** (from the re-review): the F-4 refresh could re-post the notification from `onDestroy`
+  *after* `stopForeground(REMOVE)` on the OS-timeout hard-cancel path, orphaning it. `drainQueue`
+  gained a `refreshNotification` flag (default `true`); `onDestroy` passes `false` so its drain is
+  pure cleanup, while the live-session callers (user stop, OS timeout) keep the immediate refresh.
+- **F-6**: added the `java.util.concurrent.CopyOnWriteArrayList` import in the service test instead
+  of the inline fully-qualified name.
+
 ## 2026-07-14 — Review fix RV-18: first-run delay shortened to 30 s + worker foreground guard
 
 ### What was requested

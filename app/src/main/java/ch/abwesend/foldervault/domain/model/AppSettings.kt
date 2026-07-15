@@ -16,6 +16,13 @@ data class AppSettings(
      */
     val notifyOnBackupCompletion: Boolean = false,
     /**
+     * Opt-in "more reliable backups". When on (and the `SCHEDULE_EXACT_ALARM` permission is
+     * granted), a background run that needs a long window trampolines to the foreground service
+     * via a one-shot exact alarm instead of crawling through WorkManager's short windows. Off by
+     * default — WorkManager remains the always-available path.
+     */
+    val exactAlarmBackupsEnabled: Boolean = false,
+    /**
      * The known `FolderVault_<UUID>` backup roots, one per Google account that has been used by
      * at least one backup config. Empty until the first backup config is created.
      */

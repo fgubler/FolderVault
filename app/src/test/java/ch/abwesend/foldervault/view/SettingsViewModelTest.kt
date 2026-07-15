@@ -1,5 +1,6 @@
 package ch.abwesend.foldervault.view
 
+import ch.abwesend.foldervault.domain.backup.IFgsLaunchScheduler
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.logging.ILogExporter
 import ch.abwesend.foldervault.domain.logging.ILogger
@@ -68,10 +69,21 @@ class SettingsViewModelTest : StringSpec({
         every { isBackgroundDataRestricted() } returns backgroundDataRestricted
     }
 
+    fun makeFgsScheduler(permitted: Boolean = false): IFgsLaunchScheduler = mockk(relaxed = true) {
+        every { isExactAlarmPermitted() } returns permitted
+    }
+
+    fun makeVm(
+        settings: MutableStateFlow<AppSettings> = makeSettings(),
+        toggle: ITelemetryToggle = FakeTelemetryToggle(),
+        checker: IBackgroundRestrictionChecker = makeRestrictionChecker(),
+        fgs: IFgsLaunchScheduler = makeFgsScheduler(),
+    ) = SettingsViewModel(makeRepo(settings), toggle, logFiles, checker, fgs, dispatchers)
+
     "setAnonymousErrorReports(true) calls telemetry toggle with true before persisting" {
         val toggle = FakeTelemetryToggle()
         val settings = makeSettings()
-        val vm = SettingsViewModel(makeRepo(settings), toggle, logFiles, makeRestrictionChecker(), dispatchers)
+        val vm = makeVm(settings = settings, toggle = toggle)
 
         vm.setAnonymousErrorReports(true)
         testDispatcher.scheduler.advanceUntilIdle()
@@ -84,7 +96,7 @@ class SettingsViewModelTest : StringSpec({
     "setAnonymousErrorReports(false) calls telemetry toggle with false" {
         val toggle = FakeTelemetryToggle()
         val settings = makeSettings()
-        val vm = SettingsViewModel(makeRepo(settings), toggle, logFiles, makeRestrictionChecker(), dispatchers)
+        val vm = makeVm(settings = settings, toggle = toggle)
 
         vm.setAnonymousErrorReports(false)
         testDispatcher.scheduler.advanceUntilIdle()
@@ -95,14 +107,14 @@ class SettingsViewModelTest : StringSpec({
 
     "backgroundRestrictions starts with the all-clear default before the first refresh" {
         val checker = makeRestrictionChecker(ignoringBatteryOptimizations = true, backgroundDataRestricted = true)
-        val vm = SettingsViewModel(makeRepo(makeSettings()), FakeTelemetryToggle(), logFiles, checker, dispatchers)
+        val vm = makeVm(checker = checker)
 
         vm.backgroundRestrictions.value shouldBe BackgroundRestrictionStatus()
     }
 
     "refreshBackgroundRestrictions exposes the current checker state" {
         val checker = makeRestrictionChecker(ignoringBatteryOptimizations = true, backgroundDataRestricted = true)
-        val vm = SettingsViewModel(makeRepo(makeSettings()), FakeTelemetryToggle(), logFiles, checker, dispatchers)
+        val vm = makeVm(checker = checker)
 
         vm.refreshBackgroundRestrictions()
 
@@ -117,12 +129,32 @@ class SettingsViewModelTest : StringSpec({
             every { isIgnoringBatteryOptimizations() } returnsMany listOf(false, true)
             every { isBackgroundDataRestricted() } returns false
         }
-        val vm = SettingsViewModel(makeRepo(makeSettings()), FakeTelemetryToggle(), logFiles, checker, dispatchers)
+        val vm = makeVm(checker = checker)
 
         vm.refreshBackgroundRestrictions()
         vm.backgroundRestrictions.value.ignoringBatteryOptimizations shouldBe false
 
         vm.refreshBackgroundRestrictions()
         vm.backgroundRestrictions.value.ignoringBatteryOptimizations shouldBe true
+    }
+
+    "setExactAlarmBackupsEnabled persists the opt-in flag" {
+        val settings = makeSettings()
+        val vm = makeVm(settings = settings)
+
+        vm.setExactAlarmBackupsEnabled(true)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        settings.value.exactAlarmBackupsEnabled shouldBe true
+    }
+
+    "exactAlarmPermitted starts false and reflects the scheduler after a refresh" {
+        val vm = makeVm(fgs = makeFgsScheduler(permitted = true))
+
+        vm.exactAlarmPermitted.value shouldBe false
+
+        vm.refreshBackgroundRestrictions()
+
+        vm.exactAlarmPermitted.value shouldBe true
     }
 })

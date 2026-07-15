@@ -165,6 +165,7 @@ private class FakeBackupScheduler : IBackupScheduler {
         networkPolicy: NetworkPolicy,
         requiresCharging: Boolean,
         asContinuation: Boolean,
+        forceInline: Boolean,
     ) = Unit
 
     override fun schedulePeriodicIfNeeded(
@@ -188,6 +189,8 @@ private class FakeBackupScheduler : IBackupScheduler {
     override fun cancelAll() {
         cancelAllCalls++
     }
+
+    override fun ensureWatchdogScheduled() = Unit
 
     override fun observeIsRunning(configId: String): Flow<Boolean> = flowOf(false)
 }

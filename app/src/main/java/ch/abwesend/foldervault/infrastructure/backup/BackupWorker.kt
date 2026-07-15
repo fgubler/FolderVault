@@ -1,16 +1,24 @@
 package ch.abwesend.foldervault.infrastructure.backup
 
 import android.content.Context
+import android.os.Build
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import ch.abwesend.foldervault.domain.backup.ExecutionStrategySelector
 import ch.abwesend.foldervault.domain.backup.IBackupScheduler
+import ch.abwesend.foldervault.domain.backup.IFgsLaunchScheduler
+import ch.abwesend.foldervault.domain.backup.ScheduledExecutionMode
+import ch.abwesend.foldervault.domain.backup.StartManualBackupUseCase
 import ch.abwesend.foldervault.domain.logging.logger
+import ch.abwesend.foldervault.domain.model.BackupRunStatus
 import ch.abwesend.foldervault.domain.model.MessageSeverity
 import ch.abwesend.foldervault.domain.model.MessageType
+import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
 import ch.abwesend.foldervault.domain.util.injectAnywhere
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupConfigDao
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupMessageDao
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupMessageEntity
+import kotlinx.coroutines.flow.first
 import java.time.Instant
 import java.util.UUID
 
@@ -23,6 +31,8 @@ class BackupWorker(
     private val backupMessageDao: BackupMessageDao by injectAnywhere()
     private val notificationManager: BackupNotificationManager by injectAnywhere()
     private val scheduler: IBackupScheduler by injectAnywhere()
+    private val fgsLaunchScheduler: IFgsLaunchScheduler by injectAnywhere()
+    private val settingsRepository: IAppSettingsRepository by injectAnywhere()
     private val foregroundRunState: ForegroundRunState by injectAnywhere()
     private val errorHandler = WorkerErrorHandler()
 
@@ -36,6 +46,15 @@ class BackupWorker(
          * `requiresCharging = false`. See [BackupContinuationScheduler].
          */
         const val KEY_IS_CHARGING_FALLBACK = "isChargingFallback"
+
+        /**
+         * Input-data flag forcing this run to execute inline in the worker, never trampolining to
+         * the foreground service. Set only by the budget-exhaustion degrade paths (the service /
+         * alarm receiver could not enter the foreground): without it, the degraded run would
+         * trampoline straight back to the service, fail to start again, and loop until the dataSync
+         * time budget resets.
+         */
+        const val KEY_FORCE_INLINE = "forceInline"
 
         /**
          * NOTE: [WORK_NAME_PREFIX] is a strict prefix of the other two, so a config id that
@@ -72,6 +91,7 @@ class BackupWorker(
     override suspend fun doWork(): Result {
         val configId = inputData.getString(KEY_CONFIG_ID)
         val isChargingFallback = inputData.getBoolean(KEY_IS_CHARGING_FALLBACK, false)
+        val forceInline = inputData.getBoolean(KEY_FORCE_INLINE, false)
         val fallbackRunId = UUID.randomUUID().toString()
 
         return errorHandler.doWorkWithErrorHandling(
@@ -101,6 +121,20 @@ class BackupWorker(
             if (foregroundRunState.isRunning(id)) {
                 logger.info("Backup for $id is owned by the foreground service; retrying later")
                 return@doWorkWithErrorHandling errorHandler.retryOrGiveUp(runAttemptCount)
+            }
+
+            // Opt-in "more reliable backups": a scheduled or continuation run that needs a long
+            // window (an initial / large / interrupted sync) cannot start the foreground service
+            // from this background worker, so hand it over via a one-shot exact-alarm trampoline
+            // (only an exact-alarm callback is exempt from the background-FGS-start restriction).
+            // Small established deltas — and installs without the opt-in or the exact-alarm
+            // permission — keep running inline exactly as before.
+            if (!forceInline &&
+                shouldTrampolineToService(config.lastRunStatus, config.totalFilesDiscovered) &&
+                fgsLaunchScheduler.scheduleImmediateLaunch(id, config.networkPolicy, config.requiresCharging)
+            ) {
+                logger.info("Trampolining config $id to the foreground service via a one-shot exact alarm")
+                return@doWorkWithErrorHandling Result.success()
             }
 
             val deadline = Instant.now().plusMillis(RUN_BUDGET_MS - DEADLINE_BUFFER_MS)
@@ -168,6 +202,25 @@ class BackupWorker(
                 }
             }
         }
+    }
+
+    /**
+     * Whether this background run should be handed to the foreground service instead of running
+     * inline: the user opted into exact-alarm backups, the permission is (still) granted (see
+     * [ExecutionStrategySelector]), and the run needs a long window
+     * ([StartManualBackupUseCase.needsForegroundService] — an initial / large / interrupted sync).
+     */
+    private suspend fun shouldTrampolineToService(
+        lastRunStatus: BackupRunStatus,
+        totalFilesDiscovered: Int,
+    ): Boolean {
+        val mode = ExecutionStrategySelector.scheduledMode(
+            apiLevel = Build.VERSION.SDK_INT,
+            exactAlarmUserEnabled = settingsRepository.settings.first().exactAlarmBackupsEnabled,
+            canScheduleExactAlarms = fgsLaunchScheduler.isExactAlarmPermitted(),
+        )
+        return mode == ScheduledExecutionMode.EXACT_ALARM &&
+            StartManualBackupUseCase.needsForegroundService(lastRunStatus, totalFilesDiscovered)
     }
 
     /**

@@ -35,6 +35,9 @@ class BackupScheduler(
         private const val DAYS_PER_MONTH = 30L
         private const val BACKOFF_INITIAL_DELAY_SECONDS = 30L
 
+        /** How often the app-global watchdog checks for overdue configs (see [ensureWatchdogScheduled]). */
+        private const val WATCHDOG_INTERVAL_HOURS = 24L
+
         /**
          * Delay before a newly-scheduled periodic backup's first run, regardless of the
          * [BackupSchedule] cadence. Its only job is to lose the config-creation race with the
@@ -112,11 +115,17 @@ class BackupScheduler(
         networkPolicy: NetworkPolicy,
         requiresCharging: Boolean,
         asContinuation: Boolean,
+        forceInline: Boolean,
     ) {
         try {
             val request = OneTimeWorkRequestBuilder<BackupWorker>()
                 .setConstraints(buildConstraints(networkPolicy, requiresCharging))
-                .setInputData(workDataOf(BackupWorker.KEY_CONFIG_ID to configId))
+                .setInputData(
+                    workDataOf(
+                        BackupWorker.KEY_CONFIG_ID to configId,
+                        BackupWorker.KEY_FORCE_INLINE to forceInline,
+                    )
+                )
                 .build()
             workManager.enqueueUniqueWork(
                 BackupWorker.oneTimeWorkName(configId),
@@ -232,6 +241,27 @@ class BackupScheduler(
             throw e
         } catch (e: Exception) {
             log.error("Failed to cancel periodic backup work for config $configId", e)
+        }
+    }
+
+    override fun ensureWatchdogScheduled() {
+        try {
+            val request = PeriodicWorkRequestBuilder<BackupWatchdogWorker>(WATCHDOG_INTERVAL_HOURS, TimeUnit.HOURS)
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, BACKOFF_INITIAL_DELAY_SECONDS, TimeUnit.SECONDS)
+                .build()
+            workManager.enqueueUniquePeriodicWork(
+                BackupWatchdogWorker.WORK_NAME,
+                // KEEP, not UPDATE: the watchdog cadence is fixed, so a fresh enqueue on every app
+                // start must not reset its next-run time — that would let a user who reopens the
+                // app often perpetually postpone the check.
+                ExistingPeriodicWorkPolicy.KEEP,
+                request,
+            )
+            log.info("Ensured the backup watchdog is scheduled")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.error("Failed to schedule the backup watchdog", e)
         }
     }
 

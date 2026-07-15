@@ -55,6 +55,12 @@ Crashlytics confinement: ONLY `infrastructure/logging/CrashlyticsSink.kt` may im
   Starts for *other* configs while the service is busy queue inside the service and run
   serially back-to-back (never in parallel); queued configs count as "running" in
   `ForegroundRunState`, degrade to WorkManager on OS timeout, and are dropped on user stop.
+  `BackupWorker` defers (retry + backoff) while `ForegroundRunState` reports its config as
+  running *or queued* — a queued config holds no `BackupRunner` lock, so without this guard a
+  worker could steal the run from the service. A fresh periodic enqueue carries a 30 s initial
+  delay whose only job is losing the config-creation race to the FGS auto-start; keep it
+  uniform across callers (`ExistingPeriodicWorkPolicy.UPDATE` recomputes the next run from the
+  new request's delay, so mixed delays would shift preserved schedules).
 - **Kotest** spec DSL for unit tests (e.g. `StringSpec`, `FunSpec`). Set
   `isolationMode = IsolationMode.InstancePerTest` when using MockK to get a fresh mock per test.
 - **Konsist** architecture tests live in `src/test/.../architecture/`.
@@ -108,6 +114,12 @@ it is the sandbox — report it and ask, don't adapt the code around it.
   `BackupConfigEntity` stores its `cloudSubFolderId` / `cloudSubFolderName`. Sub-folder names
   follow `<displayName>_<6-hex of SHA256(treeUri)>` (`SubFolderNameBuilder`) and are immutable
   after first creation — renaming `displayName` later does NOT rename the Drive folder (v1.1).
+- **Deleting a config optionally deletes its Drive sub-folder.** The delete dialog offers an
+  opt-in checkbox (default OFF → folder kept); when ON, `BackupDetailViewModel` authorizes for the
+  config's account and calls `ICloudStorageProvider.deleteFile(cloudSubFolderId)` before the local
+  delete (Drive v3 cascades the delete to all descendants owned by the user; the shared account
+  root is left untouched). A cloud-delete failure or declined re-consent still deletes the config
+  locally after a warning — see `CloudDeleteState`.
 - **v1 writes** the per-run manifest (`.foldervault-manifest.json`) inside each sub-folder.
   The identity meta file (`.foldervault-meta.json` from spec §6.1) is **not** written in v1 —
   re-add it together with the Picker / re-attach flow in v1.1, where it will actually be read.
@@ -121,6 +133,7 @@ it is the sandbox — report it and ask, don't adapt the code around it.
 - [ ] UI screens visually verified via screenshots (§12.1)
 - [ ] `docs/prompt-history.md` updated with a dated entry (§12.3)
 - [ ] `CLAUDE.md` updated if a durable convention changed
+- [ ] use the `/code-review` skill to review the code changes you just made
 - [ ] Slice summarized and handed back for review before the next (§12.0)
 
 ## Spec reference

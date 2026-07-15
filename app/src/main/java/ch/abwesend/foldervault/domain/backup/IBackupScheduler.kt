@@ -34,6 +34,10 @@ interface IBackupScheduler {
      * pending one-time runs, time-budget continuations, and charging-only fallbacks are left
      * alone, so this method is safe to call blindly for every config (e.g. as an app-start
      * safety net). Full cleanup on pause / delete goes through [cancel].
+     *
+     * A freshly enqueued schedule defers its first occurrence by a short fixed delay so the
+     * config-creation auto-start wins the per-config run lock for the initial upload; the delay
+     * is small enough that re-enqueueing after a pause still runs the overdue backup promptly.
      */
     fun schedulePeriodicIfNeeded(
         configId: String,

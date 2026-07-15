@@ -8,7 +8,8 @@
     <string name="backup_notification_progress_title">FolderVault Backup</string>
     <string name="backup_notification_progress_text">Uploading files…</string>
     <string name="backup_notification_progress_text_with_count">Uploading %1$d / %2$d files</string>
-    <string name="backup_notification_progress_text_with_queued">%1$s — %2$s</string>
+    <string name="backup_notification_indexing_text">Checking which files are already there…</string>
+    <string name="backup_notification_progress_separator">" — "</string>
     <plurals name="backup_notification_progress_queued">
         <item quantity="one">%d more backup waiting</item>
         <item quantity="other">%d more backups waiting</item>
@@ -16,6 +17,8 @@
     <string name="backup_notification_stop_action">Stop</string>
     <string name="detail_initial_sync_incomplete">First backup not finished yet (%1$d of %2$d files uploaded). It continues automatically in the background — or finish it now while the app is open.</string>
     <string name="detail_initial_sync_incomplete_manual">First backup not finished yet (%1$d of %2$d files uploaded). Finish it now while the app is open.</string>
+    <string name="detail_initial_sync_indexing">Still checking which files are already in the folder, so they can be skipped later. It continues automatically in the background — or finish it now while the app is open.</string>
+    <string name="detail_initial_sync_indexing_manual">Still checking which files are already in the folder, so they can be skipped later. Finish it now while the app is open.</string>
     <string name="detail_initial_sync_continue">Continue now</string>
     <string name="notification_channel_problems_name">Backup problems</string>
     <string name="notification_channel_problems_description">Alerts when a backup stops working or needs your attention</string>
@@ -43,6 +46,7 @@
     <string name="button_cancel">Cancel</string>
     <string name="button_delete">Delete</string>
     <string name="button_close">Close</string>
+    <string name="button_ok">OK</string>
     <string name="button_got_it">Got it</string>
     <string name="info_cd_about">About %1$s</string>
     <string name="password_cd_show">Show password</string>
@@ -124,6 +128,7 @@
     <string name="home_empty_restore_action">Restore your data</string>
     <string name="home_status_paused">Disabled</string>
     <string name="home_status_initial_sync">Initial backup: %1$d / %2$d files — continues in next run</string>
+    <string name="home_status_indexing">Checking existing files — continues in next run</string>
     <string name="home_status_running">Running…</string>
     <string name="home_status_never_run">Never run</string>
     <string name="time_ago_just_now">just now</string>
@@ -173,7 +178,7 @@
     <string name="button_discard">Leave</string>
     <string name="button_keep_editing">Keep editing</string>
     <string name="info_requires_charging_title">Only run while charging</string>
-    <string name="info_requires_charging_body">When on, FolderVault waits for the phone to be plugged in before starting a backup. When off, backups run whenever the phone has power to spare — but if several attempts in a row get cut short (for example the phone unplugs or reboots), FolderVault will schedule one extra charging-only run in the background so at least one attempt gets to finish. Your normal schedule keeps running either way.</string>
+    <string name="info_requires_charging_body">When on, backups only run while the phone is plugged in. When off, backups also run on battery — though if several attempts in a row get cut short, one extra attempt will wait for the charger.</string>
     <string name="info_sync_later_changes_only_title">Only sync changes from now on</string>
     <string name="info_sync_later_changes_only_body">When on, the files already in the folder are not uploaded. The first run just takes note of what is there; from then on, only files you add or change get backed up. The files present now stay on your phone and are never uploaded — as long as you don\'t change them. If you edit one later, that new version does get backed up. This choice is fixed once the backup is created. When off, everything in the folder is backed up.</string>
     <string name="info_changed_file_policy_title">Changed-file policy</string>
@@ -245,7 +250,13 @@
     <string name="dialog_open_drive_error_title">Cannot open Google Drive</string>
     <string name="dialog_open_drive_error_body">No app is available to open the Drive folder. Install the Google Drive app or a browser to view it.</string>
     <string name="dialog_delete_title">Delete backup?</string>
-    <string name="dialog_delete_body">Your data on Google Drive is safe. The app will forget which files have been backed up — if you ever re-create this backup, it will upload everything again. You can delete the Drive folder yourself in the Google Drive app if you wish.</string>
+    <string name="dialog_delete_body">Your files on Google Drive are kept. The app just forgets which files have been backed up — if you ever re-create this backup, it will upload everything again.</string>
+    <string name="dialog_delete_cloud_checkbox">Also delete the backup folder on Google Drive</string>
+    <string name="dialog_delete_cloud_warning">The backed-up files on Google Drive will be permanently deleted. This can\'t be undone.</string>
+    <string name="dialog_delete_in_progress">Deleting the folder on Google Drive…</string>
+    <string name="dialog_delete_cloud_failed_title">Drive folder not deleted</string>
+    <string name="dialog_delete_cloud_failed_body">The folder on Google Drive couldn\'t be deleted — the backup will still be removed from this app. You can delete the folder yourself in the Google Drive app.</string>
+    <string name="snackbar_delete_refused_running">A backup is running right now. Try again when it finishes.</string>
     <string name="dialog_check_password_title">Check my password</string>
     <string name="dialog_check_password_body">Enter your backup password to verify you still remember it.</string>
     <string name="password_correct">✓ Password is correct</string>

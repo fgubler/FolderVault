@@ -23,6 +23,7 @@ class BackupWorker(
     private val backupMessageDao: BackupMessageDao by injectAnywhere()
     private val notificationManager: BackupNotificationManager by injectAnywhere()
     private val scheduler: IBackupScheduler by injectAnywhere()
+    private val foregroundRunState: ForegroundRunState by injectAnywhere()
     private val errorHandler = WorkerErrorHandler()
 
     companion object {
@@ -89,6 +90,17 @@ class BackupWorker(
             if (config.isPaused) {
                 logger.info("Backup config $id is paused; skipping this run")
                 return@doWorkWithErrorHandling Result.success()
+            }
+
+            // The foreground service owns this config's run — either executing it or holding it
+            // in its serial queue. A *queued* config does not hold BackupRunner's per-config lock
+            // yet, so without this guard the worker would steal the run and crawl through it in
+            // 8-minute background windows while the service was about to give it an hours-long
+            // budget. Retry with backoff, like a concurrent run: by then the service has finished
+            // (or degraded the run to WorkManager itself).
+            if (foregroundRunState.isRunning(id)) {
+                logger.info("Backup for $id is owned by the foreground service; retrying later")
+                return@doWorkWithErrorHandling errorHandler.retryOrGiveUp(runAttemptCount)
             }
 
             val deadline = Instant.now().plusMillis(RUN_BUDGET_MS - DEADLINE_BUFFER_MS)

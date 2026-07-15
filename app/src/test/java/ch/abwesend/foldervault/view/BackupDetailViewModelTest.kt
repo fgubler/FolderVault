@@ -1,21 +1,10 @@
 package ch.abwesend.foldervault.view
 
-import ch.abwesend.foldervault.domain.backup.BackupConfig
 import ch.abwesend.foldervault.domain.backup.IBackupConfigRepository
-import ch.abwesend.foldervault.domain.backup.IBackupMessageRepository
-import ch.abwesend.foldervault.domain.backup.IBackupScheduler
 import ch.abwesend.foldervault.domain.backup.IForegroundBackupLauncher
-import ch.abwesend.foldervault.domain.backup.StartManualBackupUseCase
-import ch.abwesend.foldervault.domain.model.AppSettings
 import ch.abwesend.foldervault.domain.model.BackupRunStatus
 import ch.abwesend.foldervault.domain.model.BackupSchedule
-import ch.abwesend.foldervault.domain.model.ChangedFilePolicy
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
-import ch.abwesend.foldervault.domain.model.RetentionPolicy
-import ch.abwesend.foldervault.domain.network.INetworkConnectivityChecker
-import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
-import ch.abwesend.foldervault.domain.system.IChargingStateChecker
-import ch.abwesend.foldervault.view.viewmodel.BackupDetailViewModel
 import io.kotest.core.spec.IsolationMode
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.shouldBe
@@ -26,7 +15,6 @@ import io.mockk.verify
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -42,100 +30,6 @@ class BackupDetailViewModelTest : StringSpec({
 
     beforeTest { Dispatchers.setMain(testDispatcher) }
     afterTest { Dispatchers.resetMain() }
-
-    /**
-     * Defaults to [BackupRunStatus.UP_TO_DATE] (an established backup): manual runs of such a
-     * config go through the WorkManager scheduler, which is what most tests here assert. A
-     * config still in (or before) its initial sync routes to the foreground launcher instead —
-     * covered by the dedicated routing test below and by [StartManualBackupUseCase]'s own tests.
-     */
-    fun makeConfig(
-        id: String,
-        isPaused: Boolean,
-        networkPolicy: NetworkPolicy = NetworkPolicy.WIFI_ONLY,
-        requiresCharging: Boolean = false,
-        lastRunStatus: BackupRunStatus = BackupRunStatus.UP_TO_DATE,
-        schedule: BackupSchedule = BackupSchedule.DAILY,
-    ) = BackupConfig(
-        id = id,
-        displayName = "Test",
-        sourceTreeUri = "",
-        cloudProvider = "google_drive",
-        cloudSubFolderId = "fid",
-        cloudSubFolderName = "test_sub",
-        cloudAccountIdentifier = "user@test.com",
-        schedule = schedule,
-        changedFilePolicy = ChangedFilePolicy.DUPLICATE_WITH_TIMESTAMP,
-        encryptionEnabled = false,
-        encryptedPasswordBlob = null,
-        encryptionSaltBase64 = null,
-        retentionPolicy = RetentionPolicy.KeepAll,
-        networkPolicy = networkPolicy,
-        requiresCharging = requiresCharging,
-        createdAt = 0L,
-        lastRunAt = null,
-        lastRunStatus = lastRunStatus,
-        filesUploaded = 0,
-        filesSkipped = 0,
-        filesFailed = 0,
-        bytesUploaded = 0L,
-        totalFilesDiscovered = 0,
-        filesUploadedTotal = 0,
-        lastRunCompletedNormally = false,
-        isPaused = isPaused,
-    )
-
-    /**
-     * Spins up a [BackupDetailViewModel] with sensible defaults: a config repo returning [config],
-     * a message repo that surfaces nothing, a relaxed scheduler whose isRunning state defaults to
-     * [isRunning], a connectivity checker that reports [onUnmetered], and a charging checker that
-     * reports [isCharging]. The settings repo serves default [AppSettings] (daily default
-     * schedule); the encryption repo is unused in these tests so it stays a bare [mockk].
-     */
-    @Suppress("LongParameterList")
-    fun buildVm(
-        configId: String,
-        config: BackupConfig?,
-        isRunning: Boolean = false,
-        onUnmetered: Boolean = true,
-        isCharging: Boolean = true,
-        scheduler: IBackupScheduler = mockk(relaxed = true) {
-            every { observeIsRunning(configId) } returns MutableStateFlow(isRunning)
-        },
-        configRepo: IBackupConfigRepository = mockk {
-            every { getById(configId) } returns flowOf(config)
-        },
-        foregroundLauncher: IForegroundBackupLauncher = mockk(relaxed = true),
-        autoStartBackup: Boolean = false,
-    ): Pair<BackupDetailViewModel, IBackupScheduler> {
-        val messageRepo = mockk<IBackupMessageRepository> {
-            every { getUndismissed(configId) } returns flowOf(emptyList())
-            every { getUnreadCountBySeverity(configId, any()) } returns flowOf(0)
-        }
-        val connectivity = mockk<INetworkConnectivityChecker> {
-            every { isOnUnmeteredNetwork() } returns onUnmetered
-        }
-        val charging = mockk<IChargingStateChecker> {
-            every { isCharging() } returns isCharging
-        }
-        val settingsRepo = mockk<IAppSettingsRepository> {
-            every { settings } returns flowOf(AppSettings())
-        }
-        val vm = BackupDetailViewModel(
-            configId = configId,
-            configRepo = configRepo,
-            messageRepo = messageRepo,
-            scheduler = scheduler,
-            startManualBackup = StartManualBackupUseCase(scheduler, foregroundLauncher),
-            encryptionRepo = mockk(),
-            settingsRepo = settingsRepo,
-            connectivityChecker = connectivity,
-            chargingChecker = charging,
-            releaseSafPermissionIfUnused = mockk(relaxed = true),
-            autoStartBackup = autoStartBackup,
-        )
-        return vm to scheduler
-    }
 
     "backUpNow on a config that never ran routes to the foreground launcher instead of WorkManager" {
         val configId = "cfg-18"
@@ -477,6 +371,31 @@ class BackupDetailViewModelTest : StringSpec({
         coVerifyOrder {
             configRepo.setPaused(configId, true)
             scheduler.cancel(configId)
+        }
+        job.cancel()
+    }
+
+    "unpausing re-registers the periodic schedule" {
+        val configId = "cfg-21"
+        val config = makeConfig(configId, isPaused = true)
+        val configRepo = mockk<IBackupConfigRepository>(relaxed = true) {
+            every { getById(configId) } returns flowOf(config)
+        }
+        val (vm, scheduler) = buildVm(configId, config, configRepo = configRepo)
+        val job = vm.config.launchIn(CoroutineScope(testDispatcher))
+
+        vm.togglePause()
+
+        // Pausing cancelled the periodic slot, so unpausing must enqueue it afresh; the
+        // scheduler's short first-run delay then lets the overdue backup run promptly (RV-18).
+        verify(exactly = 1) {
+            scheduler.schedulePeriodicIfNeeded(
+                configId = configId,
+                schedule = BackupSchedule.DAILY,
+                networkPolicy = NetworkPolicy.WIFI_ONLY,
+                requiresCharging = false,
+                globalDefault = BackupSchedule.DAILY,
+            )
         }
         job.cancel()
     }

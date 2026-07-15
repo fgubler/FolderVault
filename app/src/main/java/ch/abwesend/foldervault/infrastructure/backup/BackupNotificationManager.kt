@@ -114,8 +114,11 @@ class BackupNotificationManager(
      * Builds the ongoing (silent, LOW-importance) progress notification the foreground service
      * runs under. Shows "Uploading N / M files" once the total is known, an indeterminate text
      * before that; a positive [queuedRuns] appends how many further backups wait in the
-     * service's queue. [stopIntent] is provided by the service (it targets the service
-     * itself), so this class stays independent of the service class.
+     * service's queue. When [indexing] is set (a "only sync changes from now on" config's
+     * baseline pass) the text reads "checking existing files" instead — the pass records metadata
+     * and uploads nothing, so an upload count would misleadingly sit at zero. [stopIntent] is
+     * provided by the service (it targets the service itself), so this class stays independent of
+     * the service class.
      */
     fun buildProgressNotification(
         configId: String,
@@ -123,16 +126,22 @@ class BackupNotificationManager(
         totalDiscovered: Int,
         queuedRuns: Int,
         stopIntent: PendingIntent,
+        indexing: Boolean = false,
     ): Notification {
-        val progressText = if (totalDiscovered > 0) {
-            context.getString(R.string.backup_notification_progress_text_with_count, filesUploaded, totalDiscovered)
-        } else {
-            context.getString(R.string.backup_notification_progress_text)
+        val progressText = when {
+            indexing -> context.getString(R.string.backup_notification_indexing_text)
+            totalDiscovered > 0 ->
+                context.getString(R.string.backup_notification_progress_text_with_count, filesUploaded, totalDiscovered)
+            else -> context.getString(R.string.backup_notification_progress_text)
         }
         val text = if (queuedRuns > 0) {
             val queuedText = context.resources
                 .getQuantityString(R.plurals.backup_notification_progress_queued, queuedRuns, queuedRuns)
-            context.getString(R.string.backup_notification_progress_text_with_queued, progressText, queuedText)
+            // Join the two already-resolved display strings with a plain separator rather than a
+            // second format string: feeding a getString() result into getString(fmt, …) trips
+            // Lint's StringFormatInvalid (a false positive — String.format never re-parses % in
+            // its arguments), so we concatenate instead.
+            progressText + context.getString(R.string.backup_notification_progress_separator) + queuedText
         } else {
             progressText
         }
@@ -159,9 +168,10 @@ class BackupNotificationManager(
         totalDiscovered: Int,
         queuedRuns: Int,
         stopIntent: PendingIntent,
+        indexing: Boolean = false,
     ): Notification {
         val notification =
-            buildProgressNotification(configId, filesUploaded, totalDiscovered, queuedRuns, stopIntent)
+            buildProgressNotification(configId, filesUploaded, totalDiscovered, queuedRuns, stopIntent, indexing)
         notifySafely(PROGRESS_NOTIFICATION_ID, notification, "backup progress")
         return notification
     }

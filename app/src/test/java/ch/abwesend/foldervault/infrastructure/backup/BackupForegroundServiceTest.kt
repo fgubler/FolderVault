@@ -41,6 +41,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowNetworkCapabilities
 import java.util.UUID
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertFalse
@@ -268,6 +269,60 @@ class BackupForegroundServiceTest {
             "the queued run should start once the active one completes",
         )
         awaitNotRunning(secondConfigId)
+    }
+
+    @Test
+    fun `a queued second config never takes over the active run's ongoing notification`() {
+        // Robolectric runs the test — and the synchronous onStartCommand → enqueueOrLaunch →
+        // postProgressNotification chain — on the main thread; publishProgress runs on the default
+        // dispatcher (a background thread). Recording the calling thread lets us assert the
+        // synchronous main-thread post the fix introduced, independently of async ticks.
+        val mainThread = Thread.currentThread()
+        val synchronousPosts = CopyOnWriteArrayList<Pair<String, Int>>()
+        every {
+            notificationManager.updateProgressNotification(any(), any(), any(), any(), any(), any())
+        } answers {
+            if (Thread.currentThread() === mainThread) {
+                synchronousPosts.add(arg<String>(0) to arg<Int>(3))
+            }
+            progressNotification
+        }
+        val releaseFirstRun = CountDownLatch(1)
+        mockRunnerHeldOpen(configId, runStarted, releaseFirstRun)
+        coEvery { runner.runBackup(secondConfigId, any()) } coAnswers {
+            RunResult.Success(summary = RunSummary(), runId = "run-2")
+        }
+
+        val service = Robolectric.buildService(BackupForegroundService::class.java).create().get()
+        service.onStartCommand(startIntent(), 0, 1)
+        assertTrue(runStarted.await(10, TimeUnit.SECONDS), "the first backup run should have started")
+
+        service.onStartCommand(startIntent(secondConfigId), 0, 2)
+        assertTrue(foregroundRunState.isRunning(secondConfigId), "the second config should be queued (running)")
+
+        // While the second config is only queued, the ongoing progress notification must keep
+        // reflecting the ACTIVE (first) run — it must never be built or updated for the queued
+        // config, which is the "second backup overrides the first" regression.
+        verify(exactly = 0) {
+            notificationManager.buildProgressNotification(secondConfigId, any(), any(), any(), any(), any())
+        }
+        verify(exactly = 0) {
+            notificationManager.updateProgressNotification(secondConfigId, any(), any(), any(), any(), any())
+        }
+
+        // Deterministic tripwire: queuing the second config must SYNCHRONOUSLY re-post the ACTIVE
+        // (first) run's notification with the new queued count, on the calling (main) thread — the
+        // moment `onStartCommand` returns, before any publishProgress tick. Pre-fix the queued count
+        // only appeared on the asynchronous default-dispatcher tick, so no such main-thread post
+        // exists and this fails, whereas the `verify(exactly = 0)` checks above pass either way.
+        assertTrue(
+            synchronousPosts.any { (postedConfigId, queued) -> postedConfigId == configId && queued == 1 },
+            "queuing a second config should synchronously re-post the active run's notification with queuedRuns = 1",
+        )
+
+        releaseFirstRun.countDown()
+        awaitNotRunning(secondConfigId)
+        service.onStartCommand(stopIntent(), 0, 3)
     }
 
     @Test

@@ -91,12 +91,25 @@ class BackupForegroundService : Service() {
     private var stopReason: ForegroundStopReason? = null
 
     /**
-     * Last notification posted by [publishProgress]. A second `startForegroundService` while a
+     * Last notification posted for the active run. A second `startForegroundService` while a
      * run is active must call `startForeground` again — re-posting this instance keeps the
      * ongoing notification on the *active* run instead of flipping it to the incoming config.
+     * Always kept non-null while a run is active (seeded synchronously by [launchRun]), so the
+     * fallback build in [startRun] only ever runs for the genuinely-first start.
      */
     @Volatile
     private var latestProgressNotification: Notification? = null
+
+    /**
+     * Latest per-file progress of the active run, or `null` while idle. [postProgressNotification]
+     * rebuilds the ongoing notification for the *active* run from this snapshot plus the live
+     * [pendingRunCount] — synchronously, on demand, so neither a second `startForeground` nor a
+     * newly queued run has to wait for the asynchronous [publishProgress] tick (which runs on the
+     * default dispatcher and can be starved while the analyzer saturates it). Volatile: written
+     * from the run coroutine, read from the main thread.
+     */
+    @Volatile
+    private var activeProgress: ProgressSnapshot? = null
 
     companion object {
         const val EXTRA_CONFIG_ID = "configId"
@@ -128,6 +141,14 @@ class BackupForegroundService : Service() {
         val configId: String,
         val networkPolicy: NetworkPolicy,
         val requiresCharging: Boolean,
+    )
+
+    /** Snapshot of the active run's progress, rebuilt into the ongoing notification on demand. */
+    private data class ProgressSnapshot(
+        val configId: String,
+        val filesUploaded: Int,
+        val totalDiscovered: Int,
+        val indexing: Boolean,
     )
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -205,8 +226,10 @@ class BackupForegroundService : Service() {
     override fun onDestroy() {
         scope.cancel()
         // The active run's own finally unmarks it even when cancelled; queued runs have no
-        // coroutine yet and would otherwise stay marked as running forever.
-        drainQueue()
+        // coroutine yet and would otherwise stay marked as running forever. No notification
+        // refresh here: the service is being torn down (its foreground notification already
+        // removed on the paths that reach onDestroy), so a re-post would orphan a notification.
+        drainQueue(refreshNotification = false)
         super.onDestroy()
     }
 
@@ -263,6 +286,9 @@ class BackupForegroundService : Service() {
                 // Marked right away so the UI reflects the accepted tap instead of looking
                 // like it was dropped; the service owns this run from now on.
                 foregroundRunState.markRunning(params.configId)
+                // Surface the newly queued run in the *active* run's ongoing notification at
+                // once, rather than waiting for the next publishProgress tick.
+                postProgressNotification()
             }
         }
     }
@@ -272,7 +298,39 @@ class BackupForegroundService : Service() {
         stopReason = null
         activeRun = params
         foregroundRunState.markRunning(params.configId)
+        // Seed the ongoing notification synchronously for the new active run so a
+        // near-simultaneous second start (which re-posts latestProgressNotification) can never
+        // flip it to the incoming config — publishProgress only refines this asynchronously and
+        // may be delayed. Counts start at 0 and are corrected on the first tick.
+        activeProgress = ProgressSnapshot(
+            configId = params.configId,
+            filesUploaded = 0,
+            totalDiscovered = 0,
+            indexing = false,
+        )
+        postProgressNotification()
         runJob = scope.launch { executeRun(params) }
+    }
+
+    /**
+     * Rebuilds and posts the ongoing progress notification for the active run from the latest
+     * [activeProgress] snapshot and the live [pendingRunCount], caching it in
+     * [latestProgressNotification]. A no-op while idle. Because it always targets the active
+     * run's config, a second `startForeground` can never flip the ongoing notification to a
+     * merely-queued incoming config.
+     */
+    private fun postProgressNotification() {
+        val snapshot = activeProgress
+        if (snapshot != null) {
+            latestProgressNotification = notificationManager.updateProgressNotification(
+                configId = snapshot.configId,
+                filesUploaded = snapshot.filesUploaded,
+                totalDiscovered = snapshot.totalDiscovered,
+                queuedRuns = pendingRunCount.value,
+                stopIntent = stopPendingIntent(),
+                indexing = snapshot.indexing,
+            )
+        }
     }
 
     /**
@@ -288,6 +346,11 @@ class BackupForegroundService : Service() {
                 launchRun(next)
             } else {
                 activeRun = null
+                activeProgress = null
+                // Drop the finished run's cached notification too: a start already in flight
+                // could otherwise re-post the previous session's notification (wrong config
+                // deep-link and counts) via startForeground before launchRun overwrites it.
+                latestProgressNotification = null
                 stopService()
             }
         }
@@ -296,8 +359,13 @@ class BackupForegroundService : Service() {
     /**
      * Empties the pending queue, unmarking each config and passing it to [onDrained] —
      * dropped on a user stop, handed to WorkManager on an OS timeout.
+     *
+     * [refreshNotification] re-posts the active run's ongoing notification so the emptied queue
+     * ("N waiting" → gone) shows at once instead of on the next [publishProgress] tick. Callers on
+     * a live session (user stop, OS timeout) leave it `true`; [onDestroy] passes `false` — the
+     * service's foreground notification is already removed by then, so a re-post would orphan one.
      */
-    private fun drainQueue(onDrained: (RunParameters) -> Unit = {}) {
+    private fun drainQueue(refreshNotification: Boolean = true, onDrained: (RunParameters) -> Unit = {}) {
         synchronized(runLock) {
             pendingRuns.forEach { params ->
                 foregroundRunState.markStopped(params.configId)
@@ -305,6 +373,9 @@ class BackupForegroundService : Service() {
             }
             pendingRuns.clear()
             pendingRunCount.value = 0
+            if (refreshNotification) {
+                postProgressNotification()
+            }
         }
     }
 
@@ -401,15 +472,16 @@ class BackupForegroundService : Service() {
             pendingRunCount,
         ) { uploaded, discovered, queued ->
             Triple(uploaded, discovered, queued)
-        }.collect { (uploadedThisRun, discoveredThisRun, queuedRuns) ->
-            latestProgressNotification = notificationManager.updateProgressNotification(
+        }.collect { (uploadedThisRun, discoveredThisRun, _) ->
+            // pendingRunCount is kept in the combine above only to re-trigger this collector when
+            // the queue changes; postProgressNotification reads its current value directly.
+            activeProgress = ProgressSnapshot(
                 configId = config.id,
                 filesUploaded = config.filesUploadedTotal + uploadedThisRun,
                 totalDiscovered = if (discoveredThisRun > 0) discoveredThisRun else config.totalFilesDiscovered,
-                queuedRuns = queuedRuns,
-                stopIntent = stopPendingIntent(),
                 indexing = config.isBaselinePending,
             )
+            postProgressNotification()
             delay(PROGRESS_UPDATE_INTERVAL_MS)
         }
     }

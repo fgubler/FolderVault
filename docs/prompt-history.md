@@ -7,6 +7,64 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-15 — Fix: a second first-time backup overrode the first's foreground notification
+
+### What was requested
+The initial-upload foreground service works in normal conditions, but starting a *second* backup
+for the first time while the first is still uploading did not behave as a queue: the second run
+"seemed to override the first" (at least its notification). Expected: the second run waits in the
+queue until the first finishes, and ideally the ongoing notification shows the current progress
+plus that another backup is waiting.
+
+### Root cause
+The queue mechanism itself was correct (`enqueueOrLaunch` queues the second config, `advanceQueue`
+runs it back-to-back). The defect was in the ongoing-notification handoff:
+- `startRun` posts `latestProgressNotification ?: buildProgressNotification(incomingConfig)` on
+  every `startForegroundService`. `latestProgressNotification` was only ever populated
+  *asynchronously* by `publishProgress`, which runs on `dispatchers.default` — the same dispatcher
+  the analyzer scan can saturate. If the active run's first progress tick hadn't landed (or was
+  starved), the field was still `null`, so the second start built and posted the **queued** (incoming)
+  config's notification — the visible "override".
+- The queued-run count likewise only refreshed on the next `publishProgress` tick, so it lagged.
+
+### What was done (`BackupForegroundService`)
+- Added a `@Volatile activeProgress: ProgressSnapshot?` (configId + counts + indexing) and a
+  `postProgressNotification()` that rebuilds the ongoing notification for the **active** run from
+  that snapshot plus the live `pendingRunCount`, caching it in `latestProgressNotification`.
+- `launchRun` now seeds `activeProgress` and posts synchronously, so `latestProgressNotification`
+  is non-null the moment a run becomes active (before any later `onStartCommand` can run — starts
+  are serialized on the main thread). The fallback build in `startRun` now only ever fires for the
+  genuinely-first start.
+- The queue branch of `enqueueOrLaunch` calls `postProgressNotification()` so the "N waiting"
+  count appears immediately on the active run's notification, not on the next tick.
+- `publishProgress` now updates `activeProgress` then posts; `pendingRunCount` stays in the
+  `combine` purely to re-trigger the collector. `advanceQueue` clears `activeProgress` when going
+  idle.
+- Test: `BackupForegroundServiceTest` gains "a queued second config never takes over the active
+  run's ongoing notification" — verifies the progress notification is never built/updated for the
+  merely-queued config while the first run is held open.
+
+### Verification status
+- `./gradlew assembleDebug`, full `./gradlew test`, and `./gradlew detekt` all green.
+
+### Review follow-ups (`review/develop.md`, 2026-07-15)
+- **F-1**: hardened the new regression test into a deterministic tripwire — it now records the
+  calling thread of every `updateProgressNotification` and asserts the synchronous main-thread
+  re-post of the *active* run's notification with `queuedRuns = 1`, which only exists post-fix
+  (pre-fix the queued count arrived solely on the async `publishProgress` tick).
+- **F-2**: `advanceQueue` now nils `latestProgressNotification` alongside `activeProgress` when
+  going idle, so an in-flight start can't re-post the finished session's stale notification.
+- **F-4**: `drainQueue` re-posts the notification after zeroing `pendingRunCount` so "N waiting"
+  clears immediately instead of lingering a tick; this prompt-history entry corrected.
+- **F-3** left as-is: the lock-free `postProgressNotification` from `publishProgress` is a known,
+  accepted trade-off (self-correcting within one tick; both callers target the active config).
+- **F-5** (from the re-review): the F-4 refresh could re-post the notification from `onDestroy`
+  *after* `stopForeground(REMOVE)` on the OS-timeout hard-cancel path, orphaning it. `drainQueue`
+  gained a `refreshNotification` flag (default `true`); `onDestroy` passes `false` so its drain is
+  pure cleanup, while the live-session callers (user stop, OS timeout) keep the immediate refresh.
+- **F-6**: added the `java.util.concurrent.CopyOnWriteArrayList` import in the service test instead
+  of the inline fully-qualified name.
+
 ## 2026-07-14 — Review fix RV-18: first-run delay shortened to 30 s + worker foreground guard
 
 ### What was requested

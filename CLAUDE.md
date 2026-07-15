@@ -114,6 +114,12 @@ it is the sandbox — report it and ask, don't adapt the code around it.
   `BackupConfigEntity` stores its `cloudSubFolderId` / `cloudSubFolderName`. Sub-folder names
   follow `<displayName>_<6-hex of SHA256(treeUri)>` (`SubFolderNameBuilder`) and are immutable
   after first creation — renaming `displayName` later does NOT rename the Drive folder (v1.1).
+- **Deleting a config optionally deletes its Drive sub-folder.** The delete dialog offers an
+  opt-in checkbox (default OFF → folder kept); when ON, `BackupDetailViewModel` authorizes for the
+  config's account and calls `ICloudStorageProvider.deleteFile(cloudSubFolderId)` before the local
+  delete (Drive v3 cascades the delete to all descendants owned by the user; the shared account
+  root is left untouched). A cloud-delete failure or declined re-consent still deletes the config
+  locally after a warning — see `CloudDeleteState`.
 - **v1 writes** the per-run manifest (`.foldervault-manifest.json`) inside each sub-folder.
   The identity meta file (`.foldervault-meta.json` from spec §6.1) is **not** written in v1 —
   re-add it together with the Picker / re-attach flow in v1.1, where it will actually be read.

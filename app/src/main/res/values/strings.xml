@@ -46,6 +46,7 @@
     <string name="button_cancel">Cancel</string>
     <string name="button_delete">Delete</string>
     <string name="button_close">Close</string>
+    <string name="button_ok">OK</string>
     <string name="button_got_it">Got it</string>
     <string name="info_cd_about">About %1$s</string>
     <string name="password_cd_show">Show password</string>
@@ -249,7 +250,12 @@
     <string name="dialog_open_drive_error_title">Cannot open Google Drive</string>
     <string name="dialog_open_drive_error_body">No app is available to open the Drive folder. Install the Google Drive app or a browser to view it.</string>
     <string name="dialog_delete_title">Delete backup?</string>
-    <string name="dialog_delete_body">Your data on Google Drive is safe. The app will forget which files have been backed up — if you ever re-create this backup, it will upload everything again. You can delete the Drive folder yourself in the Google Drive app if you wish.</string>
+    <string name="dialog_delete_body">Your files on Google Drive are kept. The app just forgets which files have been backed up — if you ever re-create this backup, it will upload everything again.</string>
+    <string name="dialog_delete_cloud_checkbox">Also delete the backup folder on Google Drive</string>
+    <string name="dialog_delete_cloud_warning">The backed-up files on Google Drive will be permanently deleted. This can\'t be undone.</string>
+    <string name="dialog_delete_in_progress">Deleting the folder on Google Drive…</string>
+    <string name="dialog_delete_cloud_failed_title">Drive folder not deleted</string>
+    <string name="dialog_delete_cloud_failed_body">The backup was removed, but the folder on Google Drive couldn\'t be deleted. You can delete it yourself in the Google Drive app.</string>
     <string name="dialog_check_password_title">Check my password</string>
     <string name="dialog_check_password_body">Enter your backup password to verify you still remember it.</string>
     <string name="password_correct">✓ Password is correct</string>

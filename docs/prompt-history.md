@@ -7,6 +7,36 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-15 — Optional Drive-folder deletion when deleting a backup config
+
+### What was requested
+When the user deletes a backup config, offer a choice to also delete its cloud (Google Drive)
+folder — with the UX deliberately leading toward *keeping* the folder, so nothing on Drive is
+removed by accident.
+
+### What was done
+- **UX**: the delete-confirm dialog (`BackupDetailScreen.DeleteConfirmDialog`) now has an
+  **unchecked-by-default** checkbox "Also delete the backup folder on Google Drive". Checking it
+  reveals a red caption warning the deletion is permanent. Default (unchecked) = keep the folder,
+  same as before.
+- **ViewModel** (`BackupDetailViewModel`): `deleteBackup()` → `deleteBackup(alsoDeleteCloudFolder)`.
+  When true it authorizes for the config's account (`ICloudAuthorizer.authorize`, injected) and
+  deletes the sub-folder via `ICloudStorageProvider.deleteFile(cloudSubFolderId)` **before** the
+  local delete. In Drive v3, deleting a folder cascades to all descendants owned by the user, so
+  one `deleteFile` removes the whole sub-folder tree; the shared account root is left untouched.
+  A new `CloudDeleteState` StateFlow drives progress / consent / failure UI.
+- **Re-consent**: if silent authorization returns `ConsentRequired`, the screen launches the
+  PendingIntent (`CloudFolderDeleteHandler`, mirroring `AddEditBackupScreen`) and resumes via
+  `handleDriveConsentResult`.
+- **Failure handling** (confirmed with the user): a failed Drive delete (network error or declined
+  consent) does not block the delete — the user sees a "Drive folder not deleted" warning and the
+  config is still removed locally on acknowledgement (`acknowledgeFolderDeleteFailure`). An
+  already-gone folder (`CloudNotFoundException`) counts as success.
+- **Tests**: 6 new `BackupDetailViewModelTest` cases (keep-folder, happy path ordering,
+  already-gone, failure→ack, consent→resume, consent-cancelled→ack).
+- Docs: this entry; CLAUDE.md v1 note updated (config delete now optionally removes the Drive
+  sub-folder). `assembleDebug` / `test` / `detekt` all green.
+
 ## 2026-07-15 — Fix: a second first-time backup overrode the first's foreground notification
 
 ### What was requested

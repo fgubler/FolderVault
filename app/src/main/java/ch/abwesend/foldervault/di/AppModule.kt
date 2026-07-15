@@ -143,6 +143,7 @@ val appModule = module {
             messageRepo = get(),
             scheduler = get(),
             startManualBackup = get(),
+            authorizer = get(),
             encryptionRepo = get(),
             settingsRepo = get(),
             connectivityChecker = get(),

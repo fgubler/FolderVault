@@ -578,6 +578,34 @@ class BackupDetailViewModelTest : StringSpec({
         eventsJob.cancel()
     }
 
+    "deleteBackup is refused while a backup is running" {
+        val configId = "cfg-del-running"
+        val (authorizer, provider) = cloudDeps()
+        val configRepo = mockk<IBackupConfigRepository>(relaxed = true) {
+            every { getById(configId) } returns flowOf(makeConfig(configId, isPaused = false))
+        }
+        val (vm, _) = buildVm(
+            configId,
+            makeConfig(configId, isPaused = false),
+            isRunning = true,
+            configRepo = configRepo,
+            authorizer = authorizer,
+        )
+        val runningJob = vm.isRunning.launchIn(CoroutineScope(testDispatcher))
+        val job = vm.config.launchIn(CoroutineScope(testDispatcher))
+
+        vm.deleteBackup(alsoDeleteCloudFolder = false)
+        vm.deleteBackup(alsoDeleteCloudFolder = true)
+
+        // Neither the local record nor the Drive folder may be touched while a run is in flight.
+        coVerify(exactly = 0) { configRepo.deleteById(any()) }
+        coVerify(exactly = 0) { authorizer.authorize(any()) }
+        coVerify(exactly = 0) { provider.deleteFile(any()) }
+        vm.cloudDeleteState.value shouldBe CloudDeleteState.Idle
+        runningJob.cancel()
+        job.cancel()
+    }
+
     "deleteBackup(true) deletes the Drive folder before removing the config" {
         val configId = "cfg-del-2"
         val (authorizer, provider) = cloudDeps(account = "user@test.com", folderId = "fid")

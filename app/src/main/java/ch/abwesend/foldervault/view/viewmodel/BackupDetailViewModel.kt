@@ -288,10 +288,17 @@ class BackupDetailViewModel(
      * if the silent grant has lapsed — and only then is the config removed locally. A cloud-delete
      * failure does not block the local delete: the user is warned and the config is still removed
      * once they acknowledge (see [CloudDeleteState]).
+     *
+     * Deletion is refused while a backup is running (either host): the UI disables the delete action
+     * for that window, and this guard additionally covers the race where a run starts between the
+     * confirm dialog opening and this call — deleting the config, or its Drive folder, mid-upload
+     * would fail or orphan the in-flight run.
      */
     fun deleteBackup(alsoDeleteCloudFolder: Boolean) = safeLaunch {
         val current = config.value
-        if (!alsoDeleteCloudFolder || current == null) {
+        if (isRunning.value) {
+            logger.warning("Ignoring delete of config $configId: a backup is currently running")
+        } else if (!alsoDeleteCloudFolder || current == null) {
             performLocalDelete(current?.sourceTreeUri)
         } else {
             _cloudDeleteState.value = CloudDeleteState.InProgress

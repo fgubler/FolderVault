@@ -184,6 +184,10 @@ fun BackupDetailScreen(
                 onShowRunHistory = onShowRunHistory,
                 onEdit = onEdit,
                 onDelete = { showDeleteDialog = true },
+                // Deleting is blocked while a run is active (either host): deleting the config —
+                // and especially its Drive folder — mid-upload would fail or orphan the in-flight
+                // run. The button re-enables as soon as the run finishes.
+                deleteEnabled = !isRunning,
             )
         },
     ) { innerPadding ->
@@ -217,6 +221,7 @@ private fun BackupDetailTopBar(
     onShowRunHistory: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
+    deleteEnabled: Boolean,
 ) {
     TopAppBar(
         title = { Text(title) },
@@ -235,7 +240,7 @@ private fun BackupDetailTopBar(
             IconButton(onClick = onEdit) {
                 Icon(Icons.Default.Edit, stringResource(R.string.edit_backup_title))
             }
-            IconButton(onClick = onDelete) {
+            IconButton(onClick = onDelete, enabled = deleteEnabled) {
                 Icon(Icons.Default.Delete, stringResource(R.string.dialog_delete_title))
             }
         },

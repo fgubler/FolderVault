@@ -32,8 +32,12 @@ removed by accident.
   consent) does not block the delete — the user sees a "Drive folder not deleted" warning and the
   config is still removed locally on acknowledgement (`acknowledgeFolderDeleteFailure`). An
   already-gone folder (`CloudNotFoundException`) counts as success.
-- **Tests**: 6 new `BackupDetailViewModelTest` cases (keep-folder, happy path ordering,
-  already-gone, failure→ack, consent→resume, consent-cancelled→ack).
+- **Guard (review F-7)**: deletion is refused while a backup is running (either host) — the
+  top-bar delete button is disabled while `isRunning`, and `deleteBackup` no-ops defensively to
+  cover the dialog-open→run-starts race. Deleting the config (or its Drive folder) mid-upload would
+  fail or orphan the in-flight run.
+- **Tests**: 7 new `BackupDetailViewModelTest` cases (keep-folder, happy path ordering,
+  already-gone, failure→ack, consent→resume, consent-cancelled→ack, refused-while-running).
 - Docs: this entry; CLAUDE.md v1 note updated (config delete now optionally removes the Drive
   sub-folder). `assembleDebug` / `test` / `detekt` all green.
 

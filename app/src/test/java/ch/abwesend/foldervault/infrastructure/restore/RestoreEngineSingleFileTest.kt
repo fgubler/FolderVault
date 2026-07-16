@@ -83,6 +83,7 @@ class RestoreEngineSingleFileTest {
         FakeSingleFileProvider.documents.clear()
         FakeSingleFileProvider.onOpen = null
         FakeSingleFileProvider.deleteCallCount = 0
+        FakeSingleFileProvider.openModes.clear()
         Robolectric.setupContentProvider(FakeSingleFileProvider::class.java, AUTHORITY)
     }
 
@@ -259,6 +260,43 @@ class RestoreEngineSingleFileTest {
     }
 
     @Test
+    fun `a source with unknown size is still cancellable mid-file`() = runTest {
+        // A provider that reports no size must not bypass the chunked cancellation: unknown is
+        // not "small" (review S1 of review/develop.md). Same setup as the chunked-cancel test,
+        // but the source's size column reports 0 despite the real content.
+        val recordingCipher = RecordingCipher(cipher)
+        val chunkedEngine = RestoreEngine(context, recordingCipher, dispatchers, TEST_CHUNKING)
+        val source = addDocument("src", "report.pdf.crypt", encryptedBlob(PASSWORD), reportedSize = 0L)
+        val output = addDocument("out", "report.pdf", ByteArray(0))
+
+        lateinit var job: Job
+        FakeSingleFileProvider.onOpen = { documentId -> if (documentId == "out") job.cancel() }
+        job = launch {
+            chunkedEngine.decryptSingleFile(source.uri.toString(), output.uri.toString(), PASSWORD)
+        }
+        job.join()
+
+        assertTrue(job.isCancelled, "the restore coroutine must end cancelled, not complete normally")
+        assertFalse(recordingCipher.decryptFileReturned, "the decrypt must abort mid-file despite the unknown size")
+        assertFalse(output.file.exists(), "the output must be deleted when the decrypt is aborted mid-file")
+    }
+
+    @Test
+    fun `the output stream is opened with an explicit truncate mode`() = runTest {
+        // The default "w" mode leaves truncation provider-dependent (Google Drive does not
+        // truncate), which would leave trailing bytes of a longer pre-existing document behind
+        // (review B1 of review/develop.md). The engine must request "wt" explicitly.
+        val source = addDocument("src", "report.pdf.crypt", encryptedBlob(PASSWORD))
+        val output = addDocument("out", "report.pdf", "old content much longer than the plaintext".toByteArray())
+
+        val result = engine.decryptSingleFile(source.uri.toString(), output.uri.toString(), PASSWORD)
+
+        assertEquals(RestoreResult.Success(decrypted = 1, copied = 0, skipped = 0, failed = 0), result)
+        assertEquals("wt", FakeSingleFileProvider.openModes["out"], "the output must be opened truncating")
+        assertContentEquals(plaintext, output.file.readBytes())
+    }
+
+    @Test
     fun `a chunked decrypt without a cancel succeeds and produces the exact plaintext`() = runTest {
         // Guards the chunk-check stream wrapper itself: crossing several chunk boundaries must not
         // corrupt or truncate what the cipher reads.
@@ -274,12 +312,20 @@ class RestoreEngineSingleFileTest {
 
     /**
      * Registers a document with the fake provider, backed by a real temp file holding [content].
-     * A `null` [displayName] simulates a SAF provider that reports no name for the document.
+     * A `null` [displayName] simulates a SAF provider that reports no name for the document; a
+     * non-null [reportedSize] simulates one whose size column differs from the real content
+     * (e.g. reports 0 for a document whose size it does not know).
      */
-    private fun addDocument(id: String, displayName: String?, content: ByteArray): TestDocument {
+    private fun addDocument(
+        id: String,
+        displayName: String?,
+        content: ByteArray,
+        reportedSize: Long? = null,
+    ): TestDocument {
         val file = File.createTempFile("restore-single-file-test", null, context.cacheDir)
         file.writeBytes(content)
-        val document = TestDocument(displayName, file, DocumentsContract.buildDocumentUri(AUTHORITY, id))
+        val document =
+            TestDocument(displayName, file, DocumentsContract.buildDocumentUri(AUTHORITY, id), reportedSize)
         FakeSingleFileProvider.documents[id] = document
         return document
     }
@@ -338,7 +384,13 @@ private class RecordingCipher(private val delegate: IFvc1Cipher) : IFvc1Cipher b
         delegate.decryptFile(key, input, output).also { decryptFileReturned = true }
 }
 
-private data class TestDocument(val displayName: String?, val file: File, val uri: Uri)
+private data class TestDocument(
+    val displayName: String?,
+    val file: File,
+    val uri: Uri,
+    /** Overrides the size column when set, decoupling the reported size from the real content. */
+    val reportedSize: Long? = null,
+)
 
 /**
  * Minimal SAF stand-in answering exactly what `DocumentFile.fromSingleUri` needs: the display-name
@@ -365,7 +417,7 @@ private class FakeSingleFileProvider : ContentProvider() {
                     Document.COLUMN_DOCUMENT_ID -> documentId
                     Document.COLUMN_DISPLAY_NAME -> document.displayName
                     Document.COLUMN_MIME_TYPE -> "application/octet-stream"
-                    Document.COLUMN_SIZE -> document.file.length()
+                    Document.COLUMN_SIZE -> document.reportedSize ?: document.file.length()
                     Document.COLUMN_LAST_MODIFIED -> 0L
                     Document.COLUMN_FLAGS -> 0
                     else -> null
@@ -379,6 +431,7 @@ private class FakeSingleFileProvider : ContentProvider() {
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
         val documentId = DocumentsContract.getDocumentId(uri)
         val document = documents[documentId] ?: throw FileNotFoundException("No document for $uri")
+        openModes[documentId] = mode
         onOpen?.invoke(documentId)
         return ParcelFileDescriptor.open(document.file, ParcelFileDescriptor.parseMode(mode))
     }
@@ -410,6 +463,9 @@ private class FakeSingleFileProvider : ContentProvider() {
 
         /** Test hook invoked with the document id whenever a document is opened for streaming. */
         var onOpen: ((String) -> Unit)? = null
+
+        /** The last mode string each document was opened with, keyed by document id. */
+        val openModes: MutableMap<String, String> = mutableMapOf()
 
         /** Number of deleteDocument provider calls, to detect redundant double cleanups. */
         var deleteCallCount = 0

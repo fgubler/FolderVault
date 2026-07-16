@@ -54,8 +54,16 @@ class RestoreEngine(
     private val context = context.applicationContext
 
     private companion object {
-        private const val CRYPT_SUFFIX = ".crypt"
+        private const val CRYPT_SUFFIX = Fvc1Header.CRYPT_FILE_SUFFIX
         private const val MIME_OCTET_STREAM = "application/octet-stream"
+
+        /**
+         * Output streams are opened with an explicit "write + truncate" mode: the default "w"
+         * leaves truncation provider-dependent (Google Drive's provider notoriously does not
+         * truncate), which would leave trailing bytes of the previous content behind when writing
+         * into a pre-existing document — e.g. one the "Save as" picker returned for an overwrite.
+         */
+        private const val OUTPUT_STREAM_MODE = "wt"
     }
 
     private object NullOutputStream : OutputStream() {
@@ -207,10 +215,10 @@ class RestoreEngine(
      * On every non-success outcome — failures *and* cancellation — the output document is cleaned
      * up again via [cleanUpSingleFileOutput] (with the caveat documented there for pre-existing
      * documents the user chose to overwrite). Cancellation is honored cooperatively: a source
-     * above [CancellationChunking.thresholdBytes] is consumed through
+     * above [CancellationChunking.thresholdBytes] — or of unknown size — is consumed through
      * [ChunkedCancellationInputStream], which re-checks the coroutine's liveness after every
      * chunk, so a cancel aborts within one chunk of work instead of after the whole file. Smaller
-     * files — and sources whose provider reports no size — still run to completion first, which
+     * files still run to completion first, which
      * is why the explicit catch stays: `withContext` then discards the (possibly fully decrypted)
      * result and throws, and without the cleanup the plaintext would silently remain at the
      * picked location even though the user asked to abort.
@@ -316,14 +324,15 @@ class RestoreEngine(
      * Returns the input-stream wrapper implementing the chunked cooperative cancellation of the
      * single-file flow (see [CancellationChunking]): sources above the threshold are read through
      * a [ChunkedCancellationInputStream] that calls [checkCancelled] between chunks; smaller
-     * sources — including those whose provider reports no size (`length() == 0`) — pass through
-     * unwrapped and stay uninterruptible for their (short) duration.
+     * sources pass through unwrapped and stay uninterruptible for their (short) duration. A
+     * source whose provider reports no size (`length() == 0`) is wrapped too: unknown is not
+     * "small", and the wrapper costs only a counter per read.
      */
     private fun singleFileCancellationWrapper(
         sourceSizeBytes: Long,
         checkCancelled: () -> Unit,
     ): (InputStream) -> InputStream =
-        if (sourceSizeBytes > cancellationChunking.thresholdBytes) {
+        if (sourceSizeBytes <= 0L || sourceSizeBytes > cancellationChunking.thresholdBytes) {
             { stream -> ChunkedCancellationInputStream(stream, cancellationChunking.chunkSizeBytes, checkCancelled) }
         } else {
             { stream -> stream }
@@ -347,9 +356,10 @@ class RestoreEngine(
     ): Boolean =
         try {
             context.contentResolver.openInputStream(source.uri)?.use { input ->
-                context.contentResolver.openOutputStream(output.uri)?.also { onOutputOpened() }?.use { out ->
-                    block(wrapInput(input), out)
-                } ?: false
+                context.contentResolver.openOutputStream(output.uri, OUTPUT_STREAM_MODE)
+                    ?.also { onOutputOpened() }
+                    ?.use { out -> block(wrapInput(input), out) }
+                    ?: false
             } ?: false
         } catch (e: Exception) {
             e.rethrowCancellation()
@@ -498,9 +508,9 @@ class RestoreEngine(
     ): BinaryResult<Unit, DecryptionError> =
         try {
             context.contentResolver.openInputStream(source.uri)?.use { input ->
-                context.contentResolver.openOutputStream(output.uri)?.also { onOutputOpened() }?.use { out ->
-                    cipher.decryptFile(key, wrapInput(input), out)
-                }
+                context.contentResolver.openOutputStream(output.uri, OUTPUT_STREAM_MODE)
+                    ?.also { onOutputOpened() }
+                    ?.use { out -> cipher.decryptFile(key, wrapInput(input), out) }
             } ?: ErrorResult(DecryptionError.UNKNOWN)
         } catch (e: Exception) {
             e.rethrowCancellation()

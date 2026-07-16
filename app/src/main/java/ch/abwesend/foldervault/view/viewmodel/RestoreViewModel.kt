@@ -1,6 +1,7 @@
 package ch.abwesend.foldervault.view.viewmodel
 
 import androidx.lifecycle.SavedStateHandle
+import ch.abwesend.foldervault.domain.crypto.Fvc1Header
 import ch.abwesend.foldervault.domain.restore.IRestoreEngine
 import ch.abwesend.foldervault.domain.restore.RestoreCollisionPolicy
 import ch.abwesend.foldervault.domain.restore.RestoreMode
@@ -108,7 +109,7 @@ class RestoreViewModel(
      * suffix stripped, so `report.pdf.crypt` is suggested as `report.pdf`.
      */
     private fun suggestedOutputName(displayName: String): String =
-        displayName.substringAfterLast('/').removeSuffix(".crypt")
+        displayName.substringAfterLast('/').removeSuffix(Fvc1Header.CRYPT_FILE_SUFFIX)
 
     /**
      * The single-file password lives here (not in composable state) because it must survive the

@@ -7,6 +7,36 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-16 — Branch review vs master + fixes B1/S1/S2 (truncate mode, unknown-size cancel, shared suffix)
+
+### What was requested
+Review the branch against `master` (`/code-review`), then fix findings B1, S1 and S2 from
+`review/develop.md`.
+
+### What was done
+- **B1 — provider-dependent truncation**: both restore output streams were opened with the
+  default `"w"` mode, whose truncation is provider-dependent — Google Drive's DocumentsProvider
+  notoriously does *not* truncate. The single-file flow is the first path writing into a
+  *pre-existing* document (the "Save as" overwrite case; the folder flow's OVERWRITE deletes and
+  recreates), so shorter output would have left trailing bytes of the old content behind while
+  reporting `Success`. Both call sites now pass an explicit `OUTPUT_STREAM_MODE = "wt"` (single
+  constant in `RestoreEngine` carrying the rationale). Regression test records the mode string
+  arriving at `FakeSingleFileProvider.openFile` — the local test cannot show the corruption
+  itself because `ParcelFileDescriptor.parseMode("w")` truncates locally, so it pins the intent.
+- **S1 — unknown-size sources uncancellable**: `singleFileCancellationWrapper` treated
+  `length() == 0` (provider reports no size) as "small" and skipped the chunked-cancellation
+  wrapper, making such a run uncancellable for its whole duration. Unknown size now wraps too
+  (`<= 0L || > threshold`) — the wrapper costs only a counter per read. Regression test gives
+  `TestDocument` an optional `reportedSize` override (size column decoupled from real content)
+  and asserts a mid-file abort despite a reported size of 0.
+- **S2 — `.crypt` hard-coded four times**: extracted `Fvc1Header.CRYPT_FILE_SUFFIX` (domain,
+  next to the format constants it belongs to) and pointed `RestoreEngine`, `RestorePathResolver`,
+  `RemoteNameBuilder` and `RestoreViewModel.suggestedOutputName` at it.
+- N1 (no "cancelled" feedback after a single-file cancel) was raised as a nitpick and left open.
+
+### Verification
+`assembleDebug`, full `test` suite (incl. the two new engine tests), `detekt` — all clean.
+
 ## 2026-07-16 — Review follow-up N1/N2: single cleanup + typed restore-failure reasons
 
 ### What was requested

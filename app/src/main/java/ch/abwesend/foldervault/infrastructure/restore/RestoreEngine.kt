@@ -21,6 +21,7 @@ import ch.abwesend.foldervault.domain.result.rethrowCancellation
 import ch.abwesend.foldervault.infrastructure.storage.ScopedStorageHelper
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import java.io.InputStream
@@ -28,10 +29,25 @@ import java.io.OutputStream
 import java.util.Base64
 import javax.crypto.SecretKey
 
+/**
+ * Cooperative-cancellation chunking for the single-file restore flow: a source file larger than
+ * [thresholdBytes] is consumed in chunks of [chunkSizeBytes] with a cancellation check between
+ * chunks, so the number of chunks grows with the file size and a cancel never has to wait for
+ * more than one chunk of decrypt/copy work. Files up to the threshold run as a single piece.
+ * Overridable so tests can exercise the chunked path with small fixtures.
+ */
+data class CancellationChunking(val thresholdBytes: Long, val chunkSizeBytes: Long) {
+    companion object {
+        private const val MEBI_BYTE = 1024L * 1024L
+        val DEFAULT = CancellationChunking(thresholdBytes = 100 * MEBI_BYTE, chunkSizeBytes = 50 * MEBI_BYTE)
+    }
+}
+
 class RestoreEngine(
     context: Context,
     private val cipher: IFvc1Cipher,
     private val dispatchers: IDispatchers,
+    private val cancellationChunking: CancellationChunking = CancellationChunking.DEFAULT,
 ) : IRestoreEngine {
 
     private val context = context.applicationContext
@@ -44,6 +60,49 @@ class RestoreEngine(
     private object NullOutputStream : OutputStream() {
         override fun write(b: Int) = Unit
         override fun write(b: ByteArray, off: Int, len: Int) = Unit
+    }
+
+    /**
+     * Pass-through [InputStream] that invokes [checkCancelled] each time another [chunkSizeBytes]
+     * consumed bytes complete a chunk, making a long single-file decrypt/copy cooperatively
+     * cancellable. [checkCancelled] aborts by throwing (a `CancellationException` from
+     * `ensureActive`), which propagates out of the crypto/copy loop through the regular
+     * cancellation-rethrow path.
+     */
+    private class ChunkedCancellationInputStream(
+        private val delegate: InputStream,
+        private val chunkSizeBytes: Long,
+        private val checkCancelled: () -> Unit,
+    ) : InputStream() {
+        private var bytesSinceLastCheck = 0L
+
+        override fun read(): Int {
+            val byte = delegate.read()
+            if (byte != -1) {
+                countAndCheck(consumed = 1)
+            }
+            return byte
+        }
+
+        override fun read(destination: ByteArray, offset: Int, length: Int): Int {
+            val count = delegate.read(destination, offset, length)
+            if (count > 0) {
+                countAndCheck(consumed = count.toLong())
+            }
+            return count
+        }
+
+        override fun available(): Int = delegate.available()
+
+        override fun close() = delegate.close()
+
+        private fun countAndCheck(consumed: Long) {
+            bytesSinceLastCheck += consumed
+            if (bytesSinceLastCheck >= chunkSizeBytes) {
+                bytesSinceLastCheck = 0
+                checkCancelled()
+            }
+        }
     }
 
     private data class SourceFileEntry(val relativePath: String, val documentFile: DocumentFile)
@@ -146,9 +205,12 @@ class RestoreEngine(
      *
      * On every non-success outcome — failures *and* cancellation — the output document is cleaned
      * up again via [cleanUpSingleFileOutput] (with the caveat documented there for pre-existing
-     * documents the user chose to overwrite). Cancellation deserves the explicit catch: nothing
-     * inside the block suspends or checks `isActive`, so a cancel while it runs cannot interrupt
-     * the work — the block finishes, `withContext` then discards the (possibly fully decrypted)
+     * documents the user chose to overwrite). Cancellation is honored cooperatively: a source
+     * above [CancellationChunking.thresholdBytes] is consumed through
+     * [ChunkedCancellationInputStream], which re-checks the coroutine's liveness after every
+     * chunk, so a cancel aborts within one chunk of work instead of after the whole file. Smaller
+     * files — and sources whose provider reports no size — still run to completion first, which
+     * is why the explicit catch stays: `withContext` then discards the (possibly fully decrypted)
      * result and throws, and without the cleanup the plaintext would silently remain at the
      * picked location even though the user asked to abort.
      */
@@ -167,11 +229,12 @@ class RestoreEngine(
                     source == null -> RestoreResult.Failure("Cannot access source file")
                     output == null -> RestoreResult.Failure("Cannot access output file")
                     else -> {
+                        val wrapInput = singleFileCancellationWrapper(source.length()) { ensureActive() }
                         val header = readHeader(source, warnOnFailure = false)
                         if (header != null || source.name.orEmpty().endsWith(CRYPT_SUFFIX)) {
-                            decryptSingle(source, output, password, header, markOutputWritten)
+                            decryptSingle(source, output, password, header, markOutputWritten, wrapInput)
                         } else {
-                            copySingle(source, output, markOutputWritten)
+                            copySingle(source, output, markOutputWritten, wrapInput)
                         }
                     }
                 }
@@ -194,18 +257,20 @@ class RestoreEngine(
      * the file was classified as encrypted by its `.crypt` suffix alone although its header could
      * not be read. Cleanup of the output on failure is the caller's job.
      */
+    @Suppress("LongParameterList")
     private fun decryptSingle(
         source: DocumentFile,
         output: DocumentFile,
         password: String,
         header: Fvc1Header?,
         onOutputOpened: () -> Unit,
+        wrapInput: (InputStream) -> InputStream,
     ): RestoreResult =
         if (header == null) {
             RestoreResult.Failure("Cannot read file header")
         } else {
             val key = cipher.deriveKey(password, header.salt, header.iterations)
-            when (decryptEntryDetailed(source, output, key, onOutputOpened).getErrorOrNull()) {
+            when (decryptEntryDetailed(source, output, key, onOutputOpened, wrapInput).getErrorOrNull()) {
                 null -> RestoreResult.Success(decrypted = 1, copied = 0, skipped = 0, failed = 0)
                 DecryptionError.INVALID_PASSWORD -> RestoreResult.InvalidPassword
                 DecryptionError.INVALID_FILE -> RestoreResult.Failure("The file is not a valid encrypted backup file")
@@ -218,8 +283,9 @@ class RestoreEngine(
         source: DocumentFile,
         output: DocumentFile,
         onOutputOpened: () -> Unit,
+        wrapInput: (InputStream) -> InputStream,
     ): RestoreResult =
-        if (copyEntry(source, output, onOutputOpened)) {
+        if (copyEntry(source, output, onOutputOpened, wrapInput)) {
             RestoreResult.Success(decrypted = 0, copied = 1, skipped = 0, failed = 0)
         } else {
             RestoreResult.Failure("Failed to copy file")
@@ -239,6 +305,23 @@ class RestoreEngine(
         }
     }
 
+    /**
+     * Returns the input-stream wrapper implementing the chunked cooperative cancellation of the
+     * single-file flow (see [CancellationChunking]): sources above the threshold are read through
+     * a [ChunkedCancellationInputStream] that calls [checkCancelled] between chunks; smaller
+     * sources — including those whose provider reports no size (`length() == 0`) — pass through
+     * unwrapped and stay uninterruptible for their (short) duration.
+     */
+    private fun singleFileCancellationWrapper(
+        sourceSizeBytes: Long,
+        checkCancelled: () -> Unit,
+    ): (InputStream) -> InputStream =
+        if (sourceSizeBytes > cancellationChunking.thresholdBytes) {
+            { stream -> ChunkedCancellationInputStream(stream, cancellationChunking.chunkSizeBytes, checkCancelled) }
+        } else {
+            { stream -> stream }
+        }
+
     private fun withInputStream(source: DocumentFile, block: (InputStream) -> Boolean): Boolean =
         try {
             context.contentResolver.openInputStream(source.uri)?.use(block) ?: false
@@ -252,12 +335,13 @@ class RestoreEngine(
         source: DocumentFile,
         output: DocumentFile,
         onOutputOpened: () -> Unit = {},
+        wrapInput: (InputStream) -> InputStream = { it },
         block: (InputStream, OutputStream) -> Boolean,
     ): Boolean =
         try {
             context.contentResolver.openInputStream(source.uri)?.use { input ->
                 context.contentResolver.openOutputStream(output.uri)?.also { onOutputOpened() }?.use { out ->
-                    block(input, out)
+                    block(wrapInput(input), out)
                 } ?: false
             } ?: false
         } catch (e: Exception) {
@@ -403,11 +487,12 @@ class RestoreEngine(
         output: DocumentFile,
         key: SecretKey,
         onOutputOpened: () -> Unit = {},
+        wrapInput: (InputStream) -> InputStream = { it },
     ): BinaryResult<Unit, DecryptionError> =
         try {
             context.contentResolver.openInputStream(source.uri)?.use { input ->
                 context.contentResolver.openOutputStream(output.uri)?.also { onOutputOpened() }?.use { out ->
-                    cipher.decryptFile(key, input, out)
+                    cipher.decryptFile(key, wrapInput(input), out)
                 }
             } ?: ErrorResult(DecryptionError.UNKNOWN)
         } catch (e: Exception) {
@@ -423,8 +508,9 @@ class RestoreEngine(
         source: DocumentFile,
         output: DocumentFile,
         onOutputOpened: () -> Unit = {},
+        wrapInput: (InputStream) -> InputStream = { it },
     ): Boolean =
-        withStreams(source, output, onOutputOpened) { input, out ->
+        withStreams(source, output, onOutputOpened, wrapInput) { input, out ->
             input.copyTo(out)
             true
         }

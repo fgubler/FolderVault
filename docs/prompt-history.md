@@ -7,6 +7,39 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-16 — Review follow-up B1/S1: mode-switch guard + chunked cancellation
+
+### What was requested
+A fresh `/code-review` pass of `develop` vs `master` (new findings file `review/develop.md`:
+B1, S1–S3, N1–N2), then fix B1 and S1 — S1 via chunking for files above 100 MB, with the
+number of chunks depending on the file size.
+
+### What was done
+- **B1 (blocking) — stray mode-tap wiped user input**: `SegmentedButton.onClick` fires even for
+  the already-selected segment, and `RestoreViewModel.setMode` unconditionally reset the whole UI
+  state (picked file, typed password, scan result). `setMode` is now a no-op when the mode is
+  unchanged. Existing test "setMode clears the single-file password" adjusted (it relied on the
+  same-mode reset); new test pins the guard.
+- **S1 — cancel was unresponsive during a single-file restore**: nothing inside
+  `decryptSingleFile`'s `withContext` block was cancellable, so a cancel waited for the *whole*
+  file to be decrypted before the cleanup ran. New `CancellationChunking` config on
+  `RestoreEngine` (default: threshold 100 MiB, chunk 50 MiB — the chunk *count* scales with the
+  file size): sources above the threshold are read through a `ChunkedCancellationInputStream`
+  that calls `ensureActive()` after every chunk, so a cancel aborts within one chunk of work.
+  The thrown `CancellationException` propagates through `Fvc1Cipher.decryptFile`
+  (`runCatchingAsResult` rethrows cancellation) into the existing cancellation-cleanup catch.
+  Sources at/below the threshold — and providers reporting no size (`length() == 0`) — keep the
+  old run-to-completion-then-clean-up behavior. Whole-folder restore is untouched (it already
+  checks `isActive` between files).
+- Tests: `FakeSingleFileProvider` gained an `onOpen` hook; the chunked-cancel test cancels the
+  job from the *output* document's `openFile` (i.e. mid-run, deterministically) and asserts via a
+  `RecordingCipher` that `decryptFile` was genuinely aborted mid-file — the outcome assertions
+  alone (cancelled + output deleted) would also pass via the old cancel-at-exit path. A second
+  test decrypts across several chunk boundaries to prove the wrapper doesn't corrupt the stream.
+
+### Verification
+`assembleDebug`, `test` (engine spec 12/12, ViewModel spec green), `detekt` — all clean.
+
 ## 2026-07-16 — Review follow-up R1–R6: single-file restore robustness + UI polish
 
 ### What was requested

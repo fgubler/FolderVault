@@ -13,11 +13,15 @@ import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
 import androidx.test.platform.app.InstrumentationRegistry
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
+import ch.abwesend.foldervault.domain.crypto.DecryptionError
+import ch.abwesend.foldervault.domain.crypto.IFvc1Cipher
 import ch.abwesend.foldervault.domain.restore.RestoreResult
+import ch.abwesend.foldervault.domain.result.BinaryResult
 import ch.abwesend.foldervault.infrastructure.crypto.Fvc1Cipher
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -32,12 +36,16 @@ import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
 import java.io.File
 import java.io.FileNotFoundException
+import java.io.InputStream
+import java.io.OutputStream
 import javax.crypto.Cipher
+import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 /**
  * Robolectric coverage for [RestoreEngine.decryptSingleFile], focused on the two-stage
@@ -72,6 +80,7 @@ class RestoreEngineSingleFileTest {
     @Before
     fun setUp() {
         FakeSingleFileProvider.documents.clear()
+        FakeSingleFileProvider.onOpen = null
         Robolectric.setupContentProvider(FakeSingleFileProvider::class.java, AUTHORITY)
     }
 
@@ -202,6 +211,44 @@ class RestoreEngineSingleFileTest {
         assertFalse(output.file.exists(), "the pre-created output document must be deleted on cancellation")
     }
 
+    @Test
+    fun `a cancel during a chunked decrypt aborts between chunks and deletes the output`() = runTest {
+        // Chunking sized so the ~100-byte fixture crosses several chunk boundaries. The job is
+        // cancelled from the provider's openFile for the OUTPUT document — i.e. after the decrypt
+        // has started but before its stream loop runs — so only the between-chunk liveness check
+        // (review S1) can abort the run mid-file; without it the whole decrypt would run to
+        // completion despite the cancel, which is what the recording cipher asserts against.
+        val recordingCipher = RecordingCipher(cipher)
+        val chunkedEngine = RestoreEngine(context, recordingCipher, dispatchers, TEST_CHUNKING)
+        val source = addDocument("src", "report.pdf.crypt", encryptedBlob(PASSWORD))
+        val output = addDocument("out", "report.pdf", ByteArray(0))
+
+        lateinit var job: Job
+        FakeSingleFileProvider.onOpen = { documentId -> if (documentId == "out") job.cancel() }
+        job = launch {
+            chunkedEngine.decryptSingleFile(source.uri.toString(), output.uri.toString(), PASSWORD)
+        }
+        job.join()
+
+        assertTrue(job.isCancelled, "the restore coroutine must end cancelled, not complete normally")
+        assertFalse(recordingCipher.decryptFileReturned, "the decrypt must be aborted mid-file, not run to the end")
+        assertFalse(output.file.exists(), "the output must be deleted when the decrypt is aborted mid-file")
+    }
+
+    @Test
+    fun `a chunked decrypt without a cancel succeeds and produces the exact plaintext`() = runTest {
+        // Guards the chunk-check stream wrapper itself: crossing several chunk boundaries must not
+        // corrupt or truncate what the cipher reads.
+        val chunkedEngine = RestoreEngine(context, cipher, dispatchers, TEST_CHUNKING)
+        val source = addDocument("src", "report.pdf.crypt", encryptedBlob(PASSWORD))
+        val output = addDocument("out", "report.pdf", ByteArray(0))
+
+        val result = chunkedEngine.decryptSingleFile(source.uri.toString(), output.uri.toString(), PASSWORD)
+
+        assertEquals(RestoreResult.Success(decrypted = 1, copied = 0, skipped = 0, failed = 0), result)
+        assertContentEquals(plaintext, output.file.readBytes())
+    }
+
     /**
      * Registers a document with the fake provider, backed by a real temp file holding [content].
      * A `null` [displayName] simulates a SAF provider that reports no name for the document.
@@ -246,7 +293,26 @@ class RestoreEngineSingleFileTest {
         const val AUTHORITY = "ch.abwesend.foldervault.test.restore.docs"
         const val PASSWORD = "correct-horse-battery-staple"
         const val TEST_ITERATIONS = 1_000
+
+        /** Chunking small enough that the ~100-byte fixtures cross several chunk boundaries. */
+        val TEST_CHUNKING = CancellationChunking(thresholdBytes = 16, chunkSizeBytes = 16)
     }
+}
+
+/**
+ * Delegates to the real cipher but records whether [decryptFile] ran to completion — the
+ * distinguishing observable for the chunked-cancellation test, where the between-chunk check must
+ * abort the decrypt by throwing out of it (all other cancel outcomes look identical from outside).
+ */
+private class RecordingCipher(private val delegate: IFvc1Cipher) : IFvc1Cipher by delegate {
+    var decryptFileReturned = false
+
+    override fun decryptFile(
+        key: SecretKey,
+        input: InputStream,
+        output: OutputStream,
+    ): BinaryResult<Unit, DecryptionError> =
+        delegate.decryptFile(key, input, output).also { decryptFileReturned = true }
 }
 
 private data class TestDocument(val displayName: String?, val file: File, val uri: Uri)
@@ -288,8 +354,9 @@ private class FakeSingleFileProvider : ContentProvider() {
     }
 
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
-        val document = documents[DocumentsContract.getDocumentId(uri)]
-            ?: throw FileNotFoundException("No document for $uri")
+        val documentId = DocumentsContract.getDocumentId(uri)
+        val document = documents[documentId] ?: throw FileNotFoundException("No document for $uri")
+        onOpen?.invoke(documentId)
         return ParcelFileDescriptor.open(document.file, ParcelFileDescriptor.parseMode(mode))
     }
 
@@ -316,6 +383,9 @@ private class FakeSingleFileProvider : ContentProvider() {
 
     companion object {
         val documents: MutableMap<String, TestDocument> = mutableMapOf()
+
+        /** Test hook invoked with the document id whenever a document is opened for streaming. */
+        var onOpen: ((String) -> Unit)? = null
 
         /** Hidden `DocumentsContract.METHOD_DELETE_DOCUMENT` / `EXTRA_URI` values. */
         private const val METHOD_DELETE_DOCUMENT = "android:deleteDocument"

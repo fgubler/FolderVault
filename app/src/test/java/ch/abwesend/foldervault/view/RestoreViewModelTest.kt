@@ -151,11 +151,27 @@ class RestoreViewModelTest : StringSpec({
 
     "setMode clears the single-file password" {
         val viewModel = RestoreViewModel(FakeRestoreEngine(), SavedStateHandle())
+        viewModel.setMode(RestoreMode.SINGLE_FILE)
         viewModel.setSingleFilePassword("secret")
 
         viewModel.setMode(RestoreMode.WHOLE_FOLDER)
 
         viewModel.uiState.value.singleFilePassword shouldBe ""
+    }
+
+    "setMode with the already-selected mode keeps the selection and password (stray tap, review B1)" {
+        val viewModel = RestoreViewModel(FakeRestoreEngine(), SavedStateHandle())
+        viewModel.setMode(RestoreMode.SINGLE_FILE)
+        viewModel.setSourceFile("content://src", "report.pdf.crypt")
+        viewModel.setSingleFilePassword("secret")
+
+        viewModel.setMode(RestoreMode.SINGLE_FILE)
+
+        val state = viewModel.uiState.value
+        state.sourceFileUri shouldBe "content://src"
+        state.sourceFileName shouldBe "report.pdf.crypt"
+        state.singleFilePassword shouldBe "secret"
+        state.state shouldBe RestoreState.SourceReady
     }
 
     "reset clears the single-file password" {

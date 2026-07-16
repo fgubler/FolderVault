@@ -75,13 +75,19 @@ class RestoreViewModel(
         savedStateHandle[KEY_SOURCE_FILE_NAME] = name
     }
 
-    /** Switches restore mode, discarding any half-finished selection so the two flows stay separate. */
+    /**
+     * Switches restore mode, discarding any half-finished selection so the two flows stay
+     * separate. Re-selecting the already-active mode is a no-op: the segmented button fires its
+     * click even for the selected segment, and a stray tap must not wipe the user's input.
+     */
     fun setMode(mode: RestoreMode) {
-        restoreJob?.cancel()
-        restoreJob = null
-        savedStateHandle[KEY_MODE] = mode.name
-        persistSingleFileSelection(uri = null, name = null)
-        _uiState.value = RestoreUiState(mode = mode)
+        if (mode != _uiState.value.mode) {
+            restoreJob?.cancel()
+            restoreJob = null
+            savedStateHandle[KEY_MODE] = mode.name
+            persistSingleFileSelection(uri = null, name = null)
+            _uiState.value = RestoreUiState(mode = mode)
+        }
     }
 
     /** Records the single file the user picked and marks the source as ready. */

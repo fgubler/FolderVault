@@ -18,10 +18,11 @@ interface IRestoreEngine {
      * file), [RestoreResult.InvalidPassword] only when decryption fails on the GCM tag check (a
      * wrong password), or [RestoreResult.Failure] for unreadable, corrupt or uncopyable files.
      *
-     * On any failure — and on cancellation, which cannot interrupt the work mid-file and would
-     * otherwise silently leave fully decrypted plaintext behind — the output document is deleted
-     * again, unless it is a pre-existing document the user picked via "overwrite" that was never
-     * actually written to (deleting that would destroy data the restore never touched).
+     * On any failure — and on cancellation — the output document is deleted again, unless it is a
+     * pre-existing document the user picked via "overwrite" that was never actually written to
+     * (deleting that would destroy data the restore never touched). Large files are processed in
+     * cancellation-check chunks, so a cancel aborts within one chunk of work; small files finish
+     * their (short) run first and are then cleaned up.
      */
     suspend fun decryptSingleFile(
         sourceFileUri: String,

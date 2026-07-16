@@ -7,6 +7,31 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-16 — Review follow-up S2/S3: double-start guard + password hygiene
+
+### What was requested
+Fix the two remaining suggestions from `review/develop.md`: S2 (no guard against starting a
+second restore while one is running) and S3 (single-file password retained in the ViewModel
+after a successful restore).
+
+### What was done
+- **S2 — double-start guard**: `startRestore` and `startSingleFileRestore` previously overwrote
+  `restoreJob` without cancelling it, so a second call (unreachable through today's UI, but open
+  at the ViewModel API) raced two engine runs on the same `_uiState` and orphaned the first job's
+  handle. Both now additionally guard on `restoreJob?.isActive != true` and *ignore* the second
+  start — cancelling the in-flight restore on a spurious call would be the worse failure mode.
+  `cancel()`/`reset()` null the job, so a deliberate cancel still allows an immediate re-start.
+- **S3 — password hygiene**: on `Done(Success)` the single-file flow now clears
+  `singleFilePassword` from the `StateFlow` (it already never touched saved state); failed
+  attempts (e.g. `InvalidPassword`) keep it so the user can correct a typo instead of retyping.
+- Tests: `FakeRestoreEngine` gained call counters and an optional `CompletableDeferred` gate that
+  holds `decryptAll`/`decryptSingleFile` in flight, making the concurrent-start guard observable.
+  Four new cases: second-start ignored (both flows), password cleared on success, password kept
+  on failure.
+
+### Verification
+`assembleDebug`, `test` (ViewModel spec 19/19), `detekt` — all clean.
+
 ## 2026-07-16 — Review follow-up B1/S1: mode-switch guard + chunked cancellation
 
 ### What was requested

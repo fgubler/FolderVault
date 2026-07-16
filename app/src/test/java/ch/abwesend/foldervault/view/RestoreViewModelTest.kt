@@ -16,6 +16,7 @@ import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import io.mockk.mockk
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -24,14 +25,19 @@ import kotlinx.coroutines.test.setMain
 
 /**
  * Records the arguments the ViewModel passes and replays a pre-set [singleFileResult]. Hand-written
- * fake (per the project convention of faking behind a domain seam rather than mocking).
+ * fake (per the project convention of faking behind a domain seam rather than mocking). Setting
+ * [gate] makes both restore calls suspend until the deferred completes, so a test can observe the
+ * ViewModel while a restore is still in flight.
  */
 private class FakeRestoreEngine(
     private val singleFileResult: RestoreResult = RestoreResult.Success(1, 0, 0, 0),
+    private val gate: CompletableDeferred<Unit>? = null,
 ) : IRestoreEngine {
     var singleFileSourceUri: String? = null
     var singleFileOutputUri: String? = null
     var singleFilePassword: String? = null
+    var singleFileCallCount = 0
+    var decryptAllCallCount = 0
 
     override suspend fun scanSourceFolder(sourceUri: String): RestoreScanResult =
         RestoreScanResult(cryptFileCount = 0, otherFileCount = 0)
@@ -42,16 +48,22 @@ private class FakeRestoreEngine(
         password: String,
         collisionPolicy: RestoreCollisionPolicy,
         onProgress: (RestoreProgress) -> Unit,
-    ): RestoreResult = RestoreResult.Success(0, 0, 0, 0)
+    ): RestoreResult {
+        decryptAllCallCount++
+        gate?.await()
+        return RestoreResult.Success(0, 0, 0, 0)
+    }
 
     override suspend fun decryptSingleFile(
         sourceFileUri: String,
         outputFileUri: String,
         password: String,
     ): RestoreResult {
+        singleFileCallCount++
         singleFileSourceUri = sourceFileUri
         singleFileOutputUri = outputFileUri
         singleFilePassword = password
+        gate?.await()
         return singleFileResult
     }
 }
@@ -139,6 +151,55 @@ class RestoreViewModelTest : StringSpec({
         val done = viewModel.uiState.value.state
         done.shouldBeInstanceOf<RestoreState.Done>()
         done.result shouldBe RestoreResult.InvalidPassword
+    }
+
+    "startSingleFileRestore ignores a second start while a restore is running (review S2)" {
+        val gate = CompletableDeferred<Unit>()
+        val engine = FakeRestoreEngine(gate = gate)
+        val viewModel = RestoreViewModel(engine, SavedStateHandle())
+        viewModel.setSourceFile("content://src", "report.pdf.crypt")
+        viewModel.setSingleFilePassword("secret")
+
+        viewModel.startSingleFileRestore("content://out")
+        viewModel.startSingleFileRestore("content://out2")
+        gate.complete(Unit)
+
+        engine.singleFileCallCount shouldBe 1
+        engine.singleFileOutputUri shouldBe "content://out"
+    }
+
+    "startRestore ignores a second start while a restore is running (review S2)" {
+        val gate = CompletableDeferred<Unit>()
+        val engine = FakeRestoreEngine(gate = gate)
+        val viewModel = RestoreViewModel(engine, SavedStateHandle())
+        viewModel.setSourceFolder("content://src")
+        viewModel.setOutputFolder("content://out")
+
+        viewModel.startRestore("secret")
+        viewModel.startRestore("secret")
+        gate.complete(Unit)
+
+        engine.decryptAllCallCount shouldBe 1
+    }
+
+    "a successful single-file restore clears the password from the state (review S3)" {
+        val viewModel = RestoreViewModel(FakeRestoreEngine(RestoreResult.Success(1, 0, 0, 0)), SavedStateHandle())
+        viewModel.setSourceFile("content://src", "report.pdf.crypt")
+        viewModel.setSingleFilePassword("secret")
+
+        viewModel.startSingleFileRestore("content://out")
+
+        viewModel.uiState.value.singleFilePassword shouldBe ""
+    }
+
+    "a failed single-file restore keeps the password so the user can correct it" {
+        val viewModel = RestoreViewModel(FakeRestoreEngine(RestoreResult.InvalidPassword), SavedStateHandle())
+        viewModel.setSourceFile("content://src", "report.pdf.crypt")
+        viewModel.setSingleFilePassword("almost-right")
+
+        viewModel.startSingleFileRestore("content://out")
+
+        viewModel.uiState.value.singleFilePassword shouldBe "almost-right"
     }
 
     "setSingleFilePassword keeps the password in the ui state" {

@@ -160,7 +160,7 @@ class RestoreViewModel(
         val snapshot = _uiState.value
         val src = snapshot.sourceUri
         val out = snapshot.outputUri
-        if (src != null && out != null) {
+        if (src != null && out != null && restoreJob?.isActive != true) {
             restoreJob = safeLaunch {
                 _uiState.update { it.copy(state = RestoreState.Running, progress = null) }
                 try {
@@ -193,7 +193,7 @@ class RestoreViewModel(
 
     fun startSingleFileRestore(outputFileUri: String) {
         val src = _uiState.value.sourceFileUri
-        if (src != null) {
+        if (src != null && restoreJob?.isActive != true) {
             restoreJob = safeLaunch {
                 _uiState.update { it.copy(state = RestoreState.Running, progress = null) }
                 try {
@@ -202,7 +202,13 @@ class RestoreViewModel(
                         outputFileUri = outputFileUri,
                         password = _uiState.value.singleFilePassword,
                     )
-                    _uiState.update { it.copy(state = RestoreState.Done(result)) }
+                    _uiState.update {
+                        // On success the password has served its purpose — drop it from the state
+                        // so it does not outlive the restore. A failed attempt keeps it so the
+                        // user can correct a typo instead of retyping from scratch.
+                        val password = if (result is RestoreResult.Success) "" else it.singleFilePassword
+                        it.copy(state = RestoreState.Done(result), singleFilePassword = password)
+                    }
                 } finally {
                     _uiState.update { current ->
                         if (current.state is RestoreState.Running) {

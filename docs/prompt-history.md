@@ -7,6 +7,59 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-16 — Review follow-up S2: header-based decrypt-vs-copy for single-file restore
+
+### What was requested
+Fix S1 and S2 from `review/develop.md`. S2 explicitly with a multi-stage approach: try to parse the
+file header; if that fails (for any reason), fall back to guessing by filename.
+
+### What was done
+- **S1** (`reset()` drops the selected mode): already fixed in the working tree
+  (`RestoreViewModel.reset` preserves `mode`, covered by the ViewModel test
+  "reset keeps the selected mode…") — verified, no change needed.
+- **S2** (`decryptSingleFile` decided decrypt-vs-copy solely by the `.crypt` suffix):
+  `RestoreEngine.decryptSingleFile` now decides in two stages. Stage 1 parses the FVC1 header
+  (`readHeader`) — a file whose header parses is decrypted regardless of its display name, so a
+  renamed/suffix-less encrypted file from an arbitrary SAF provider no longer gets its ciphertext
+  copied verbatim as a "successful" restore. Stage 2 (header does not parse, for any reason)
+  falls back to the `.crypt` suffix: a suffixed file is still treated as encrypted and fails with
+  "Cannot read file header" (plus output cleanup) rather than copying ciphertext; anything else is
+  copied verbatim as before.
+- The parsed header is passed into `decryptSingle`, which derives the key directly
+  (`cipher.deriveKey`) — no second header read, no pointless single-entry key cache.
+- `readHeader` gained a `warnOnFailure: Boolean = true` parameter: the single-file probe logs a
+  parse failure at **info** level (an expected outcome when the user picked a plain file), the
+  whole-folder path keeps the warning.
+- `review/develop.md`: S2 status updated to fixed.
+
+### Issues resolved
+- `LogPathRedactionArchitectureTest` flagged the new info log: it requires
+  `FileNameRedactor.redact` *inline in the same logger call* (a pre-redacted local named
+  `fileName` still matches the sensitive-identifier regex). Redaction inlined.
+- Post-fix code review (B4 in `review/develop.md`): the new info log interpolated `${e.message}`
+  verbatim — SAF exception messages routinely embed the content URI (file name included), and
+  `CrashlyticsSink.info` forwards breadcrumbs unredacted (BUG-3 class; invisible to the
+  architecture test). Wrapped in `FileNameRedactor.redactPathsIn`.
+
+### Follow-up (same day): S6 — Robolectric coverage for `decryptSingleFile`
+- New `RestoreEngineSingleFileTest` (first test of `RestoreEngine` at all): Robolectric +
+  `FakeSingleFileProvider`, a minimal SAF stand-in answering the display-name query, `openFile`
+  (backed by real temp files in `cacheDir`), and the hidden `android:deleteDocument` provider
+  call that `DocumentFile.delete()` issues — so streams, names and the post-failure output delete
+  all run through the real `DocumentFile` plumbing (pattern extends `ScopedStorageHelperTest`'s
+  fake provider).
+- Encrypted fixtures are hand-assembled **version-1** FVC1 blobs (no AAD, so a bare AES/GCM
+  cipher can produce the body) with `iterations = 1_000` in the header — the engine must derive
+  with the header's parameters (BUG-5), and the low count keeps PBKDF2 fast in tests (mirrors
+  `Fvc1CipherTest.buildBlob`).
+- 6 cases: renamed encrypted file (no `.crypt` suffix) decrypts — the S2 regression; nameless
+  document with valid header decrypts; suffixed file decrypts; plain file copies verbatim;
+  unparseable-header `.crypt` file fails with "Cannot read file header" and deletes the
+  pre-created output; wrong password → `InvalidPassword` and deletes the output.
+
+### Notes
+- Build gates green: `assembleDebug`, `test` (462 tests), `detekt`.
+
 ## 2026-07-16 — Restore a single file (alongside whole-folder restore)
 
 ### What was requested

@@ -130,8 +130,13 @@ class RestoreEngine(
 
     /**
      * Restores one picked file into the already-created [outputFileUri]. Reuses the same crypto
-     * path as [decryptAll]'s loop body for a single item. A `.crypt` file is decrypted; anything
-     * else is copied verbatim. Only a GCM tag failure is reported as
+     * path as [decryptAll]'s loop body for a single item. Whether to decrypt or copy is decided
+     * in two stages: first the FVC1 header is parsed — a file whose header parses is decrypted
+     * regardless of its name, since a user-picked SAF provider may report a display name without
+     * the `.crypt` suffix (or none at all). Only when the header does not parse (for any reason)
+     * does the `.crypt` filename suffix decide: a suffixed file is still treated as encrypted, so
+     * its unreadable header surfaces as a clear failure instead of copying encrypted bytes
+     * verbatim; anything else is copied. Only a GCM tag failure is reported as
      * [RestoreResult.InvalidPassword] — on a lone file that is overwhelmingly a wrong password,
      * and we cannot tell it apart from tampering without the rest of the backup to probe against.
      * Unreadable headers, corrupt files and stream failures surface as [RestoreResult.Failure]
@@ -148,17 +153,32 @@ class RestoreEngine(
         when {
             source == null -> RestoreResult.Failure("Cannot access source file")
             output == null -> RestoreResult.Failure("Cannot access output file")
-            source.name.orEmpty().endsWith(CRYPT_SUFFIX) -> decryptSingle(source, output, password)
-            else -> copySingle(source, output)
+            else -> {
+                val header = readHeader(source, warnOnFailure = false)
+                if (header != null || source.name.orEmpty().endsWith(CRYPT_SUFFIX)) {
+                    decryptSingle(source, output, password, header)
+                } else {
+                    copySingle(source, output)
+                }
+            }
         }
     }
 
-    /** Decrypts one picked `.crypt` file, cleaning up the pre-created output on any failure. */
-    private fun decryptSingle(source: DocumentFile, output: DocumentFile, password: String): RestoreResult {
-        val key = keyFor(source, password, mutableMapOf())
-        val result = if (key == null) {
+    /**
+     * Decrypts one picked encrypted file, cleaning up the pre-created output on any failure.
+     * [header] is the already-parsed FVC1 header; `null` means the file was classified as
+     * encrypted by its `.crypt` suffix alone although its header could not be read.
+     */
+    private fun decryptSingle(
+        source: DocumentFile,
+        output: DocumentFile,
+        password: String,
+        header: Fvc1Header?,
+    ): RestoreResult {
+        val result = if (header == null) {
             RestoreResult.Failure("Cannot read file header")
         } else {
+            val key = cipher.deriveKey(password, header.salt, header.iterations)
             when (decryptEntryDetailed(source, output, key).getErrorOrNull()) {
                 null -> RestoreResult.Success(decrypted = 1, copied = 0, skipped = 0, failed = 0)
                 DecryptionError.INVALID_PASSWORD -> RestoreResult.InvalidPassword
@@ -252,12 +272,26 @@ class RestoreEngine(
             cache.getOrPut(cacheKey) { cipher.deriveKey(password, header.salt, header.iterations) }
         }
 
-    private fun readHeader(file: DocumentFile): Fvc1Header? =
+    /**
+     * Parses the FVC1 header of [file], returning `null` on any failure. Pass
+     * `warnOnFailure = false` where a non-parsing file is an expected outcome (the single-file
+     * decrypt-vs-copy probe) rather than a broken backup entry.
+     */
+    private fun readHeader(file: DocumentFile, warnOnFailure: Boolean = true): Fvc1Header? =
         try {
             context.contentResolver.openInputStream(file.uri)?.use { Fvc1Header.readFrom(it) }
         } catch (e: Exception) {
             e.rethrowCancellation()
-            logger.warning("Failed to read FVC1 header for ${FileNameRedactor.redact(file.name.orEmpty())}", e)
+            if (warnOnFailure) {
+                logger.warning("Failed to read FVC1 header for ${FileNameRedactor.redact(file.name.orEmpty())}", e)
+            } else {
+                // The exception message is uncontrolled and may embed the content URI (file name
+                // included), so it goes through redactPathsIn before reaching the breadcrumb sinks.
+                logger.info(
+                    "No parseable FVC1 header in ${FileNameRedactor.redact(file.name.orEmpty())}: " +
+                        FileNameRedactor.redactPathsIn(e.message.orEmpty()),
+                )
+            }
             null
         }
 

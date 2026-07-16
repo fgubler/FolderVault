@@ -26,6 +26,9 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -40,8 +43,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.documentfile.provider.DocumentFile
 import ch.abwesend.foldervault.R
 import ch.abwesend.foldervault.domain.restore.RestoreCollisionPolicy
+import ch.abwesend.foldervault.domain.restore.RestoreMode
 import ch.abwesend.foldervault.domain.restore.RestoreProgress
 import ch.abwesend.foldervault.domain.restore.RestoreResult
 import ch.abwesend.foldervault.ui.theme.FolderVaultTheme
@@ -49,8 +54,11 @@ import ch.abwesend.foldervault.view.components.EnumDropdown
 import ch.abwesend.foldervault.view.components.PasswordTextField
 import ch.abwesend.foldervault.view.components.UnexpectedErrorDialog
 import ch.abwesend.foldervault.view.viewmodel.RestoreState
+import ch.abwesend.foldervault.view.viewmodel.RestoreUiState
 import ch.abwesend.foldervault.view.viewmodel.RestoreViewModel
 import org.koin.androidx.compose.koinViewModel
+
+private const val OUTPUT_MIME_TYPE = "application/octet-stream"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -61,33 +69,13 @@ fun RestoreScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val unexpectedError by viewModel.unexpectedError.collectAsState()
-    val context = LocalContext.current
 
     UnexpectedErrorDialog(error = unexpectedError, onDismiss = viewModel::dismissUnexpectedError)
 
-    val sourceLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocumentTree(),
-    ) { uri ->
-        if (uri != null) {
-            context.contentResolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION,
-            )
-            viewModel.setSourceFolder(uri.toString())
-        }
-    }
-
-    val outputLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocumentTree(),
-    ) { uri ->
-        if (uri != null) {
-            context.contentResolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-            )
-            viewModel.setOutputFolder(uri.toString())
-        }
-    }
+    val actions = rememberRestoreLaunchActions(
+        viewModel = viewModel,
+        suggestedOutputName = { uiState.suggestedOutputName.orEmpty() },
+    )
 
     if (uiState.state is RestoreState.Running) {
         RestoreProgressDialog(progress = uiState.progress, onCancel = viewModel::cancel)
@@ -110,33 +98,103 @@ fun RestoreScreen(
         },
     ) { innerPadding ->
         RestoreContent(
-            state = uiState.state,
-            cryptFileCount = uiState.cryptFileCount,
-            otherFileCount = uiState.otherFileCount,
-            outputUri = uiState.outputUri,
-            collisionPolicy = uiState.collisionPolicy,
-            onPickSource = { sourceLauncher.launch(null) },
-            onPickOutput = { outputLauncher.launch(null) },
+            uiState = uiState,
+            onModeChange = viewModel::setMode,
+            onPickSource = actions.pickSourceFolder,
+            onPickOutput = actions.pickOutputFolder,
             onCollisionPolicyChange = viewModel::setCollisionPolicy,
             onStartRestore = viewModel::startRestore,
+            onPickSourceFile = actions.pickSourceFile,
+            onSingleFilePasswordChange = viewModel::setSingleFilePassword,
+            onDecryptAndSave = actions.decryptAndSave,
             onReset = viewModel::reset,
             modifier = Modifier.padding(innerPadding),
         )
     }
 }
 
+/** Bundles the four system-picker triggers the restore screen needs. */
+private class RestoreLaunchActions(
+    val pickSourceFolder: () -> Unit,
+    val pickOutputFolder: () -> Unit,
+    val pickSourceFile: () -> Unit,
+    val decryptAndSave: () -> Unit,
+)
+
+/**
+ * Creates the SAF launchers for both restore flows and returns their trigger callbacks. Keeping
+ * them here keeps [RestoreScreen] short. [suggestedOutputName] is read lazily so the "Save as"
+ * launcher sees the latest value at click time.
+ */
+@Composable
+private fun rememberRestoreLaunchActions(
+    viewModel: RestoreViewModel,
+    suggestedOutputName: () -> String,
+): RestoreLaunchActions {
+    val context = LocalContext.current
+
+    val sourceLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { uri ->
+        if (uri != null) {
+            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            viewModel.setSourceFolder(uri.toString())
+        }
+    }
+
+    val outputLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { uri ->
+        if (uri != null) {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+            viewModel.setOutputFolder(uri.toString())
+        }
+    }
+
+    val sourceFileLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        // The single file is read once within this session, so the temporary OpenDocument grant is
+        // enough — no persistable permission is taken (unlike the folder flow, which re-scans).
+        if (uri != null) {
+            val name = DocumentFile.fromSingleUri(context, uri)?.name.orEmpty()
+            viewModel.setSourceFile(uri.toString(), name)
+        }
+    }
+
+    val saveAsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument(OUTPUT_MIME_TYPE),
+    ) { uri ->
+        // The password is read from the ViewModel state, which survives the activity recreation a
+        // configuration change during the picker round-trip causes (composable state would not).
+        if (uri != null) {
+            viewModel.startSingleFileRestore(uri.toString())
+        }
+    }
+
+    return RestoreLaunchActions(
+        pickSourceFolder = { sourceLauncher.launch(null) },
+        pickOutputFolder = { outputLauncher.launch(null) },
+        pickSourceFile = { sourceFileLauncher.launch(arrayOf("*/*")) },
+        decryptAndSave = { saveAsLauncher.launch(suggestedOutputName()) },
+    )
+}
+
 @Suppress("LongParameterList")
 @Composable
 private fun RestoreContent(
-    state: RestoreState,
-    cryptFileCount: Int,
-    otherFileCount: Int,
-    outputUri: String?,
-    collisionPolicy: RestoreCollisionPolicy,
+    uiState: RestoreUiState,
+    onModeChange: (RestoreMode) -> Unit,
     onPickSource: () -> Unit,
     onPickOutput: () -> Unit,
     onCollisionPolicyChange: (RestoreCollisionPolicy) -> Unit,
     onStartRestore: (String) -> Unit,
+    onPickSourceFile: () -> Unit,
+    onSingleFilePasswordChange: (String) -> Unit,
+    onDecryptAndSave: () -> Unit,
     onReset: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -148,51 +206,137 @@ private fun RestoreContent(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        ExplanationSection()
-
+        RestoreModeSelector(mode = uiState.mode, onModeChange = onModeChange)
         HorizontalDivider()
-        SourceFolderSection(
-            state = state,
-            cryptFileCount = cryptFileCount,
-            otherFileCount = otherFileCount,
-            onPickSource = onPickSource,
-        )
 
-        val showOutputAndRestore = cryptFileCount > 0 &&
-            (
-                state == RestoreState.SourceReady ||
-                    state == RestoreState.ReadyToStart ||
-                    state is RestoreState.Done
-                )
-
-        if (showOutputAndRestore) {
-            HorizontalDivider()
-            OutputFolderSection(outputUri = outputUri, onPickOutput = onPickOutput)
-        }
-
-        if (showOutputAndRestore && outputUri != null && state != RestoreState.Scanning) {
-            HorizontalDivider()
-            PasswordAndStartSection(
-                collisionPolicy = collisionPolicy,
+        when (uiState.mode) {
+            RestoreMode.WHOLE_FOLDER -> WholeFolderContent(
+                uiState = uiState,
+                onPickSource = onPickSource,
+                onPickOutput = onPickOutput,
                 onCollisionPolicyChange = onCollisionPolicyChange,
                 onStartRestore = onStartRestore,
-                enabled = state == RestoreState.ReadyToStart || state is RestoreState.Done,
+                onReset = onReset,
+            )
+            RestoreMode.SINGLE_FILE -> SingleFileContent(
+                uiState = uiState,
+                onPickSourceFile = onPickSourceFile,
+                onPasswordChange = onSingleFilePasswordChange,
+                onDecryptAndSave = onDecryptAndSave,
+                onReset = onReset,
             )
         }
+    }
+}
 
-        if (state is RestoreState.Done) {
-            HorizontalDivider()
-            RestoreResultSection(result = state.result, onReset = onReset)
+@Composable
+private fun RestoreModeSelector(mode: RestoreMode, onModeChange: (RestoreMode) -> Unit) {
+    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+        RestoreMode.entries.forEachIndexed { index, entry ->
+            SegmentedButton(
+                selected = mode == entry,
+                onClick = { onModeChange(entry) },
+                shape = SegmentedButtonDefaults.itemShape(index = index, count = RestoreMode.entries.size),
+            ) {
+                Text(stringResource(entry.labelResId))
+            }
         }
+    }
+}
+
+@Suppress("LongParameterList", "MultipleEmitters")
+@Composable
+private fun WholeFolderContent(
+    uiState: RestoreUiState,
+    onPickSource: () -> Unit,
+    onPickOutput: () -> Unit,
+    onCollisionPolicyChange: (RestoreCollisionPolicy) -> Unit,
+    onStartRestore: (String) -> Unit,
+    onReset: () -> Unit,
+) {
+    val state = uiState.state
+    ExplanationSection(
+        titleRes = R.string.restore_explanation_title,
+        bodyRes = R.string.restore_explanation_body,
+    )
+
+    HorizontalDivider()
+    SourceFolderSection(
+        state = state,
+        cryptFileCount = uiState.cryptFileCount,
+        otherFileCount = uiState.otherFileCount,
+        onPickSource = onPickSource,
+    )
+
+    val showOutputAndRestore = uiState.cryptFileCount > 0 &&
+        (
+            state == RestoreState.SourceReady ||
+                state == RestoreState.ReadyToStart ||
+                state is RestoreState.Done
+            )
+
+    if (showOutputAndRestore) {
+        HorizontalDivider()
+        OutputFolderSection(outputUri = uiState.outputUri, onPickOutput = onPickOutput)
+    }
+
+    if (showOutputAndRestore && uiState.outputUri != null && state != RestoreState.Scanning) {
+        HorizontalDivider()
+        PasswordAndStartSection(
+            collisionPolicy = uiState.collisionPolicy,
+            onCollisionPolicyChange = onCollisionPolicyChange,
+            onStartRestore = onStartRestore,
+            enabled = state == RestoreState.ReadyToStart || state is RestoreState.Done,
+        )
+    }
+
+    if (state is RestoreState.Done) {
+        HorizontalDivider()
+        RestoreResultSection(result = state.result, onReset = onReset)
     }
 }
 
 @Suppress("MultipleEmitters")
 @Composable
-private fun ExplanationSection() {
-    Text(stringResource(R.string.restore_explanation_title), style = MaterialTheme.typography.titleSmall)
+private fun SingleFileContent(
+    uiState: RestoreUiState,
+    onPickSourceFile: () -> Unit,
+    onPasswordChange: (String) -> Unit,
+    onDecryptAndSave: () -> Unit,
+    onReset: () -> Unit,
+) {
+    val state = uiState.state
+    ExplanationSection(
+        titleRes = R.string.restore_explanation_title,
+        bodyRes = R.string.restore_single_explanation_body,
+    )
+
+    HorizontalDivider()
+    SingleFileSourceSection(fileName = uiState.sourceFileName, onPickSourceFile = onPickSourceFile)
+
+    val sourceReady = uiState.sourceFileUri != null
+    if (sourceReady) {
+        HorizontalDivider()
+        SingleFilePasswordSection(
+            password = uiState.singleFilePassword,
+            onPasswordChange = onPasswordChange,
+            onDecryptAndSave = onDecryptAndSave,
+            enabled = state == RestoreState.SourceReady || state is RestoreState.Done,
+        )
+    }
+
+    if (state is RestoreState.Done) {
+        HorizontalDivider()
+        RestoreResultSection(result = state.result, onReset = onReset)
+    }
+}
+
+@Suppress("MultipleEmitters")
+@Composable
+private fun ExplanationSection(titleRes: Int, bodyRes: Int) {
+    Text(stringResource(titleRes), style = MaterialTheme.typography.titleSmall)
     Text(
-        stringResource(R.string.restore_explanation_body),
+        stringResource(bodyRes),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -237,6 +381,23 @@ private fun SourceFolderSection(
             }
         }
         else -> Unit
+    }
+}
+
+@Suppress("MultipleEmitters")
+@Composable
+private fun SingleFileSourceSection(fileName: String?, onPickSourceFile: () -> Unit) {
+    Text(stringResource(R.string.restore_single_step1_header), style = MaterialTheme.typography.labelLarge)
+    OutlinedButton(onClick = onPickSourceFile, modifier = Modifier.fillMaxWidth()) {
+        Text(stringResource(R.string.restore_pick_encrypted_file))
+    }
+    if (fileName != null) {
+        Text(
+            stringResource(R.string.restore_single_file_selected, fileName),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
     }
 }
 
@@ -294,6 +455,32 @@ private fun PasswordAndStartSection(
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text(stringResource(R.string.button_start_restore))
+    }
+}
+
+@Suppress("MultipleEmitters")
+@Composable
+private fun SingleFilePasswordSection(
+    password: String,
+    onPasswordChange: (String) -> Unit,
+    onDecryptAndSave: () -> Unit,
+    enabled: Boolean,
+) {
+    Text(stringResource(R.string.restore_single_step2_header), style = MaterialTheme.typography.labelLarge)
+
+    PasswordTextField(
+        value = password,
+        onValueChange = onPasswordChange,
+        label = stringResource(R.string.label_backup_password),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Spacer(modifier = Modifier.height(8.dp))
+    Button(
+        onClick = onDecryptAndSave,
+        enabled = enabled && password.isNotEmpty(),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(stringResource(R.string.button_decrypt_and_save))
     }
 }
 
@@ -390,15 +577,46 @@ private fun RestoreProgressDialog(progress: RestoreProgress?, onCancel: () -> Un
 private fun RestoreScreenPreview() {
     FolderVaultTheme {
         RestoreContent(
-            state = RestoreState.ReadyToStart,
-            cryptFileCount = 42,
-            otherFileCount = 3,
-            outputUri = "content://com.example/tree/output",
-            collisionPolicy = RestoreCollisionPolicy.SKIP,
+            uiState = RestoreUiState(
+                state = RestoreState.ReadyToStart,
+                cryptFileCount = 42,
+                otherFileCount = 3,
+                outputUri = "content://com.example/tree/output",
+                collisionPolicy = RestoreCollisionPolicy.SKIP,
+            ),
+            onModeChange = {},
             onPickSource = {},
             onPickOutput = {},
             onCollisionPolicyChange = {},
             onStartRestore = {},
+            onPickSourceFile = {},
+            onSingleFilePasswordChange = {},
+            onDecryptAndSave = {},
+            onReset = {},
+        )
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun RestoreScreenSingleFilePreview() {
+    FolderVaultTheme {
+        RestoreContent(
+            uiState = RestoreUiState(
+                mode = RestoreMode.SINGLE_FILE,
+                state = RestoreState.SourceReady,
+                sourceFileUri = "content://com.example/document/report.pdf.crypt",
+                sourceFileName = "report.pdf.crypt",
+                suggestedOutputName = "report.pdf",
+            ),
+            onModeChange = {},
+            onPickSource = {},
+            onPickOutput = {},
+            onCollisionPolicyChange = {},
+            onStartRestore = {},
+            onPickSourceFile = {},
+            onSingleFilePasswordChange = {},
+            onDecryptAndSave = {},
             onReset = {},
         )
     }

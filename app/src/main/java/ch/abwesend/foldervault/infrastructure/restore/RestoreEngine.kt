@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
+import ch.abwesend.foldervault.domain.crypto.DecryptionError
 import ch.abwesend.foldervault.domain.crypto.Fvc1Header
 import ch.abwesend.foldervault.domain.crypto.IFvc1Cipher
 import ch.abwesend.foldervault.domain.logging.FileNameRedactor
@@ -13,6 +14,8 @@ import ch.abwesend.foldervault.domain.restore.RestoreCollisionPolicy
 import ch.abwesend.foldervault.domain.restore.RestoreProgress
 import ch.abwesend.foldervault.domain.restore.RestoreResult
 import ch.abwesend.foldervault.domain.restore.RestoreScanResult
+import ch.abwesend.foldervault.domain.result.BinaryResult
+import ch.abwesend.foldervault.domain.result.ErrorResult
 import ch.abwesend.foldervault.domain.result.SuccessResult
 import ch.abwesend.foldervault.domain.result.rethrowCancellation
 import ch.abwesend.foldervault.infrastructure.storage.ScopedStorageHelper
@@ -124,6 +127,59 @@ class RestoreEngine(
         onProgress(RestoreProgress(total, total, failed, ""))
         RestoreResult.Success(decrypted, copied, skipped, failed)
     }
+
+    /**
+     * Restores one picked file into the already-created [outputFileUri]. Reuses the same crypto
+     * path as [decryptAll]'s loop body for a single item. A `.crypt` file is decrypted; anything
+     * else is copied verbatim. Only a GCM tag failure is reported as
+     * [RestoreResult.InvalidPassword] — on a lone file that is overwhelmingly a wrong password,
+     * and we cannot tell it apart from tampering without the rest of the backup to probe against.
+     * Unreadable headers, corrupt files and stream failures surface as [RestoreResult.Failure]
+     * instead. The "Save as" picker has already created the output document when this runs, so
+     * every failure path removes the (empty or partial) output again.
+     */
+    override suspend fun decryptSingleFile(
+        sourceFileUri: String,
+        outputFileUri: String,
+        password: String,
+    ): RestoreResult = withContext(dispatchers.io) {
+        val source = DocumentFile.fromSingleUri(context, Uri.parse(sourceFileUri))
+        val output = DocumentFile.fromSingleUri(context, Uri.parse(outputFileUri))
+        when {
+            source == null -> RestoreResult.Failure("Cannot access source file")
+            output == null -> RestoreResult.Failure("Cannot access output file")
+            source.name.orEmpty().endsWith(CRYPT_SUFFIX) -> decryptSingle(source, output, password)
+            else -> copySingle(source, output)
+        }
+    }
+
+    /** Decrypts one picked `.crypt` file, cleaning up the pre-created output on any failure. */
+    private fun decryptSingle(source: DocumentFile, output: DocumentFile, password: String): RestoreResult {
+        val key = keyFor(source, password, mutableMapOf())
+        val result = if (key == null) {
+            RestoreResult.Failure("Cannot read file header")
+        } else {
+            when (decryptEntryDetailed(source, output, key).getErrorOrNull()) {
+                null -> RestoreResult.Success(decrypted = 1, copied = 0, skipped = 0, failed = 0)
+                DecryptionError.INVALID_PASSWORD -> RestoreResult.InvalidPassword
+                DecryptionError.INVALID_FILE -> RestoreResult.Failure("The file is not a valid encrypted backup file")
+                DecryptionError.UNKNOWN -> RestoreResult.Failure("Failed to read or decrypt the file")
+            }
+        }
+        if (result !is RestoreResult.Success) {
+            deletePartialOutput(output)
+        }
+        return result
+    }
+
+    /** Copies one picked plain file verbatim, cleaning up the pre-created output on failure. */
+    private fun copySingle(source: DocumentFile, output: DocumentFile): RestoreResult =
+        if (copyEntry(source, output)) {
+            RestoreResult.Success(decrypted = 0, copied = 1, skipped = 0, failed = 0)
+        } else {
+            deletePartialOutput(output)
+            RestoreResult.Failure("Failed to copy file")
+        }
 
     private fun withInputStream(source: DocumentFile, block: (InputStream) -> Boolean): Boolean =
         try {
@@ -259,8 +315,32 @@ class RestoreEngine(
     }
 
     private fun decryptEntry(source: DocumentFile, output: DocumentFile, key: SecretKey): Boolean =
-        withStreams(source, output) { input, out ->
-            cipher.decryptFile(key, input, out) is SuccessResult
+        decryptEntryDetailed(source, output, key) is SuccessResult
+
+    /**
+     * Decrypts [source] into [output], reporting *why* a failure happened — unlike the Boolean
+     * [decryptEntry], which is enough for [decryptAll]'s per-file `failed` counter. The single-file
+     * flow needs the distinction so only a GCM tag failure ([DecryptionError.INVALID_PASSWORD])
+     * is presented as a wrong password. Stream-open failures map to [DecryptionError.UNKNOWN].
+     */
+    private fun decryptEntryDetailed(
+        source: DocumentFile,
+        output: DocumentFile,
+        key: SecretKey,
+    ): BinaryResult<Unit, DecryptionError> =
+        try {
+            context.contentResolver.openInputStream(source.uri)?.use { input ->
+                context.contentResolver.openOutputStream(output.uri)?.use { out ->
+                    cipher.decryptFile(key, input, out)
+                }
+            } ?: ErrorResult(DecryptionError.UNKNOWN)
+        } catch (e: Exception) {
+            e.rethrowCancellation()
+            logger.warning(
+                "Failed to open streams while restoring ${FileNameRedactor.redact(source.name.orEmpty())}",
+                e,
+            )
+            ErrorResult(DecryptionError.UNKNOWN)
         }
 
     private fun copyEntry(source: DocumentFile, output: DocumentFile): Boolean =

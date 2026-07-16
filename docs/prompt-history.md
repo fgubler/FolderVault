@@ -7,6 +7,68 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-16 — Restore a single file (alongside whole-folder restore)
+
+### What was requested
+The Restore screen only supported restoring an entire downloaded backup folder. Add a second option
+to restore just **one** file, and let the user choose between the two modes.
+
+### Design (locked with the user)
+- **Mode switch** = a `SingleChoiceSegmentedButtonRow` toggle at the top of the existing Restore
+  screen (`Whole folder` / `Single file`) — one screen, both flows, maximum reuse. Switching modes
+  resets the screen state so the two flows never bleed into each other.
+- **Single-file output** = the system **"Save as"** picker (`CreateDocument`), pre-filled with the
+  decrypted filename (source display name, last path segment, `.crypt` stripped). No output-folder
+  step and no collision-policy dropdown — the picker owns destination + naming.
+
+### What was done
+- `domain/restore/RestoreMode.kt` (new): `WHOLE_FOLDER` / `SINGLE_FILE` enum with `@StringRes`
+  labels (mirrors `RestoreCollisionPolicy`).
+- `domain/restore/IRestoreEngine.kt`: added
+  `decryptSingleFile(sourceFileUri, outputFileUri, password): RestoreResult`.
+- `infrastructure/restore/RestoreEngine.kt`: implemented `decryptSingleFile` as a thin single-item
+  version of the `decryptAll` loop body, reusing `keyFor` / `decryptEntry` / `copyEntry` /
+  `deletePartialOutput`. A `.crypt` file is decrypted, anything else copied; on a decrypt failure it
+  deletes the partial output and returns `InvalidPassword` (a lone GCM tag failure can't be told
+  apart from tampering/corruption, and wrong password dominates — documented in KDoc).
+- `view/viewmodel/RestoreViewModel.kt`: added `mode`, `sourceFileUri`, `sourceFileName`,
+  `suggestedOutputName` to state; `setMode` (resets state), `setSourceFile`, `startSingleFileRestore`
+  (mirrors `startRestore`, reuses the same `restoreJob`/`cancel()` machinery). Suggested-name logic
+  lives in the ViewModel (the view layer may not depend on infrastructure's `RestorePathResolver`).
+- `view/screens/RestoreScreen.kt`: added the mode toggle and branched content into
+  `WholeFolderContent` (unchanged flow) vs `SingleFileContent` (pick file → password →
+  **Decrypt & save…**). SAF launchers extracted into `rememberRestoreLaunchActions` to keep
+  `RestoreScreen` under the `LongMethod` limit. Reuses the progress dialog and result section.
+- `strings.xml`: mode-toggle labels, single-file step headers, `button_decrypt_and_save`, and a
+  single-file explanation.
+- `app/src/test/.../view/RestoreViewModelTest.kt` (new): hand-written `FakeRestoreEngine` (per the
+  fake-behind-a-seam convention), covering mode switching/reset, source-file selection + suggested
+  name, engine delegation, and `Success`/`InvalidPassword` outcomes.
+- No DI changes (method added to the existing `IRestoreEngine`; ViewModel constructor unchanged).
+
+### Verify
+- `./gradlew assembleDebug` / `test` / `detekt` all green. Manual UI verification (screenshots) and
+  the `/code-review` pass are the remaining checkpoint hand-off items.
+
+### Review fixes (same day, second `/code-review` pass — blocking findings B1–B3)
+- **B1 — password now lives in the ViewModel** (`RestoreUiState.singleFilePassword` +
+  `setSingleFilePassword`, `startSingleFileRestore(outputFileUri)` reads it from state): plain
+  `remember` state did not survive the activity recreation caused by a configuration change while
+  the "Save as" picker was open, so the launcher callback ran the restore with an empty password
+  and the user saw "Wrong password". Deliberately not in `SavedStateHandle` — never persisted;
+  cleared by `setMode`/`reset`.
+- **B2 — only a GCM tag failure maps to `InvalidPassword`**: new `decryptEntryDetailed` returns
+  `BinaryResult<Unit, DecryptionError>` (the Boolean `decryptEntry` now delegates to it);
+  `decryptSingleFile` maps `INVALID_FILE`/`UNKNOWN`/stream failures to `Failure` instead. Matters
+  because the flow advertises picking the file straight off Google Drive, where transient I/O
+  errors are realistic and must not present as "wrong password".
+- **B3 — every single-file failure path deletes the pre-created output document** (the "Save as"
+  picker creates it before the engine runs): previously the unreadable-header path leaked a
+  zero-byte file that looked restored. `decryptSingleFile` restructured into
+  `decryptSingle`/`copySingle` helpers with a single cleanup point.
+- Tests updated/added in `RestoreViewModelTest` (password in state, cleared on mode switch/reset);
+  `assembleDebug` / full `test` / `detekt` green.
+
 ## 2026-07-15 — More reliable backup execution (exact-alarm trampoline + watchdog)
 
 ### What was requested

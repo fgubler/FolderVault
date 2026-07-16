@@ -2,6 +2,7 @@ package ch.abwesend.foldervault.view.viewmodel
 
 import ch.abwesend.foldervault.domain.restore.IRestoreEngine
 import ch.abwesend.foldervault.domain.restore.RestoreCollisionPolicy
+import ch.abwesend.foldervault.domain.restore.RestoreMode
 import ch.abwesend.foldervault.domain.restore.RestoreProgress
 import ch.abwesend.foldervault.domain.restore.RestoreResult
 import kotlinx.coroutines.Job
@@ -20,6 +21,7 @@ sealed interface RestoreState {
 }
 
 data class RestoreUiState(
+    val mode: RestoreMode = RestoreMode.WHOLE_FOLDER,
     val state: RestoreState = RestoreState.Idle,
     val sourceUri: String? = null,
     val outputUri: String? = null,
@@ -27,6 +29,10 @@ data class RestoreUiState(
     val otherFileCount: Int = 0,
     val collisionPolicy: RestoreCollisionPolicy = RestoreCollisionPolicy.SKIP,
     val progress: RestoreProgress? = null,
+    val sourceFileUri: String? = null,
+    val sourceFileName: String? = null,
+    val suggestedOutputName: String? = null,
+    val singleFilePassword: String = "",
 )
 
 class RestoreViewModel(private val engine: IRestoreEngine) : BaseViewModel() {
@@ -35,6 +41,41 @@ class RestoreViewModel(private val engine: IRestoreEngine) : BaseViewModel() {
     val uiState: StateFlow<RestoreUiState> = _uiState.asStateFlow()
 
     private var restoreJob: Job? = null
+
+    /** Switches restore mode, discarding any half-finished selection so the two flows stay separate. */
+    fun setMode(mode: RestoreMode) {
+        restoreJob?.cancel()
+        restoreJob = null
+        _uiState.value = RestoreUiState(mode = mode)
+    }
+
+    /** Records the single file the user picked and marks the source as ready. */
+    fun setSourceFile(uri: String, name: String) {
+        _uiState.update {
+            it.copy(
+                sourceFileUri = uri,
+                sourceFileName = name,
+                suggestedOutputName = suggestedOutputName(name),
+                state = RestoreState.SourceReady,
+            )
+        }
+    }
+
+    /**
+     * Name to pre-fill the "Save as" picker with: the file's last path segment with the `.crypt`
+     * suffix stripped, so `report.pdf.crypt` is suggested as `report.pdf`.
+     */
+    private fun suggestedOutputName(displayName: String): String =
+        displayName.substringAfterLast('/').removeSuffix(".crypt")
+
+    /**
+     * The single-file password lives here (not in composable state) because it must survive the
+     * activity recreation that a configuration change during the "Save as" picker round-trip
+     * causes. It is deliberately not written to any saved state, so it is never persisted.
+     */
+    fun setSingleFilePassword(password: String) {
+        _uiState.update { it.copy(singleFilePassword = password) }
+    }
 
     fun setSourceFolder(uri: String) {
         _uiState.update { it.copy(sourceUri = uri, state = RestoreState.Scanning) }
@@ -108,6 +149,31 @@ class RestoreViewModel(private val engine: IRestoreEngine) : BaseViewModel() {
         }
     }
 
+    fun startSingleFileRestore(outputFileUri: String) {
+        val src = _uiState.value.sourceFileUri
+        if (src != null) {
+            restoreJob = safeLaunch {
+                _uiState.update { it.copy(state = RestoreState.Running, progress = null) }
+                try {
+                    val result = engine.decryptSingleFile(
+                        sourceFileUri = src,
+                        outputFileUri = outputFileUri,
+                        password = _uiState.value.singleFilePassword,
+                    )
+                    _uiState.update { it.copy(state = RestoreState.Done(result)) }
+                } finally {
+                    _uiState.update { current ->
+                        if (current.state is RestoreState.Running) {
+                            current.copy(state = RestoreState.SourceReady)
+                        } else {
+                            current
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fun cancel() {
         restoreJob?.cancel()
         restoreJob = null
@@ -116,6 +182,7 @@ class RestoreViewModel(private val engine: IRestoreEngine) : BaseViewModel() {
     fun reset() {
         restoreJob?.cancel()
         restoreJob = null
-        _uiState.value = RestoreUiState()
+        // Keep the selected mode so "Start over" clears the selection without flipping flows.
+        _uiState.value = RestoreUiState(mode = _uiState.value.mode)
     }
 }

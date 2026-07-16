@@ -367,6 +367,18 @@
     <string name="restore_decrypting_progress">Decrypting %1$d / %2$d files</string>
     <string name="restore_failed_count">%1$d failed</string>
 
+    <!-- Restore mode toggle -->
+    <string name="restore_mode_whole_folder">Whole folder</string>
+    <string name="restore_mode_single_file">Single file</string>
+
+    <!-- Restore single file -->
+    <string name="restore_single_explanation_body">1. Pick one encrypted file. If the Google Drive app is installed, you can select it directly on Google Drive in the file picker — no download needed.\n2. Enter your backup password.\n3. Choose where to save the decrypted file.</string>
+    <string name="restore_single_step1_header">Step 1: encrypted file</string>
+    <string name="restore_pick_encrypted_file">Pick encrypted file</string>
+    <string name="restore_single_file_selected">Selected: %1$s</string>
+    <string name="restore_single_step2_header">Step 2: password</string>
+    <string name="button_decrypt_and_save">Decrypt &amp; save…</string>
+
     <!-- Restore collision policy display names -->
     <string name="collision_skip">Skip existing files</string>
     <string name="collision_overwrite">Overwrite</string>

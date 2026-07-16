@@ -123,7 +123,7 @@ val appModule = module {
 
     // ViewModels
     viewModel { DatabaseGuardViewModel(get(), get(), get()) }
-    viewModel { RestoreViewModel(get()) }
+    viewModel { RestoreViewModel(engine = get(), savedStateHandle = get()) }
     viewModel { HomeViewModel(get(), get()) }
     viewModel { OnboardingViewModel(get()) }
     viewModel { SettingsViewModel(get(), get(), get(), get(), get(), get()) }

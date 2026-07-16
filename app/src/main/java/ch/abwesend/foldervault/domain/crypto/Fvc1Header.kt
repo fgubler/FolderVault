@@ -21,6 +21,9 @@ class Fvc1Header private constructor(
     companion object {
         private val MAGIC = "FVC1".toByteArray(Charsets.US_ASCII)
 
+        /** Filename suffix marking a file as FVC1-encrypted (`report.pdf` → `report.pdf.crypt`). */
+        const val CRYPT_FILE_SUFFIX = ".crypt"
+
         /** Original format: header written in the clear, not bound to the ciphertext. */
         const val VERSION_WITHOUT_AAD = 1
 

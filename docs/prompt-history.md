@@ -7,6 +7,282 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-16 — Branch review vs master + fixes B1/S1/S2 (truncate mode, unknown-size cancel, shared suffix)
+
+### What was requested
+Review the branch against `master` (`/code-review`), then fix findings B1, S1 and S2 from
+`review/develop.md`.
+
+### What was done
+- **B1 — provider-dependent truncation**: both restore output streams were opened with the
+  default `"w"` mode, whose truncation is provider-dependent — Google Drive's DocumentsProvider
+  notoriously does *not* truncate. The single-file flow is the first path writing into a
+  *pre-existing* document (the "Save as" overwrite case; the folder flow's OVERWRITE deletes and
+  recreates), so shorter output would have left trailing bytes of the old content behind while
+  reporting `Success`. Both call sites now pass an explicit `OUTPUT_STREAM_MODE = "wt"` (single
+  constant in `RestoreEngine` carrying the rationale). Regression test records the mode string
+  arriving at `FakeSingleFileProvider.openFile` — the local test cannot show the corruption
+  itself because `ParcelFileDescriptor.parseMode("w")` truncates locally, so it pins the intent.
+- **S1 — unknown-size sources uncancellable**: `singleFileCancellationWrapper` treated
+  `length() == 0` (provider reports no size) as "small" and skipped the chunked-cancellation
+  wrapper, making such a run uncancellable for its whole duration. Unknown size now wraps too
+  (`<= 0L || > threshold`) — the wrapper costs only a counter per read. Regression test gives
+  `TestDocument` an optional `reportedSize` override (size column decoupled from real content)
+  and asserts a mid-file abort despite a reported size of 0.
+- **S2 — `.crypt` hard-coded four times**: extracted `Fvc1Header.CRYPT_FILE_SUFFIX` (domain,
+  next to the format constants it belongs to) and pointed `RestoreEngine`, `RestorePathResolver`,
+  `RemoteNameBuilder` and `RestoreViewModel.suggestedOutputName` at it.
+- N1 (no "cancelled" feedback after a single-file cancel) was raised as a nitpick and left open.
+
+### Verification
+`assembleDebug`, full `test` suite (incl. the two new engine tests), `detekt` — all clean.
+
+## 2026-07-16 — Review follow-up N1/N2: single cleanup + typed restore-failure reasons
+
+### What was requested
+Fix the two remaining nitpicks from `review/develop.md`: N1 (double cleanup on cancellation logs
+a spurious warning) and N2 (user-facing restore failure messages hardcoded in English inside the
+engine).
+
+### What was done
+- **N1 — double cleanup**: when `decryptSingleFile`'s block finished with a failure (in-block
+  cleanup ran) *and* a cancel arrived before the `withContext` exit, the `CancellationException`
+  catch cleaned up a second time — the delete of the already-removed document failed and logged
+  "Could not delete partial output". A `cleanedUp` flag set after the in-block cleanup now makes
+  the catch skip it. Regression test cancels from the *source* document's `openFile` (so the
+  block completes with a failure while already cancelled) and asserts via a new
+  `deleteCallCount` on `FakeSingleFileProvider` that exactly one delete reaches the provider.
+  Pitfall found while writing it: with `CoroutineStart.UNDISPATCHED` the `onOpen` hook fires
+  before the `lateinit job` is assigned — plain `launch` is required for this test's ordering.
+- **N2 — typed failure reasons**: `RestoreResult.Failure(message: String)` became
+  `Failure(reason: RestoreFailureReason)` — a new domain enum with `@StringRes messageResId`
+  following the established `RestoreCollisionPolicy`/`RestoreMode` pattern (domain enums carry
+  string-resource ids in this single-module app). Eight values cover all engine failure sites,
+  including the whole-folder flow's source/output-folder failures. `RestoreResultSection`
+  resolves the reason via `stringResource` into the existing `restore_failed` format string;
+  the eight message texts moved to `strings.xml`.
+
+### Verification
+`assembleDebug`, `test` (477 tests, engine spec 13/13), `detekt` — all clean.
+
+## 2026-07-16 — Review follow-up S2/S3: double-start guard + password hygiene
+
+### What was requested
+Fix the two remaining suggestions from `review/develop.md`: S2 (no guard against starting a
+second restore while one is running) and S3 (single-file password retained in the ViewModel
+after a successful restore).
+
+### What was done
+- **S2 — double-start guard**: `startRestore` and `startSingleFileRestore` previously overwrote
+  `restoreJob` without cancelling it, so a second call (unreachable through today's UI, but open
+  at the ViewModel API) raced two engine runs on the same `_uiState` and orphaned the first job's
+  handle. Both now additionally guard on `restoreJob?.isActive != true` and *ignore* the second
+  start — cancelling the in-flight restore on a spurious call would be the worse failure mode.
+  `cancel()`/`reset()` null the job, so a deliberate cancel still allows an immediate re-start.
+- **S3 — password hygiene**: on `Done(Success)` the single-file flow now clears
+  `singleFilePassword` from the `StateFlow` (it already never touched saved state); failed
+  attempts (e.g. `InvalidPassword`) keep it so the user can correct a typo instead of retyping.
+- Tests: `FakeRestoreEngine` gained call counters and an optional `CompletableDeferred` gate that
+  holds `decryptAll`/`decryptSingleFile` in flight, making the concurrent-start guard observable.
+  Four new cases: second-start ignored (both flows), password cleared on success, password kept
+  on failure.
+
+### Verification
+`assembleDebug`, `test` (ViewModel spec 19/19), `detekt` — all clean.
+
+## 2026-07-16 — Review follow-up B1/S1: mode-switch guard + chunked cancellation
+
+### What was requested
+A fresh `/code-review` pass of `develop` vs `master` (new findings file `review/develop.md`:
+B1, S1–S3, N1–N2), then fix B1 and S1 — S1 via chunking for files above 100 MB, with the
+number of chunks depending on the file size.
+
+### What was done
+- **B1 (blocking) — stray mode-tap wiped user input**: `SegmentedButton.onClick` fires even for
+  the already-selected segment, and `RestoreViewModel.setMode` unconditionally reset the whole UI
+  state (picked file, typed password, scan result). `setMode` is now a no-op when the mode is
+  unchanged. Existing test "setMode clears the single-file password" adjusted (it relied on the
+  same-mode reset); new test pins the guard.
+- **S1 — cancel was unresponsive during a single-file restore**: nothing inside
+  `decryptSingleFile`'s `withContext` block was cancellable, so a cancel waited for the *whole*
+  file to be decrypted before the cleanup ran. New `CancellationChunking` config on
+  `RestoreEngine` (default: threshold 100 MiB, chunk 50 MiB — the chunk *count* scales with the
+  file size): sources above the threshold are read through a `ChunkedCancellationInputStream`
+  that calls `ensureActive()` after every chunk, so a cancel aborts within one chunk of work.
+  The thrown `CancellationException` propagates through `Fvc1Cipher.decryptFile`
+  (`runCatchingAsResult` rethrows cancellation) into the existing cancellation-cleanup catch.
+  Sources at/below the threshold — and providers reporting no size (`length() == 0`) — keep the
+  old run-to-completion-then-clean-up behavior. Whole-folder restore is untouched (it already
+  checks `isActive` between files).
+- Tests: `FakeSingleFileProvider` gained an `onOpen` hook; the chunked-cancel test cancels the
+  job from the *output* document's `openFile` (i.e. mid-run, deterministically) and asserts via a
+  `RecordingCipher` that `decryptFile` was genuinely aborted mid-file — the outcome assertions
+  alone (cancelled + output deleted) would also pass via the old cancel-at-exit path. A second
+  test decrypts across several chunk boundaries to prove the wrapper doesn't corrupt the stream.
+
+### Verification
+`assembleDebug`, `test` (engine spec 12/12, ViewModel spec green), `detekt` — all clean.
+
+## 2026-07-16 — Review follow-up R1–R6: single-file restore robustness + UI polish
+
+### What was requested
+A fresh `/code-review` pass of `develop` vs `master` (the previous findings file was gone;
+all earlier findings B1–B4/S1/S2/S6 verified fixed first), then fix all six new findings
+R1–R6 from `review/develop.md`.
+
+### What was done
+- **R1 (blocking) — cancel left the decrypted file behind**: `RestoreEngine.decryptSingleFile`
+  is one uninterrupted blocking block, so a user cancel never interrupted it — `withContext`
+  discarded the (fully decrypted!) result and the plaintext silently remained at the picked
+  location. The engine now catches `CancellationException` around the `withContext`, deletes the
+  output under `NonCancellable + dispatchers.io`, and rethrows. Test uses
+  `launch(start = UNDISPATCHED)` + a `StandardTestDispatcher` io so the coroutine parks exactly
+  at the engine's `withContext` entry, then cancels.
+- **R2 — cleanup could delete a pre-existing file**: `ACTION_CREATE_DOCUMENT` returns an
+  *existing* document when the user confirms an overwrite; the unwritten-failure paths then
+  deleted data the restore never touched. Cleanup is now centralized in `decryptSingleFile`
+  (single cleanup point, incl. the previously uncleaned `source == null` guard) and gated by
+  `cleanUpSingleFileOutput`: delete only if the output stream was actually opened
+  (`onOutputOpened` callback threaded through `decryptEntryDetailed`/`copyEntry`/`withStreams`,
+  default no-op for the folder flow) or the document is still empty (freshly picker-created).
+  `decryptSingle`/`copySingle` no longer delete themselves.
+- **R3 — process death during the "Save as" round-trip**: mode + single-file selection now live
+  in `SavedStateHandle` (`restore.mode`, `restore.singleFile.*`); the password deliberately still
+  does not. After process death the picker result now runs normally; the empty password surfaces
+  as "wrong password" (with the output cleaned up per R2) instead of a silent no-op that
+  orphaned the picker-created zero-byte file. Koin: `viewModel { RestoreViewModel(get(), get()) }`
+  — Koin 4 injects `SavedStateHandle` for `koinViewModel()`-created VMs.
+- **R4** — progress dialog shows a new "Decrypting the file…" string in single-file mode instead
+  of the misleading "Verifying password…" (`RestoreProgressDialog` takes the `RestoreMode`).
+- **R5** — single-file results use dedicated success strings ("The file was decrypted and
+  saved." / "The file was not encrypted, so it was saved as an unchanged copy.") instead of the
+  counter-based folder message (`RestoreResultSection` takes the `RestoreMode`).
+- **R6** — `@StringRes` on `ExplanationSection`'s parameters.
+- `IRestoreEngine.decryptSingleFile` KDoc updated to the new cleanup contract (cancellation
+  cleans up; pre-existing untouched documents survive).
+- Tests: +4 engine cases (unwritten failure keeps pre-existing output ×2, wrong password deletes
+  an overwritten output, cancellation deletes the empty output), +3 ViewModel cases
+  (saved-state restore incl. password-not-persisted, reset/setMode clear the persistence).
+- `review/develop.md`: R1–R6 marked fixed.
+
+### Notes
+- Build gates green: `assembleDebug`, `test` (all green, incl. the 7 new cases), `detekt`.
+
+## 2026-07-16 — Review follow-up S2: header-based decrypt-vs-copy for single-file restore
+
+### What was requested
+Fix S1 and S2 from `review/develop.md`. S2 explicitly with a multi-stage approach: try to parse the
+file header; if that fails (for any reason), fall back to guessing by filename.
+
+### What was done
+- **S1** (`reset()` drops the selected mode): already fixed in the working tree
+  (`RestoreViewModel.reset` preserves `mode`, covered by the ViewModel test
+  "reset keeps the selected mode…") — verified, no change needed.
+- **S2** (`decryptSingleFile` decided decrypt-vs-copy solely by the `.crypt` suffix):
+  `RestoreEngine.decryptSingleFile` now decides in two stages. Stage 1 parses the FVC1 header
+  (`readHeader`) — a file whose header parses is decrypted regardless of its display name, so a
+  renamed/suffix-less encrypted file from an arbitrary SAF provider no longer gets its ciphertext
+  copied verbatim as a "successful" restore. Stage 2 (header does not parse, for any reason)
+  falls back to the `.crypt` suffix: a suffixed file is still treated as encrypted and fails with
+  "Cannot read file header" (plus output cleanup) rather than copying ciphertext; anything else is
+  copied verbatim as before.
+- The parsed header is passed into `decryptSingle`, which derives the key directly
+  (`cipher.deriveKey`) — no second header read, no pointless single-entry key cache.
+- `readHeader` gained a `warnOnFailure: Boolean = true` parameter: the single-file probe logs a
+  parse failure at **info** level (an expected outcome when the user picked a plain file), the
+  whole-folder path keeps the warning.
+- `review/develop.md`: S2 status updated to fixed.
+
+### Issues resolved
+- `LogPathRedactionArchitectureTest` flagged the new info log: it requires
+  `FileNameRedactor.redact` *inline in the same logger call* (a pre-redacted local named
+  `fileName` still matches the sensitive-identifier regex). Redaction inlined.
+- Post-fix code review (B4 in `review/develop.md`): the new info log interpolated `${e.message}`
+  verbatim — SAF exception messages routinely embed the content URI (file name included), and
+  `CrashlyticsSink.info` forwards breadcrumbs unredacted (BUG-3 class; invisible to the
+  architecture test). Wrapped in `FileNameRedactor.redactPathsIn`.
+
+### Follow-up (same day): S6 — Robolectric coverage for `decryptSingleFile`
+- New `RestoreEngineSingleFileTest` (first test of `RestoreEngine` at all): Robolectric +
+  `FakeSingleFileProvider`, a minimal SAF stand-in answering the display-name query, `openFile`
+  (backed by real temp files in `cacheDir`), and the hidden `android:deleteDocument` provider
+  call that `DocumentFile.delete()` issues — so streams, names and the post-failure output delete
+  all run through the real `DocumentFile` plumbing (pattern extends `ScopedStorageHelperTest`'s
+  fake provider).
+- Encrypted fixtures are hand-assembled **version-1** FVC1 blobs (no AAD, so a bare AES/GCM
+  cipher can produce the body) with `iterations = 1_000` in the header — the engine must derive
+  with the header's parameters (BUG-5), and the low count keeps PBKDF2 fast in tests (mirrors
+  `Fvc1CipherTest.buildBlob`).
+- 6 cases: renamed encrypted file (no `.crypt` suffix) decrypts — the S2 regression; nameless
+  document with valid header decrypts; suffixed file decrypts; plain file copies verbatim;
+  unparseable-header `.crypt` file fails with "Cannot read file header" and deletes the
+  pre-created output; wrong password → `InvalidPassword` and deletes the output.
+
+### Notes
+- Build gates green: `assembleDebug`, `test` (462 tests), `detekt`.
+
+## 2026-07-16 — Restore a single file (alongside whole-folder restore)
+
+### What was requested
+The Restore screen only supported restoring an entire downloaded backup folder. Add a second option
+to restore just **one** file, and let the user choose between the two modes.
+
+### Design (locked with the user)
+- **Mode switch** = a `SingleChoiceSegmentedButtonRow` toggle at the top of the existing Restore
+  screen (`Whole folder` / `Single file`) — one screen, both flows, maximum reuse. Switching modes
+  resets the screen state so the two flows never bleed into each other.
+- **Single-file output** = the system **"Save as"** picker (`CreateDocument`), pre-filled with the
+  decrypted filename (source display name, last path segment, `.crypt` stripped). No output-folder
+  step and no collision-policy dropdown — the picker owns destination + naming.
+
+### What was done
+- `domain/restore/RestoreMode.kt` (new): `WHOLE_FOLDER` / `SINGLE_FILE` enum with `@StringRes`
+  labels (mirrors `RestoreCollisionPolicy`).
+- `domain/restore/IRestoreEngine.kt`: added
+  `decryptSingleFile(sourceFileUri, outputFileUri, password): RestoreResult`.
+- `infrastructure/restore/RestoreEngine.kt`: implemented `decryptSingleFile` as a thin single-item
+  version of the `decryptAll` loop body, reusing `keyFor` / `decryptEntry` / `copyEntry` /
+  `deletePartialOutput`. A `.crypt` file is decrypted, anything else copied; on a decrypt failure it
+  deletes the partial output and returns `InvalidPassword` (a lone GCM tag failure can't be told
+  apart from tampering/corruption, and wrong password dominates — documented in KDoc).
+- `view/viewmodel/RestoreViewModel.kt`: added `mode`, `sourceFileUri`, `sourceFileName`,
+  `suggestedOutputName` to state; `setMode` (resets state), `setSourceFile`, `startSingleFileRestore`
+  (mirrors `startRestore`, reuses the same `restoreJob`/`cancel()` machinery). Suggested-name logic
+  lives in the ViewModel (the view layer may not depend on infrastructure's `RestorePathResolver`).
+- `view/screens/RestoreScreen.kt`: added the mode toggle and branched content into
+  `WholeFolderContent` (unchanged flow) vs `SingleFileContent` (pick file → password →
+  **Decrypt & save…**). SAF launchers extracted into `rememberRestoreLaunchActions` to keep
+  `RestoreScreen` under the `LongMethod` limit. Reuses the progress dialog and result section.
+- `strings.xml`: mode-toggle labels, single-file step headers, `button_decrypt_and_save`, and a
+  single-file explanation.
+- `app/src/test/.../view/RestoreViewModelTest.kt` (new): hand-written `FakeRestoreEngine` (per the
+  fake-behind-a-seam convention), covering mode switching/reset, source-file selection + suggested
+  name, engine delegation, and `Success`/`InvalidPassword` outcomes.
+- No DI changes (method added to the existing `IRestoreEngine`; ViewModel constructor unchanged).
+
+### Verify
+- `./gradlew assembleDebug` / `test` / `detekt` all green. Manual UI verification (screenshots) and
+  the `/code-review` pass are the remaining checkpoint hand-off items.
+
+### Review fixes (same day, second `/code-review` pass — blocking findings B1–B3)
+- **B1 — password now lives in the ViewModel** (`RestoreUiState.singleFilePassword` +
+  `setSingleFilePassword`, `startSingleFileRestore(outputFileUri)` reads it from state): plain
+  `remember` state did not survive the activity recreation caused by a configuration change while
+  the "Save as" picker was open, so the launcher callback ran the restore with an empty password
+  and the user saw "Wrong password". Deliberately not in `SavedStateHandle` — never persisted;
+  cleared by `setMode`/`reset`.
+- **B2 — only a GCM tag failure maps to `InvalidPassword`**: new `decryptEntryDetailed` returns
+  `BinaryResult<Unit, DecryptionError>` (the Boolean `decryptEntry` now delegates to it);
+  `decryptSingleFile` maps `INVALID_FILE`/`UNKNOWN`/stream failures to `Failure` instead. Matters
+  because the flow advertises picking the file straight off Google Drive, where transient I/O
+  errors are realistic and must not present as "wrong password".
+- **B3 — every single-file failure path deletes the pre-created output document** (the "Save as"
+  picker creates it before the engine runs): previously the unreadable-header path leaked a
+  zero-byte file that looked restored. `decryptSingleFile` restructured into
+  `decryptSingle`/`copySingle` helpers with a single cleanup point.
+- Tests updated/added in `RestoreViewModelTest` (password in state, cleared on mode switch/reset);
+  `assembleDebug` / full `test` / `detekt` green.
+
 ## 2026-07-15 — More reliable backup execution (exact-alarm trampoline + watchdog)
 
 ### What was requested

@@ -361,11 +361,36 @@
     <string name="restore_wrong_password">Wrong password. No files were modified.</string>
     <string name="restore_cancelled">Restore was cancelled.</string>
     <string name="restore_failed">Restore failed: %1$s</string>
+
+    <!-- Restore failure reasons (inserted into restore_failed) -->
+    <string name="restore_failure_source_folder">Cannot access the source folder</string>
+    <string name="restore_failure_output_folder">Cannot access the output folder</string>
+    <string name="restore_failure_source_file">Cannot access the selected file</string>
+    <string name="restore_failure_output_file">Cannot access the output file</string>
+    <string name="restore_failure_header_not_readable">Cannot read the file header</string>
+    <string name="restore_failure_invalid_encrypted_file">The file is not a valid encrypted backup file</string>
+    <string name="restore_failure_decryption">Failed to read or decrypt the file</string>
+    <string name="restore_failure_copy">Failed to copy the file</string>
     <string name="button_restore_start_over">Start over (clear selection)</string>
     <string name="dialog_restoring_title">Restoring…</string>
     <string name="restore_verifying_password">Verifying password…</string>
     <string name="restore_decrypting_progress">Decrypting %1$d / %2$d files</string>
     <string name="restore_failed_count">%1$d failed</string>
+
+    <!-- Restore mode toggle -->
+    <string name="restore_mode_whole_folder">Whole folder</string>
+    <string name="restore_mode_single_file">Single file</string>
+
+    <!-- Restore single file -->
+    <string name="restore_single_explanation_body">1. Pick one encrypted file. If the Google Drive app is installed, you can select it directly on Google Drive in the file picker — no download needed.\n2. Enter your backup password.\n3. Choose a destination folder. The decrypted file is saved there under its original name; if a file with that name already exists, a unique name (with a \"_restored\" suffix) is used so nothing is overwritten.</string>
+    <string name="restore_single_step1_header">Step 1: encrypted file</string>
+    <string name="restore_pick_encrypted_file">Pick encrypted file</string>
+    <string name="restore_single_file_selected">Selected: %1$s</string>
+    <string name="restore_single_step2_header">Step 2: password</string>
+    <string name="button_decrypt_and_save">Decrypt &amp; save to folder…</string>
+    <string name="restore_single_decrypting">Decrypting the file…</string>
+    <string name="restore_single_success_decrypted">The file was decrypted and saved.</string>
+    <string name="restore_single_success_copied">The file was not encrypted, so it was saved as an unchanged copy.</string>
 
     <!-- Restore collision policy display names -->
     <string name="collision_skip">Skip existing files</string>

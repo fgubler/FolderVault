@@ -1,9 +1,10 @@
 package ch.abwesend.foldervault.infrastructure.restore
 
+import ch.abwesend.foldervault.domain.crypto.Fvc1Header
 import ch.abwesend.foldervault.domain.restore.RestoreCollisionPolicy
 
 internal object RestorePathResolver {
-    private const val CRYPT_SUFFIX = ".crypt"
+    private const val CRYPT_SUFFIX = Fvc1Header.CRYPT_FILE_SUFFIX
     private const val RESTORE_SUFFIX = "_restored"
 
     fun outputRelativePath(inputPath: String, isCrypt: Boolean): String =

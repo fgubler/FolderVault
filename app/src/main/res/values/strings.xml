@@ -361,6 +361,16 @@
     <string name="restore_wrong_password">Wrong password. No files were modified.</string>
     <string name="restore_cancelled">Restore was cancelled.</string>
     <string name="restore_failed">Restore failed: %1$s</string>
+
+    <!-- Restore failure reasons (inserted into restore_failed) -->
+    <string name="restore_failure_source_folder">Cannot access the source folder</string>
+    <string name="restore_failure_output_folder">Cannot access the output folder</string>
+    <string name="restore_failure_source_file">Cannot access the selected file</string>
+    <string name="restore_failure_output_file">Cannot access the output file</string>
+    <string name="restore_failure_header_not_readable">Cannot read the file header</string>
+    <string name="restore_failure_invalid_encrypted_file">The file is not a valid encrypted backup file</string>
+    <string name="restore_failure_decryption">Failed to read or decrypt the file</string>
+    <string name="restore_failure_copy">Failed to copy the file</string>
     <string name="button_restore_start_over">Start over (clear selection)</string>
     <string name="dialog_restoring_title">Restoring…</string>
     <string name="restore_verifying_password">Verifying password…</string>

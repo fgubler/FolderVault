@@ -11,6 +11,7 @@ import ch.abwesend.foldervault.domain.logging.FileNameRedactor
 import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.restore.IRestoreEngine
 import ch.abwesend.foldervault.domain.restore.RestoreCollisionPolicy
+import ch.abwesend.foldervault.domain.restore.RestoreFailureReason
 import ch.abwesend.foldervault.domain.restore.RestoreProgress
 import ch.abwesend.foldervault.domain.restore.RestoreResult
 import ch.abwesend.foldervault.domain.restore.RestoreScanResult
@@ -132,13 +133,13 @@ class RestoreEngine(
         onProgress: (RestoreProgress) -> Unit,
     ): RestoreResult = withContext(dispatchers.io) {
         val outputRoot = DocumentFile.fromTreeUri(context, Uri.parse(outputUri))
-            ?: return@withContext RestoreResult.Failure("Cannot access output folder")
+            ?: return@withContext RestoreResult.Failure(RestoreFailureReason.OUTPUT_FOLDER_NOT_ACCESSIBLE)
 
         val files = mutableListOf<SourceFileEntry>()
         val accessible = ScopedStorageHelper.walkTree(context, Uri.parse(sourceUri)) { relPath, doc ->
             files.add(SourceFileEntry(relPath, doc))
         }
-        if (!accessible) return@withContext RestoreResult.Failure("Cannot access source folder")
+        if (!accessible) return@withContext RestoreResult.Failure(RestoreFailureReason.SOURCE_FOLDER_NOT_ACCESSIBLE)
 
         if (files.isEmpty()) return@withContext RestoreResult.Success(0, 0, 0, 0)
 
@@ -220,14 +221,15 @@ class RestoreEngine(
         password: String,
     ): RestoreResult {
         var outputWritten = false
+        var cleanedUp = false
         val markOutputWritten = { outputWritten = true }
         return try {
             withContext(dispatchers.io) {
                 val source = DocumentFile.fromSingleUri(context, Uri.parse(sourceFileUri))
                 val output = DocumentFile.fromSingleUri(context, Uri.parse(outputFileUri))
                 val result = when {
-                    source == null -> RestoreResult.Failure("Cannot access source file")
-                    output == null -> RestoreResult.Failure("Cannot access output file")
+                    source == null -> RestoreResult.Failure(RestoreFailureReason.SOURCE_FILE_NOT_ACCESSIBLE)
+                    output == null -> RestoreResult.Failure(RestoreFailureReason.OUTPUT_FILE_NOT_ACCESSIBLE)
                     else -> {
                         val wrapInput = singleFileCancellationWrapper(source.length()) { ensureActive() }
                         val header = readHeader(source, warnOnFailure = false)
@@ -240,13 +242,18 @@ class RestoreEngine(
                 }
                 if (result !is RestoreResult.Success && output != null) {
                     cleanUpSingleFileOutput(output, outputWritten)
+                    cleanedUp = true
                 }
                 result
             }
         } catch (e: CancellationException) {
-            withContext(NonCancellable + dispatchers.io) {
-                DocumentFile.fromSingleUri(context, Uri.parse(outputFileUri))
-                    ?.let { cleanUpSingleFileOutput(it, outputWritten) }
+            // A failure result followed by a cancel at the withContext exit would otherwise clean
+            // up twice — the second delete of the already-removed document only logs a warning.
+            if (!cleanedUp) {
+                withContext(NonCancellable + dispatchers.io) {
+                    DocumentFile.fromSingleUri(context, Uri.parse(outputFileUri))
+                        ?.let { cleanUpSingleFileOutput(it, outputWritten) }
+                }
             }
             throw e
         }
@@ -267,14 +274,14 @@ class RestoreEngine(
         wrapInput: (InputStream) -> InputStream,
     ): RestoreResult =
         if (header == null) {
-            RestoreResult.Failure("Cannot read file header")
+            RestoreResult.Failure(RestoreFailureReason.FILE_HEADER_NOT_READABLE)
         } else {
             val key = cipher.deriveKey(password, header.salt, header.iterations)
             when (decryptEntryDetailed(source, output, key, onOutputOpened, wrapInput).getErrorOrNull()) {
                 null -> RestoreResult.Success(decrypted = 1, copied = 0, skipped = 0, failed = 0)
                 DecryptionError.INVALID_PASSWORD -> RestoreResult.InvalidPassword
-                DecryptionError.INVALID_FILE -> RestoreResult.Failure("The file is not a valid encrypted backup file")
-                DecryptionError.UNKNOWN -> RestoreResult.Failure("Failed to read or decrypt the file")
+                DecryptionError.INVALID_FILE -> RestoreResult.Failure(RestoreFailureReason.INVALID_ENCRYPTED_FILE)
+                DecryptionError.UNKNOWN -> RestoreResult.Failure(RestoreFailureReason.DECRYPTION_FAILED)
             }
         }
 
@@ -288,7 +295,7 @@ class RestoreEngine(
         if (copyEntry(source, output, onOutputOpened, wrapInput)) {
             RestoreResult.Success(decrypted = 0, copied = 1, skipped = 0, failed = 0)
         } else {
-            RestoreResult.Failure("Failed to copy file")
+            RestoreResult.Failure(RestoreFailureReason.COPY_FAILED)
         }
 
     /**

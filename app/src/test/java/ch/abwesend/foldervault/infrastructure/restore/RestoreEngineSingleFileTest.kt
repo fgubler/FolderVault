@@ -15,6 +15,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.crypto.DecryptionError
 import ch.abwesend.foldervault.domain.crypto.IFvc1Cipher
+import ch.abwesend.foldervault.domain.restore.RestoreFailureReason
 import ch.abwesend.foldervault.domain.restore.RestoreResult
 import ch.abwesend.foldervault.domain.result.BinaryResult
 import ch.abwesend.foldervault.infrastructure.crypto.Fvc1Cipher
@@ -81,6 +82,7 @@ class RestoreEngineSingleFileTest {
     fun setUp() {
         FakeSingleFileProvider.documents.clear()
         FakeSingleFileProvider.onOpen = null
+        FakeSingleFileProvider.deleteCallCount = 0
         Robolectric.setupContentProvider(FakeSingleFileProvider::class.java, AUTHORITY)
     }
 
@@ -140,7 +142,7 @@ class RestoreEngineSingleFileTest {
         val result = engine.decryptSingleFile(source.uri.toString(), output.uri.toString(), PASSWORD)
 
         assertIs<RestoreResult.Failure>(result)
-        assertEquals("Cannot read file header", result.message)
+        assertEquals(RestoreFailureReason.FILE_HEADER_NOT_READABLE, result.reason)
         assertFalse(output.file.exists(), "the pre-created output document must be deleted on failure")
     }
 
@@ -233,6 +235,27 @@ class RestoreEngineSingleFileTest {
         assertTrue(job.isCancelled, "the restore coroutine must end cancelled, not complete normally")
         assertFalse(recordingCipher.decryptFileReturned, "the decrypt must be aborted mid-file, not run to the end")
         assertFalse(output.file.exists(), "the output must be deleted when the decrypt is aborted mid-file")
+    }
+
+    @Test
+    fun `a cancel arriving after an in-block failure cleans the output up only once`() = runTest {
+        // Cancelling while the block runs (from the source document's openFile) lets the block
+        // finish with a failure result and clean up in-block; the CancellationException thrown at
+        // the withContext exit must then NOT clean up a second time (review N1) — the redundant
+        // delete of the already-removed document would only log a spurious warning.
+        val source = addDocument("src", "broken.txt.crypt", "definitely not an FVC1 file".toByteArray())
+        val output = addDocument("out", "broken.txt", ByteArray(0))
+
+        lateinit var job: Job
+        FakeSingleFileProvider.onOpen = { documentId -> if (documentId == "src") job.cancel() }
+        job = launch {
+            engine.decryptSingleFile(source.uri.toString(), output.uri.toString(), PASSWORD)
+        }
+        job.join()
+
+        assertTrue(job.isCancelled, "the restore coroutine must end cancelled")
+        assertFalse(output.file.exists(), "the pre-created output document must still be deleted")
+        assertEquals(1, FakeSingleFileProvider.deleteCallCount, "cleanup must not run a second time")
     }
 
     @Test
@@ -365,6 +388,7 @@ private class FakeSingleFileProvider : ContentProvider() {
             @Suppress("DEPRECATION")
             val uri = extras?.getParcelable<Uri>(EXTRA_URI) ?: error("deleteDocument without uri")
             val documentId = DocumentsContract.getDocumentId(uri)
+            deleteCallCount++
             documents.remove(documentId)?.file?.delete()
             Bundle.EMPTY
         } else {
@@ -386,6 +410,9 @@ private class FakeSingleFileProvider : ContentProvider() {
 
         /** Test hook invoked with the document id whenever a document is opened for streaming. */
         var onOpen: ((String) -> Unit)? = null
+
+        /** Number of deleteDocument provider calls, to detect redundant double cleanups. */
+        var deleteCallCount = 0
 
         /** Hidden `DocumentsContract.METHOD_DELETE_DOCUMENT` / `EXTRA_URI` values. */
         private const val METHOD_DELETE_DOCUMENT = "android:deleteDocument"

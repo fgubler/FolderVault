@@ -521,7 +521,7 @@ private fun RestoreResultSection(mode: RestoreMode, result: RestoreResult, onRes
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         is RestoreResult.Failure -> Text(
-            stringResource(R.string.restore_failed, result.message),
+            stringResource(R.string.restore_failed, stringResource(result.reason.messageResId)),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.error,
         )

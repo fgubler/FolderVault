@@ -7,6 +7,34 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-16 — Review follow-up N1/N2: single cleanup + typed restore-failure reasons
+
+### What was requested
+Fix the two remaining nitpicks from `review/develop.md`: N1 (double cleanup on cancellation logs
+a spurious warning) and N2 (user-facing restore failure messages hardcoded in English inside the
+engine).
+
+### What was done
+- **N1 — double cleanup**: when `decryptSingleFile`'s block finished with a failure (in-block
+  cleanup ran) *and* a cancel arrived before the `withContext` exit, the `CancellationException`
+  catch cleaned up a second time — the delete of the already-removed document failed and logged
+  "Could not delete partial output". A `cleanedUp` flag set after the in-block cleanup now makes
+  the catch skip it. Regression test cancels from the *source* document's `openFile` (so the
+  block completes with a failure while already cancelled) and asserts via a new
+  `deleteCallCount` on `FakeSingleFileProvider` that exactly one delete reaches the provider.
+  Pitfall found while writing it: with `CoroutineStart.UNDISPATCHED` the `onOpen` hook fires
+  before the `lateinit job` is assigned — plain `launch` is required for this test's ordering.
+- **N2 — typed failure reasons**: `RestoreResult.Failure(message: String)` became
+  `Failure(reason: RestoreFailureReason)` — a new domain enum with `@StringRes messageResId`
+  following the established `RestoreCollisionPolicy`/`RestoreMode` pattern (domain enums carry
+  string-resource ids in this single-module app). Eight values cover all engine failure sites,
+  including the whole-folder flow's source/output-folder failures. `RestoreResultSection`
+  resolves the reason via `stringResource` into the existing `restore_failed` format string;
+  the eight message texts moved to `strings.xml`.
+
+### Verification
+`assembleDebug`, `test` (477 tests, engine spec 13/13), `detekt` — all clean.
+
 ## 2026-07-16 — Review follow-up S2/S3: double-start guard + password hygiene
 
 ### What was requested

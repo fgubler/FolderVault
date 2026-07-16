@@ -16,8 +16,12 @@ interface IRestoreEngine {
      * the system "Save as" picker). No collision policy is needed because the picker chose the exact
      * target. Returns [RestoreResult.Success] with `decrypted = 1` (or `copied = 1` for a plain
      * file), [RestoreResult.InvalidPassword] only when decryption fails on the GCM tag check (a
-     * wrong password), or [RestoreResult.Failure] for unreadable, corrupt or uncopyable files. On
-     * any failure the pre-created output document is deleted again.
+     * wrong password), or [RestoreResult.Failure] for unreadable, corrupt or uncopyable files.
+     *
+     * On any failure — and on cancellation, which cannot interrupt the work mid-file and would
+     * otherwise silently leave fully decrypted plaintext behind — the output document is deleted
+     * again, unless it is a pre-existing document the user picked via "overwrite" that was never
+     * actually written to (deleting that would destroy data the restore never touched).
      */
     suspend fun decryptSingleFile(
         sourceFileUri: String,

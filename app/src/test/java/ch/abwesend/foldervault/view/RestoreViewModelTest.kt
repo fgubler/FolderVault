@@ -1,5 +1,6 @@
 package ch.abwesend.foldervault.view
 
+import androidx.lifecycle.SavedStateHandle
 import ch.abwesend.foldervault.domain.logging.ILogger
 import ch.abwesend.foldervault.domain.logging.LoggerProvider
 import ch.abwesend.foldervault.domain.restore.IRestoreEngine
@@ -71,7 +72,7 @@ class RestoreViewModelTest : StringSpec({
     }
 
     "setMode switches mode and clears any prior selection" {
-        val viewModel = RestoreViewModel(FakeRestoreEngine())
+        val viewModel = RestoreViewModel(FakeRestoreEngine(), SavedStateHandle())
         viewModel.setSourceFile("content://src", "report.pdf.crypt")
 
         viewModel.setMode(RestoreMode.SINGLE_FILE)
@@ -84,7 +85,7 @@ class RestoreViewModelTest : StringSpec({
     }
 
     "setSourceFile records the file, suggests a decrypted name, and marks it ready" {
-        val viewModel = RestoreViewModel(FakeRestoreEngine())
+        val viewModel = RestoreViewModel(FakeRestoreEngine(), SavedStateHandle())
 
         viewModel.setSourceFile("content://src", "sub/report.pdf.crypt")
 
@@ -96,7 +97,7 @@ class RestoreViewModelTest : StringSpec({
     }
 
     "setSourceFile keeps a plain (non-crypt) name as the suggestion" {
-        val viewModel = RestoreViewModel(FakeRestoreEngine())
+        val viewModel = RestoreViewModel(FakeRestoreEngine(), SavedStateHandle())
 
         viewModel.setSourceFile("content://src", "notes.txt")
 
@@ -105,7 +106,7 @@ class RestoreViewModelTest : StringSpec({
 
     "startSingleFileRestore delegates the picked source, output and password to the engine" {
         val engine = FakeRestoreEngine()
-        val viewModel = RestoreViewModel(engine)
+        val viewModel = RestoreViewModel(engine, SavedStateHandle())
         viewModel.setSourceFile("content://src", "report.pdf.crypt")
         viewModel.setSingleFilePassword("secret")
 
@@ -117,7 +118,7 @@ class RestoreViewModelTest : StringSpec({
     }
 
     "startSingleFileRestore lands on Done(Success) on a successful decrypt" {
-        val viewModel = RestoreViewModel(FakeRestoreEngine(RestoreResult.Success(1, 0, 0, 0)))
+        val viewModel = RestoreViewModel(FakeRestoreEngine(RestoreResult.Success(1, 0, 0, 0)), SavedStateHandle())
         viewModel.setSourceFile("content://src", "report.pdf.crypt")
         viewModel.setSingleFilePassword("secret")
 
@@ -129,7 +130,7 @@ class RestoreViewModelTest : StringSpec({
     }
 
     "startSingleFileRestore surfaces InvalidPassword as the result" {
-        val viewModel = RestoreViewModel(FakeRestoreEngine(RestoreResult.InvalidPassword))
+        val viewModel = RestoreViewModel(FakeRestoreEngine(RestoreResult.InvalidPassword), SavedStateHandle())
         viewModel.setSourceFile("content://src", "report.pdf.crypt")
         viewModel.setSingleFilePassword("wrong")
 
@@ -141,7 +142,7 @@ class RestoreViewModelTest : StringSpec({
     }
 
     "setSingleFilePassword keeps the password in the ui state" {
-        val viewModel = RestoreViewModel(FakeRestoreEngine())
+        val viewModel = RestoreViewModel(FakeRestoreEngine(), SavedStateHandle())
 
         viewModel.setSingleFilePassword("secret")
 
@@ -149,7 +150,7 @@ class RestoreViewModelTest : StringSpec({
     }
 
     "setMode clears the single-file password" {
-        val viewModel = RestoreViewModel(FakeRestoreEngine())
+        val viewModel = RestoreViewModel(FakeRestoreEngine(), SavedStateHandle())
         viewModel.setSingleFilePassword("secret")
 
         viewModel.setMode(RestoreMode.WHOLE_FOLDER)
@@ -158,7 +159,7 @@ class RestoreViewModelTest : StringSpec({
     }
 
     "reset clears the single-file password" {
-        val viewModel = RestoreViewModel(FakeRestoreEngine())
+        val viewModel = RestoreViewModel(FakeRestoreEngine(), SavedStateHandle())
         viewModel.setMode(RestoreMode.SINGLE_FILE)
         viewModel.setSingleFilePassword("secret")
 
@@ -168,7 +169,7 @@ class RestoreViewModelTest : StringSpec({
     }
 
     "reset keeps the selected mode so Start over does not flip flows" {
-        val viewModel = RestoreViewModel(FakeRestoreEngine())
+        val viewModel = RestoreViewModel(FakeRestoreEngine(), SavedStateHandle())
         viewModel.setMode(RestoreMode.SINGLE_FILE)
         viewModel.setSourceFile("content://src", "report.pdf.crypt")
 
@@ -182,11 +183,59 @@ class RestoreViewModelTest : StringSpec({
 
     "startSingleFileRestore without a picked source does nothing" {
         val engine = FakeRestoreEngine()
-        val viewModel = RestoreViewModel(engine)
+        val viewModel = RestoreViewModel(engine, SavedStateHandle())
 
         viewModel.startSingleFileRestore("content://out")
 
         engine.singleFileSourceUri shouldBe null
         viewModel.uiState.value.state shouldBe RestoreState.Idle
+    }
+
+    "the mode and single-file selection survive process death via SavedStateHandle, the password does not" {
+        val handle = SavedStateHandle()
+        val before = RestoreViewModel(FakeRestoreEngine(), handle)
+        before.setMode(RestoreMode.SINGLE_FILE)
+        before.setSourceFile("content://src", "report.pdf.crypt")
+        before.setSingleFilePassword("secret")
+
+        // A new ViewModel over the same handle simulates recreation after process death.
+        val after = RestoreViewModel(FakeRestoreEngine(), handle)
+
+        val state = after.uiState.value
+        state.mode shouldBe RestoreMode.SINGLE_FILE
+        state.sourceFileUri shouldBe "content://src"
+        state.sourceFileName shouldBe "report.pdf.crypt"
+        state.suggestedOutputName shouldBe "report.pdf"
+        state.state shouldBe RestoreState.SourceReady
+        state.singleFilePassword shouldBe ""
+    }
+
+    "reset clears the persisted selection so process death cannot resurrect it" {
+        val handle = SavedStateHandle()
+        val before = RestoreViewModel(FakeRestoreEngine(), handle)
+        before.setMode(RestoreMode.SINGLE_FILE)
+        before.setSourceFile("content://src", "report.pdf.crypt")
+        before.reset()
+
+        val after = RestoreViewModel(FakeRestoreEngine(), handle)
+
+        val state = after.uiState.value
+        state.mode shouldBe RestoreMode.SINGLE_FILE
+        state.sourceFileUri shouldBe null
+        state.state shouldBe RestoreState.Idle
+    }
+
+    "setMode clears the persisted selection of the previous mode" {
+        val handle = SavedStateHandle()
+        val before = RestoreViewModel(FakeRestoreEngine(), handle)
+        before.setMode(RestoreMode.SINGLE_FILE)
+        before.setSourceFile("content://src", "report.pdf.crypt")
+        before.setMode(RestoreMode.WHOLE_FOLDER)
+
+        val after = RestoreViewModel(FakeRestoreEngine(), handle)
+
+        val state = after.uiState.value
+        state.mode shouldBe RestoreMode.WHOLE_FOLDER
+        state.sourceFileUri shouldBe null
     }
 })

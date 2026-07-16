@@ -7,6 +7,51 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-16 — Review follow-up R1–R6: single-file restore robustness + UI polish
+
+### What was requested
+A fresh `/code-review` pass of `develop` vs `master` (the previous findings file was gone;
+all earlier findings B1–B4/S1/S2/S6 verified fixed first), then fix all six new findings
+R1–R6 from `review/develop.md`.
+
+### What was done
+- **R1 (blocking) — cancel left the decrypted file behind**: `RestoreEngine.decryptSingleFile`
+  is one uninterrupted blocking block, so a user cancel never interrupted it — `withContext`
+  discarded the (fully decrypted!) result and the plaintext silently remained at the picked
+  location. The engine now catches `CancellationException` around the `withContext`, deletes the
+  output under `NonCancellable + dispatchers.io`, and rethrows. Test uses
+  `launch(start = UNDISPATCHED)` + a `StandardTestDispatcher` io so the coroutine parks exactly
+  at the engine's `withContext` entry, then cancels.
+- **R2 — cleanup could delete a pre-existing file**: `ACTION_CREATE_DOCUMENT` returns an
+  *existing* document when the user confirms an overwrite; the unwritten-failure paths then
+  deleted data the restore never touched. Cleanup is now centralized in `decryptSingleFile`
+  (single cleanup point, incl. the previously uncleaned `source == null` guard) and gated by
+  `cleanUpSingleFileOutput`: delete only if the output stream was actually opened
+  (`onOutputOpened` callback threaded through `decryptEntryDetailed`/`copyEntry`/`withStreams`,
+  default no-op for the folder flow) or the document is still empty (freshly picker-created).
+  `decryptSingle`/`copySingle` no longer delete themselves.
+- **R3 — process death during the "Save as" round-trip**: mode + single-file selection now live
+  in `SavedStateHandle` (`restore.mode`, `restore.singleFile.*`); the password deliberately still
+  does not. After process death the picker result now runs normally; the empty password surfaces
+  as "wrong password" (with the output cleaned up per R2) instead of a silent no-op that
+  orphaned the picker-created zero-byte file. Koin: `viewModel { RestoreViewModel(get(), get()) }`
+  — Koin 4 injects `SavedStateHandle` for `koinViewModel()`-created VMs.
+- **R4** — progress dialog shows a new "Decrypting the file…" string in single-file mode instead
+  of the misleading "Verifying password…" (`RestoreProgressDialog` takes the `RestoreMode`).
+- **R5** — single-file results use dedicated success strings ("The file was decrypted and
+  saved." / "The file was not encrypted, so it was saved as an unchanged copy.") instead of the
+  counter-based folder message (`RestoreResultSection` takes the `RestoreMode`).
+- **R6** — `@StringRes` on `ExplanationSection`'s parameters.
+- `IRestoreEngine.decryptSingleFile` KDoc updated to the new cleanup contract (cancellation
+  cleans up; pre-existing untouched documents survive).
+- Tests: +4 engine cases (unwritten failure keeps pre-existing output ×2, wrong password deletes
+  an overwritten output, cancellation deletes the empty output), +3 ViewModel cases
+  (saved-state restore incl. password-not-persisted, reset/setMode clear the persistence).
+- `review/develop.md`: R1–R6 marked fixed.
+
+### Notes
+- Build gates green: `assembleDebug`, `test` (all green, incl. the 7 new cases), `detekt`.
+
 ## 2026-07-16 — Review follow-up S2: header-based decrypt-vs-copy for single-file restore
 
 ### What was requested

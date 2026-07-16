@@ -378,6 +378,9 @@
     <string name="restore_single_file_selected">Selected: %1$s</string>
     <string name="restore_single_step2_header">Step 2: password</string>
     <string name="button_decrypt_and_save">Decrypt &amp; save…</string>
+    <string name="restore_single_decrypting">Decrypting the file…</string>
+    <string name="restore_single_success_decrypted">The file was decrypted and saved.</string>
+    <string name="restore_single_success_copied">The file was not encrypted, so it was saved as an unchanged copy.</string>
 
     <!-- Restore collision policy display names -->
     <string name="collision_skip">Skip existing files</string>

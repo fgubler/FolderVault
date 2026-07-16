@@ -1,5 +1,6 @@
 package ch.abwesend.foldervault.view.viewmodel
 
+import androidx.lifecycle.SavedStateHandle
 import ch.abwesend.foldervault.domain.restore.IRestoreEngine
 import ch.abwesend.foldervault.domain.restore.RestoreCollisionPolicy
 import ch.abwesend.foldervault.domain.restore.RestoreMode
@@ -35,22 +36,57 @@ data class RestoreUiState(
     val singleFilePassword: String = "",
 )
 
-class RestoreViewModel(private val engine: IRestoreEngine) : BaseViewModel() {
+/**
+ * The restore mode and the single-file selection survive process death via [SavedStateHandle]:
+ * the "Save as" picker round-trip leaves the app in the background, and if the process is killed
+ * there, the picker result still arrives at the recreated activity — without the restored
+ * selection it would be a silent no-op that leaves the picker-created empty document orphaned.
+ * The password is deliberately NOT saved (see [setSingleFilePassword]); after process death the
+ * restore runs with the empty password and surfaces as "wrong password", prompting re-entry.
+ */
+class RestoreViewModel(
+    private val engine: IRestoreEngine,
+    private val savedStateHandle: SavedStateHandle,
+) : BaseViewModel() {
 
-    private val _uiState = MutableStateFlow(RestoreUiState())
+    private val _uiState = MutableStateFlow(restoredUiState())
     val uiState: StateFlow<RestoreUiState> = _uiState.asStateFlow()
 
     private var restoreJob: Job? = null
+
+    /** Rebuilds the saved-state-backed part of the UI state after process death. */
+    private fun restoredUiState(): RestoreUiState {
+        val mode = savedStateHandle.get<String>(KEY_MODE)
+            ?.let { saved -> RestoreMode.entries.find { it.name == saved } }
+            ?: RestoreMode.WHOLE_FOLDER
+        val sourceFileUri = savedStateHandle.get<String>(KEY_SOURCE_FILE_URI)
+        val sourceFileName = savedStateHandle.get<String>(KEY_SOURCE_FILE_NAME)
+        return RestoreUiState(
+            mode = mode,
+            sourceFileUri = sourceFileUri,
+            sourceFileName = sourceFileName,
+            suggestedOutputName = sourceFileName?.let { suggestedOutputName(it) },
+            state = if (sourceFileUri != null) RestoreState.SourceReady else RestoreState.Idle,
+        )
+    }
+
+    private fun persistSingleFileSelection(uri: String?, name: String?) {
+        savedStateHandle[KEY_SOURCE_FILE_URI] = uri
+        savedStateHandle[KEY_SOURCE_FILE_NAME] = name
+    }
 
     /** Switches restore mode, discarding any half-finished selection so the two flows stay separate. */
     fun setMode(mode: RestoreMode) {
         restoreJob?.cancel()
         restoreJob = null
+        savedStateHandle[KEY_MODE] = mode.name
+        persistSingleFileSelection(uri = null, name = null)
         _uiState.value = RestoreUiState(mode = mode)
     }
 
     /** Records the single file the user picked and marks the source as ready. */
     fun setSourceFile(uri: String, name: String) {
+        persistSingleFileSelection(uri = uri, name = name)
         _uiState.update {
             it.copy(
                 sourceFileUri = uri,
@@ -182,7 +218,14 @@ class RestoreViewModel(private val engine: IRestoreEngine) : BaseViewModel() {
     fun reset() {
         restoreJob?.cancel()
         restoreJob = null
+        persistSingleFileSelection(uri = null, name = null)
         // Keep the selected mode so "Start over" clears the selection without flipping flows.
         _uiState.value = RestoreUiState(mode = _uiState.value.mode)
+    }
+
+    private companion object {
+        private const val KEY_MODE = "restore.mode"
+        private const val KEY_SOURCE_FILE_URI = "restore.singleFile.sourceUri"
+        private const val KEY_SOURCE_FILE_NAME = "restore.singleFile.sourceName"
     }
 }

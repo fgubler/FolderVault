@@ -3,6 +3,7 @@ package ch.abwesend.foldervault.view.screens
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -78,7 +79,7 @@ fun RestoreScreen(
     )
 
     if (uiState.state is RestoreState.Running) {
-        RestoreProgressDialog(progress = uiState.progress, onCancel = viewModel::cancel)
+        RestoreProgressDialog(mode = uiState.mode, progress = uiState.progress, onCancel = viewModel::cancel)
     }
 
     Scaffold(
@@ -292,7 +293,7 @@ private fun WholeFolderContent(
 
     if (state is RestoreState.Done) {
         HorizontalDivider()
-        RestoreResultSection(result = state.result, onReset = onReset)
+        RestoreResultSection(mode = RestoreMode.WHOLE_FOLDER, result = state.result, onReset = onReset)
     }
 }
 
@@ -327,13 +328,13 @@ private fun SingleFileContent(
 
     if (state is RestoreState.Done) {
         HorizontalDivider()
-        RestoreResultSection(result = state.result, onReset = onReset)
+        RestoreResultSection(mode = RestoreMode.SINGLE_FILE, result = state.result, onReset = onReset)
     }
 }
 
 @Suppress("MultipleEmitters")
 @Composable
-private fun ExplanationSection(titleRes: Int, bodyRes: Int) {
+private fun ExplanationSection(@StringRes titleRes: Int, @StringRes bodyRes: Int) {
     Text(stringResource(titleRes), style = MaterialTheme.typography.titleSmall)
     Text(
         stringResource(bodyRes),
@@ -486,16 +487,26 @@ private fun SingleFilePasswordSection(
 
 @Suppress("MultipleEmitters")
 @Composable
-private fun RestoreResultSection(result: RestoreResult, onReset: () -> Unit) {
+private fun RestoreResultSection(mode: RestoreMode, result: RestoreResult, onReset: () -> Unit) {
     Text(stringResource(R.string.restore_result_header), style = MaterialTheme.typography.labelLarge)
     when (result) {
         is RestoreResult.Success -> {
-            val msg = buildString {
-                append(stringResource(R.string.restore_success_base, result.decrypted))
-                if (result.copied > 0) append(stringResource(R.string.restore_success_and_copied, result.copied))
-                if (result.skipped > 0) append(stringResource(R.string.restore_success_and_skipped, result.skipped))
-                if (result.failed > 0) append(stringResource(R.string.restore_success_and_failed, result.failed))
-                append(".")
+            // The single-file flow handled exactly one file — the counter-based folder message
+            // ("Restored 0 encrypted file(s), copied 1 plain file(s).") would read oddly here.
+            val msg = if (mode == RestoreMode.SINGLE_FILE) {
+                if (result.copied > 0) {
+                    stringResource(R.string.restore_single_success_copied)
+                } else {
+                    stringResource(R.string.restore_single_success_decrypted)
+                }
+            } else {
+                buildString {
+                    append(stringResource(R.string.restore_success_base, result.decrypted))
+                    if (result.copied > 0) append(stringResource(R.string.restore_success_and_copied, result.copied))
+                    if (result.skipped > 0) append(stringResource(R.string.restore_success_and_skipped, result.skipped))
+                    if (result.failed > 0) append(stringResource(R.string.restore_success_and_failed, result.failed))
+                    append(".")
+                }
             }
             Text(msg, style = MaterialTheme.typography.bodyMedium)
         }
@@ -522,15 +533,22 @@ private fun RestoreResultSection(result: RestoreResult, onReset: () -> Unit) {
 }
 
 @Composable
-private fun RestoreProgressDialog(progress: RestoreProgress?, onCancel: () -> Unit) {
+private fun RestoreProgressDialog(mode: RestoreMode, progress: RestoreProgress?, onCancel: () -> Unit) {
     AlertDialog(
         onDismissRequest = {},
         title = { Text(stringResource(R.string.dialog_restoring_title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (progress == null || progress.total == 0) {
+                    // The single-file flow never reports progress, so this branch covers its whole
+                    // (potentially long) run — "Verifying password" would be misleading there.
+                    val textRes = if (mode == RestoreMode.SINGLE_FILE) {
+                        R.string.restore_single_decrypting
+                    } else {
+                        R.string.restore_verifying_password
+                    }
                     Text(
-                        stringResource(R.string.restore_verifying_password),
+                        stringResource(textRes),
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())

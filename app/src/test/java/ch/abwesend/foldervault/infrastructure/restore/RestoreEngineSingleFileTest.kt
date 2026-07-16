@@ -15,7 +15,11 @@ import androidx.test.platform.app.InstrumentationRegistry
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.restore.RestoreResult
 import ch.abwesend.foldervault.infrastructure.crypto.Fvc1Cipher
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.Before
@@ -53,11 +57,13 @@ class RestoreEngineSingleFileTest {
     private val cipher = Fvc1Cipher()
 
     private val testDispatcher = UnconfinedTestDispatcher()
-    private val dispatchers = object : IDispatchers {
-        override val default = testDispatcher
-        override val io = testDispatcher
-        override val main = testDispatcher
-        override val mainImmediate = testDispatcher
+    private val dispatchers = dispatchersOf(testDispatcher)
+
+    private fun dispatchersOf(dispatcher: CoroutineDispatcher): IDispatchers = object : IDispatchers {
+        override val default = dispatcher
+        override val io = dispatcher
+        override val main = dispatcher
+        override val mainImmediate = dispatcher
     }
 
     private val engine = RestoreEngine(context, cipher, dispatchers)
@@ -138,6 +144,62 @@ class RestoreEngineSingleFileTest {
 
         assertEquals(RestoreResult.InvalidPassword, result)
         assertFalse(output.file.exists(), "the pre-created output document must be deleted on failure")
+    }
+
+    @Test
+    fun `a failure before any write keeps a pre-existing non-empty output`() = runTest {
+        // "Save as" may return an EXISTING document the user chose to overwrite (review R2).
+        // When the restore fails without ever writing, deleting it would destroy that data.
+        val existingContent = "precious pre-existing content".toByteArray()
+        val source = addDocument("src", "broken.txt.crypt", "definitely not an FVC1 file".toByteArray())
+        val output = addDocument("out", "broken.txt", existingContent)
+
+        val result = engine.decryptSingleFile(source.uri.toString(), output.uri.toString(), PASSWORD)
+
+        assertIs<RestoreResult.Failure>(result)
+        assertContentEquals(existingContent, output.file.readBytes(), "the untouched document must survive")
+    }
+
+    @Test
+    fun `a failed copy keeps a pre-existing non-empty output that was never written`() = runTest {
+        val existingContent = "precious pre-existing content".toByteArray()
+        val source = addDocument("src", "notes.txt", "plain".toByteArray())
+        source.file.delete() // makes opening the source stream fail before the output is touched
+        val output = addDocument("out", "notes.txt", existingContent)
+
+        val result = engine.decryptSingleFile(source.uri.toString(), output.uri.toString(), PASSWORD)
+
+        assertIs<RestoreResult.Failure>(result)
+        assertContentEquals(existingContent, output.file.readBytes(), "the untouched document must survive")
+    }
+
+    @Test
+    fun `a wrong password deletes even a pre-existing output because it was already overwritten`() = runTest {
+        val source = addDocument("src", "report.pdf.crypt", encryptedBlob(PASSWORD))
+        val output = addDocument("out", "report.pdf", "old content, truncated by the write".toByteArray())
+
+        val result = engine.decryptSingleFile(source.uri.toString(), output.uri.toString(), "wrong-password")
+
+        assertEquals(RestoreResult.InvalidPassword, result)
+        assertFalse(output.file.exists(), "a written-to document holds only garbage and must be deleted")
+    }
+
+    @Test
+    fun `a cancelled restore cleans up the pre-created empty output`() = runTest {
+        // A StandardTestDispatcher makes withContext(io) a real dispatch, so the UNDISPATCHED
+        // launch suspends right at the engine's withContext entry — cancelling there exercises
+        // the CancellationException cleanup path (review R1).
+        val queuedEngine = RestoreEngine(context, cipher, dispatchersOf(StandardTestDispatcher(testScheduler)))
+        val source = addDocument("src", "report.pdf.crypt", encryptedBlob(PASSWORD))
+        val output = addDocument("out", "report.pdf", ByteArray(0))
+
+        val job = launch(start = CoroutineStart.UNDISPATCHED) {
+            queuedEngine.decryptSingleFile(source.uri.toString(), output.uri.toString(), PASSWORD)
+        }
+        job.cancel()
+        job.join()
+
+        assertFalse(output.file.exists(), "the pre-created output document must be deleted on cancellation")
     }
 
     /**

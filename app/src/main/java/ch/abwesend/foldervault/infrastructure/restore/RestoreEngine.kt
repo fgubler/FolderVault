@@ -19,6 +19,8 @@ import ch.abwesend.foldervault.domain.result.ErrorResult
 import ch.abwesend.foldervault.domain.result.SuccessResult
 import ch.abwesend.foldervault.domain.result.rethrowCancellation
 import ch.abwesend.foldervault.infrastructure.storage.ScopedStorageHelper
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import java.io.InputStream
@@ -140,66 +142,102 @@ class RestoreEngine(
      * [RestoreResult.InvalidPassword] — on a lone file that is overwhelmingly a wrong password,
      * and we cannot tell it apart from tampering without the rest of the backup to probe against.
      * Unreadable headers, corrupt files and stream failures surface as [RestoreResult.Failure]
-     * instead. The "Save as" picker has already created the output document when this runs, so
-     * every failure path removes the (empty or partial) output again.
+     * instead.
+     *
+     * On every non-success outcome — failures *and* cancellation — the output document is cleaned
+     * up again via [cleanUpSingleFileOutput] (with the caveat documented there for pre-existing
+     * documents the user chose to overwrite). Cancellation deserves the explicit catch: nothing
+     * inside the block suspends or checks `isActive`, so a cancel while it runs cannot interrupt
+     * the work — the block finishes, `withContext` then discards the (possibly fully decrypted)
+     * result and throws, and without the cleanup the plaintext would silently remain at the
+     * picked location even though the user asked to abort.
      */
     override suspend fun decryptSingleFile(
         sourceFileUri: String,
         outputFileUri: String,
         password: String,
-    ): RestoreResult = withContext(dispatchers.io) {
-        val source = DocumentFile.fromSingleUri(context, Uri.parse(sourceFileUri))
-        val output = DocumentFile.fromSingleUri(context, Uri.parse(outputFileUri))
-        when {
-            source == null -> RestoreResult.Failure("Cannot access source file")
-            output == null -> RestoreResult.Failure("Cannot access output file")
-            else -> {
-                val header = readHeader(source, warnOnFailure = false)
-                if (header != null || source.name.orEmpty().endsWith(CRYPT_SUFFIX)) {
-                    decryptSingle(source, output, password, header)
-                } else {
-                    copySingle(source, output)
+    ): RestoreResult {
+        var outputWritten = false
+        val markOutputWritten = { outputWritten = true }
+        return try {
+            withContext(dispatchers.io) {
+                val source = DocumentFile.fromSingleUri(context, Uri.parse(sourceFileUri))
+                val output = DocumentFile.fromSingleUri(context, Uri.parse(outputFileUri))
+                val result = when {
+                    source == null -> RestoreResult.Failure("Cannot access source file")
+                    output == null -> RestoreResult.Failure("Cannot access output file")
+                    else -> {
+                        val header = readHeader(source, warnOnFailure = false)
+                        if (header != null || source.name.orEmpty().endsWith(CRYPT_SUFFIX)) {
+                            decryptSingle(source, output, password, header, markOutputWritten)
+                        } else {
+                            copySingle(source, output, markOutputWritten)
+                        }
+                    }
                 }
+                if (result !is RestoreResult.Success && output != null) {
+                    cleanUpSingleFileOutput(output, outputWritten)
+                }
+                result
             }
+        } catch (e: CancellationException) {
+            withContext(NonCancellable + dispatchers.io) {
+                DocumentFile.fromSingleUri(context, Uri.parse(outputFileUri))
+                    ?.let { cleanUpSingleFileOutput(it, outputWritten) }
+            }
+            throw e
         }
     }
 
     /**
-     * Decrypts one picked encrypted file, cleaning up the pre-created output on any failure.
-     * [header] is the already-parsed FVC1 header; `null` means the file was classified as
-     * encrypted by its `.crypt` suffix alone although its header could not be read.
+     * Decrypts one picked encrypted file. [header] is the already-parsed FVC1 header; `null` means
+     * the file was classified as encrypted by its `.crypt` suffix alone although its header could
+     * not be read. Cleanup of the output on failure is the caller's job.
      */
     private fun decryptSingle(
         source: DocumentFile,
         output: DocumentFile,
         password: String,
         header: Fvc1Header?,
-    ): RestoreResult {
-        val result = if (header == null) {
+        onOutputOpened: () -> Unit,
+    ): RestoreResult =
+        if (header == null) {
             RestoreResult.Failure("Cannot read file header")
         } else {
             val key = cipher.deriveKey(password, header.salt, header.iterations)
-            when (decryptEntryDetailed(source, output, key).getErrorOrNull()) {
+            when (decryptEntryDetailed(source, output, key, onOutputOpened).getErrorOrNull()) {
                 null -> RestoreResult.Success(decrypted = 1, copied = 0, skipped = 0, failed = 0)
                 DecryptionError.INVALID_PASSWORD -> RestoreResult.InvalidPassword
                 DecryptionError.INVALID_FILE -> RestoreResult.Failure("The file is not a valid encrypted backup file")
                 DecryptionError.UNKNOWN -> RestoreResult.Failure("Failed to read or decrypt the file")
             }
         }
-        if (result !is RestoreResult.Success) {
-            deletePartialOutput(output)
-        }
-        return result
-    }
 
-    /** Copies one picked plain file verbatim, cleaning up the pre-created output on failure. */
-    private fun copySingle(source: DocumentFile, output: DocumentFile): RestoreResult =
-        if (copyEntry(source, output)) {
+    /** Copies one picked plain file verbatim. Cleanup of the output on failure is the caller's job. */
+    private fun copySingle(
+        source: DocumentFile,
+        output: DocumentFile,
+        onOutputOpened: () -> Unit,
+    ): RestoreResult =
+        if (copyEntry(source, output, onOutputOpened)) {
             RestoreResult.Success(decrypted = 0, copied = 1, skipped = 0, failed = 0)
         } else {
-            deletePartialOutput(output)
             RestoreResult.Failure("Failed to copy file")
         }
+
+    /**
+     * Removes the "Save as" output document after a failed or cancelled single-file restore — but
+     * only when deleting cannot destroy pre-existing data. The picker may hand back an *existing*
+     * document when the user picks an existing name and confirms overwriting it, so deletion is
+     * limited to two cases: the restore actually opened the document's output stream (its previous
+     * content is already lost to truncation, only garbage could remain), or the document is still
+     * empty (the picker freshly created it). A pre-existing, never-touched document is left intact.
+     */
+    private fun cleanUpSingleFileOutput(output: DocumentFile, outputWritten: Boolean) {
+        if (outputWritten || output.length() == 0L) {
+            deletePartialOutput(output)
+        }
+    }
 
     private fun withInputStream(source: DocumentFile, block: (InputStream) -> Boolean): Boolean =
         try {
@@ -213,11 +251,12 @@ class RestoreEngine(
     private fun withStreams(
         source: DocumentFile,
         output: DocumentFile,
+        onOutputOpened: () -> Unit = {},
         block: (InputStream, OutputStream) -> Boolean,
     ): Boolean =
         try {
             context.contentResolver.openInputStream(source.uri)?.use { input ->
-                context.contentResolver.openOutputStream(output.uri)?.use { out ->
+                context.contentResolver.openOutputStream(output.uri)?.also { onOutputOpened() }?.use { out ->
                     block(input, out)
                 } ?: false
             } ?: false
@@ -356,15 +395,18 @@ class RestoreEngine(
      * [decryptEntry], which is enough for [decryptAll]'s per-file `failed` counter. The single-file
      * flow needs the distinction so only a GCM tag failure ([DecryptionError.INVALID_PASSWORD])
      * is presented as a wrong password. Stream-open failures map to [DecryptionError.UNKNOWN].
+     * [onOutputOpened] fires as soon as the output stream is opened (i.e. its previous content is
+     * gone), so the single-file flow knows whether failure cleanup may delete the document.
      */
     private fun decryptEntryDetailed(
         source: DocumentFile,
         output: DocumentFile,
         key: SecretKey,
+        onOutputOpened: () -> Unit = {},
     ): BinaryResult<Unit, DecryptionError> =
         try {
             context.contentResolver.openInputStream(source.uri)?.use { input ->
-                context.contentResolver.openOutputStream(output.uri)?.use { out ->
+                context.contentResolver.openOutputStream(output.uri)?.also { onOutputOpened() }?.use { out ->
                     cipher.decryptFile(key, input, out)
                 }
             } ?: ErrorResult(DecryptionError.UNKNOWN)
@@ -377,8 +419,12 @@ class RestoreEngine(
             ErrorResult(DecryptionError.UNKNOWN)
         }
 
-    private fun copyEntry(source: DocumentFile, output: DocumentFile): Boolean =
-        withStreams(source, output) { input, out ->
+    private fun copyEntry(
+        source: DocumentFile,
+        output: DocumentFile,
+        onOutputOpened: () -> Unit = {},
+    ): Boolean =
+        withStreams(source, output, onOutputOpened) { input, out ->
             input.copyTo(out)
             true
         }

@@ -76,6 +76,41 @@ the Robolectric lock file. Restart the daemon from a normal terminal:
 The reverse also holds: a daemon started from a normal terminal is un-sandboxed, and later
 sandboxed Claude Code builds that reuse it will run MockK/Robolectric tests fine.
 
+## Publishing: Play Console declarations
+
+FolderVault uses two sensitive capabilities that must be declared when submitting a release to the
+Google Play Console. Both are backup-execution features, not marketing/tracking, which keeps the
+justifications straightforward — but the exact-alarm one is borderline and should be filled in
+carefully.
+
+### Foreground service — `dataSync`
+
+- **Manifest:** `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_DATA_SYNC`, and a `dataSync`
+  `<service>` (`BackupForegroundService`).
+- **Play declaration:** the *Foreground service permissions* form asks for the `dataSync` use case.
+  Justification: the initial (and any large/interrupted) backup uploads many files in one
+  user-initiated session that must survive the screen locking; it is started only from the
+  foreground (or, for the opt-in feature below, from a user-granted exact alarm) and stops as soon
+  as it finishes or hits the OS time budget.
+- Record a short screen capture of a manual "Back up now" run for the review team — the form
+  accepts a video URL.
+
+### `SCHEDULE_EXACT_ALARM` — opt-in "more reliable backups"
+
+- **Manifest:** `SCHEDULE_EXACT_ALARM` (NOT the Play-restricted `USE_EXACT_ALARM`). Denied by
+  default on API 33+; the user grants it from the app's settings.
+- **Why it is needed:** it is used *only* as a foreground-service-launch trampoline. A background
+  WorkManager run cannot start a `dataSync` FGS on Android 12+, but an exact-alarm callback is
+  exempt from that restriction. The alarm is one-shot and fires ~10 s out; it is never used as a
+  general scheduler (WorkManager remains the single scheduler for every config).
+- **Borderline justification — fill in honestly:** Google's exact-alarm policy is aimed at
+  clocks/calendars, and a backup app is not the canonical use case. The app is designed to degrade
+  cleanly if the declaration is rejected or the user never grants the permission: the feature is
+  **off by default**, and every config keeps working on the always-available WorkManager path.
+  Frame the declaration around "user-scheduled, user-visible data transfer that must start on time
+  even under Doze," and make clear the app functions fully without it. If Play rejects the
+  declaration, the feature can be dropped with no impact on the default experience.
+
 ## Restore (decrypt a locally-downloaded backup)
 
 Encrypted backups can only be decrypted by this app. To restore:

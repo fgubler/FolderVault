@@ -74,6 +74,7 @@ internal fun SettingsScreen(
     val unexpectedError by viewModel.unexpectedError.collectAsState()
     val exportResult by viewModel.exportResult.collectAsState()
     val backgroundRestrictions by viewModel.backgroundRestrictions.collectAsState()
+    val exactAlarmPermitted by viewModel.exactAlarmPermitted.collectAsState()
     val context = LocalContext.current
     val notificationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -114,6 +115,8 @@ internal fun SettingsScreen(
         SettingsContent(
             settings = settings,
             backgroundRestrictions = backgroundRestrictions,
+            exactAlarmPermitted = exactAlarmPermitted,
+            exactAlarmPermissionRelevant = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S,
             modifier = Modifier.padding(innerPadding),
             onScheduleChange = viewModel::setDefaultSchedule,
             onChangedFilePolicyChange = viewModel::setDefaultChangedFilePolicy,
@@ -134,8 +137,14 @@ internal fun SettingsScreen(
             onExportTodayLog = {
                 exportLauncher.launch("foldervault-log-${System.currentTimeMillis()}.log")
             },
+            onExactAlarmBackupsChange = { enabled ->
+                viewModel.setExactAlarmBackupsEnabled(enabled)
+                // Enabling the opt-in is inert without the grant — send the user straight to it.
+                if (enabled && !exactAlarmPermitted) context.openExactAlarmSettings()
+            },
             onOpenBatterySettings = { context.openBatteryOptimizationSettings() },
             onOpenBackgroundDataSettings = { context.openBackgroundDataSettings() },
+            onOpenExactAlarmSettings = { context.openExactAlarmSettings() },
         )
     }
 }
@@ -145,6 +154,8 @@ internal fun SettingsScreen(
 private fun SettingsContent(
     settings: AppSettings,
     backgroundRestrictions: BackgroundRestrictionStatus,
+    exactAlarmPermitted: Boolean,
+    exactAlarmPermissionRelevant: Boolean,
     onScheduleChange: (BackupSchedule) -> Unit,
     onChangedFilePolicyChange: (ChangedFilePolicy) -> Unit,
     onNetworkPolicyChange: (NetworkPolicy) -> Unit,
@@ -155,8 +166,10 @@ private fun SettingsContent(
     onShowOnboarding: () -> Unit,
     onRequestNotificationPermission: () -> Unit,
     onExportTodayLog: () -> Unit,
+    onExactAlarmBackupsChange: (Boolean) -> Unit,
     onOpenBatterySettings: () -> Unit,
     onOpenBackgroundDataSettings: () -> Unit,
+    onOpenExactAlarmSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -230,8 +243,13 @@ private fun SettingsContent(
         SectionDivider()
         ReliableBackupsSection(
             backgroundRestrictions = backgroundRestrictions,
+            exactAlarmBackupsEnabled = settings.exactAlarmBackupsEnabled,
+            exactAlarmPermitted = exactAlarmPermitted,
+            exactAlarmPermissionRelevant = exactAlarmPermissionRelevant,
+            onExactAlarmBackupsChange = onExactAlarmBackupsChange,
             onOpenBatterySettings = onOpenBatterySettings,
             onOpenBackgroundDataSettings = onOpenBackgroundDataSettings,
+            onOpenExactAlarmSettings = onOpenExactAlarmSettings,
         )
 
         SectionDivider()
@@ -333,12 +351,17 @@ private fun SwitchRow(
  * Settings section showing the OS-level restrictions that can delay or block background backups,
  * with buttons jumping to the system-settings screens where the user can lift them.
  */
-@Suppress("MultipleEmitters")
+@Suppress("MultipleEmitters", "LongParameterList")
 @Composable
 private fun ReliableBackupsSection(
     backgroundRestrictions: BackgroundRestrictionStatus,
+    exactAlarmBackupsEnabled: Boolean,
+    exactAlarmPermitted: Boolean,
+    exactAlarmPermissionRelevant: Boolean,
+    onExactAlarmBackupsChange: (Boolean) -> Unit,
     onOpenBatterySettings: () -> Unit,
     onOpenBackgroundDataSettings: () -> Unit,
+    onOpenExactAlarmSettings: () -> Unit,
 ) {
     SettingsSectionHeader(stringResource(R.string.section_reliable_backups))
 
@@ -374,6 +397,74 @@ private fun ReliableBackupsSection(
         infoBody = stringResource(R.string.info_background_data_body),
         onOpenSettings = onOpenBackgroundDataSettings,
     )
+
+    Spacer(modifier = Modifier.height(12.dp))
+    ExactAlarmBackupsRow(
+        enabled = exactAlarmBackupsEnabled,
+        permitted = exactAlarmPermitted,
+        permissionRelevant = exactAlarmPermissionRelevant,
+        onEnabledChange = onExactAlarmBackupsChange,
+        onOpenSettings = onOpenExactAlarmSettings,
+    )
+}
+
+/**
+ * The opt-in "extended run time" row: a switch turning the enhancement on, an info popup, and —
+ * only while it is on and the `SCHEDULE_EXACT_ALARM` permission is relevant (API 31+) — the current
+ * grant status plus a button jumping to the system screen where the user can allow it. Below API 31
+ * no permission exists, so the switch alone is shown.
+ */
+@Suppress("MultipleEmitters", "LongParameterList")
+@Composable
+private fun ExactAlarmBackupsRow(
+    enabled: Boolean,
+    permitted: Boolean,
+    permissionRelevant: Boolean,
+    onEnabledChange: (Boolean) -> Unit,
+    onOpenSettings: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(stringResource(R.string.label_exact_alarm_backups), style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    stringResource(R.string.desc_exact_alarm_backups),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            InfoIconButton(
+                title = stringResource(R.string.info_exact_alarm_title),
+                body = stringResource(R.string.info_exact_alarm_body),
+            )
+            Switch(checked = enabled, onCheckedChange = onEnabledChange)
+        }
+        if (enabled && permissionRelevant) {
+            val statusColor = if (permitted) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            }
+            Text(
+                stringResource(
+                    if (permitted) R.string.status_exact_alarm_permitted else R.string.status_exact_alarm_not_permitted,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = statusColor,
+            )
+            if (!permitted) {
+                OutlinedButton(
+                    onClick = onOpenSettings,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.button_allow_exact_alarms))
+                }
+            }
+        }
+    }
 }
 
 /**
@@ -470,6 +561,20 @@ private fun Context.openBackgroundDataSettings() {
 }
 
 /**
+ * Opens the system screen where the user grants the "alarms &amp; reminders" (`SCHEDULE_EXACT_ALARM`)
+ * permission that the "extended run time" opt-in needs. API 31+ only — callers gate on that, since
+ * no such permission (or screen) exists below it. The action string is inlined at compile time, so
+ * referencing it is safe on lower APIs even though the guard means it never runs there.
+ */
+private fun Context.openExactAlarmSettings() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        startSystemScreenWithFallback(
+            Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.fromParts("package", packageName, null)),
+        )
+    }
+}
+
+/**
  * Starts the given system-settings intent, falling back to the app-details screen on devices
  * whose OEM skin does not offer the standard screen.
  */
@@ -497,8 +602,10 @@ private fun BackupSchedule.labelResId(): Int = when (this) {
 private fun SettingsScreenPreview() {
     FolderVaultTheme {
         SettingsContent(
-            settings = AppSettings(),
+            settings = AppSettings(exactAlarmBackupsEnabled = true),
             backgroundRestrictions = BackgroundRestrictionStatus(),
+            exactAlarmPermitted = false,
+            exactAlarmPermissionRelevant = true,
             onScheduleChange = {},
             onChangedFilePolicyChange = {},
             onNetworkPolicyChange = {},
@@ -509,8 +616,10 @@ private fun SettingsScreenPreview() {
             onShowOnboarding = {},
             onRequestNotificationPermission = {},
             onExportTodayLog = {},
+            onExactAlarmBackupsChange = {},
             onOpenBatterySettings = {},
             onOpenBackgroundDataSettings = {},
+            onOpenExactAlarmSettings = {},
         )
     }
 }

@@ -5,17 +5,22 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.work.ListenableWorker
 import androidx.work.testing.TestListenableWorkerBuilder
 import androidx.work.workDataOf
+import ch.abwesend.foldervault.domain.backup.IFgsLaunchScheduler
+import ch.abwesend.foldervault.domain.model.AppSettings
 import ch.abwesend.foldervault.domain.model.BackupRunStatus
 import ch.abwesend.foldervault.domain.model.BackupSchedule
 import ch.abwesend.foldervault.domain.model.ChangedFilePolicy
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.model.RetentionPolicy
+import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupConfigDao
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupMessageDao
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupConfigEntity
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Before
@@ -58,6 +63,10 @@ class BackupWorkerForegroundGuardTest {
                     single { runner }
                     single { mockk<BackupNotificationManager>(relaxUnitFun = true) }
                     single { foregroundRunState }
+                    // Opt-in defaults off, so the worker's trampoline check is a no-op and the run
+                    // proceeds inline exactly as this test expects.
+                    single<IAppSettingsRepository> { mockk { every { settings } returns flowOf(AppSettings()) } }
+                    single<IFgsLaunchScheduler> { mockk(relaxed = true) }
                 }
             )
         }

@@ -4,6 +4,7 @@ import ch.abwesend.foldervault.domain.backup.IBackupConfigRepository
 import ch.abwesend.foldervault.domain.backup.IBackupMessageRepository
 import ch.abwesend.foldervault.domain.backup.IBackupRunRepository
 import ch.abwesend.foldervault.domain.backup.IBackupScheduler
+import ch.abwesend.foldervault.domain.backup.IFgsLaunchScheduler
 import ch.abwesend.foldervault.domain.backup.IForegroundBackupLauncher
 import ch.abwesend.foldervault.domain.backup.StartManualBackupUseCase
 import ch.abwesend.foldervault.domain.cloud.ICloudAuthorizer
@@ -28,6 +29,7 @@ import ch.abwesend.foldervault.infrastructure.backup.BackupNotificationManager
 import ch.abwesend.foldervault.infrastructure.backup.BackupRunRepository
 import ch.abwesend.foldervault.infrastructure.backup.BackupRunner
 import ch.abwesend.foldervault.infrastructure.backup.BackupScheduler
+import ch.abwesend.foldervault.infrastructure.backup.FgsLaunchScheduler
 import ch.abwesend.foldervault.infrastructure.backup.ForegroundBackupLauncher
 import ch.abwesend.foldervault.infrastructure.backup.ForegroundRunState
 import ch.abwesend.foldervault.infrastructure.cloud.googledrive.GoogleDriveAuthorizationRepository
@@ -93,6 +95,7 @@ val appModule = module {
     single { ForegroundRunState() }
     single<IBackupScheduler> { BackupScheduler(androidContext(), get()) }
     single<IForegroundBackupLauncher> { ForegroundBackupLauncher(androidContext(), get()) }
+    single<IFgsLaunchScheduler> { FgsLaunchScheduler(androidContext()) }
     single { StartManualBackupUseCase(get(), get()) }
     single<INetworkConnectivityChecker> { AndroidNetworkConnectivityChecker(androidContext()) }
     single { NetworkStateMonitor(androidContext()) }
@@ -123,7 +126,7 @@ val appModule = module {
     viewModel { RestoreViewModel(get()) }
     viewModel { HomeViewModel(get(), get()) }
     viewModel { OnboardingViewModel(get()) }
-    viewModel { SettingsViewModel(get(), get(), get(), get(), get()) }
+    viewModel { SettingsViewModel(get(), get(), get(), get(), get(), get()) }
     viewModel { params ->
         AddEditBackupViewModel(
             configRepo = get(),
@@ -142,6 +145,7 @@ val appModule = module {
             configRepo = get(),
             messageRepo = get(),
             scheduler = get(),
+            fgsLaunchScheduler = get(),
             startManualBackup = get(),
             authorizer = get(),
             encryptionRepo = get(),

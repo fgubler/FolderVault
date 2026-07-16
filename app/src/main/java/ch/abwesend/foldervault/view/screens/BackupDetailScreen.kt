@@ -132,6 +132,7 @@ fun BackupDetailScreen(
 ) {
     val config by viewModel.config.collectAsState()
     val continuesAutomatically by viewModel.continuesAutomatically.collectAsState()
+    val reliableExecutionActive by viewModel.reliableExecutionActive.collectAsState()
     val messages by viewModel.messages.collectAsState()
     val passwordCheckResult by viewModel.passwordCheckResult.collectAsState()
     val isRunning by viewModel.isRunning.collectAsState()
@@ -202,6 +203,7 @@ fun BackupDetailScreen(
                 messages = messages,
                 isRunning = isRunning,
                 continuesAutomatically = continuesAutomatically,
+                reliableExecutionActive = reliableExecutionActive,
                 onBackUpNow = viewModel::backUpNow,
                 onTogglePause = viewModel::togglePause,
                 onCheckPassword = { showPasswordDialog = true },
@@ -256,6 +258,7 @@ private fun DetailContent(
     messages: List<BackupMessage>,
     isRunning: Boolean,
     continuesAutomatically: Boolean,
+    reliableExecutionActive: Boolean,
     onBackUpNow: () -> Unit,
     onTogglePause: () -> Unit,
     onCheckPassword: () -> Unit,
@@ -270,7 +273,7 @@ private fun DetailContent(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        item { ConfigInfoSection(config = config) }
+        item { ConfigInfoSection(config = config, reliableExecutionActive = reliableExecutionActive) }
         if (showInitialSyncBanner(config, isRunning)) {
             item {
                 InitialSyncIncompleteBanner(
@@ -321,7 +324,7 @@ private fun DetailContent(
 }
 
 @Composable
-private fun ConfigInfoSection(config: BackupConfig) {
+private fun ConfigInfoSection(config: BackupConfig, reliableExecutionActive: Boolean) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         CloudFolderRow(config.cloudSubFolderName, config.cloudSubFolderId)
         InfoRow(stringResource(R.string.label_account), config.cloudAccountIdentifier)
@@ -341,6 +344,14 @@ private fun ConfigInfoSection(config: BackupConfig) {
             stringResource(if (config.encryptionEnabled) R.string.encryption_enabled else R.string.encryption_disabled),
         )
         InfoRow(stringResource(R.string.label_retention), config.retentionPolicy.displayName())
+        // Shown only while the "extended run time" enhancement is active for this install — the
+        // common WorkManager path needs no line (the standard behavior).
+        if (reliableExecutionActive) {
+            InfoRow(
+                stringResource(R.string.label_reliable_execution),
+                stringResource(R.string.value_reliable_execution_exact_alarm),
+            )
+        }
         Spacer(modifier = Modifier.height(8.dp))
         StatusSection(config)
     }
@@ -930,6 +941,7 @@ private fun BackupDetailPreview() {
             messages = sampleMessages,
             isRunning = false,
             continuesAutomatically = true,
+            reliableExecutionActive = true,
             onBackUpNow = {},
             onTogglePause = {},
             onCheckPassword = {},

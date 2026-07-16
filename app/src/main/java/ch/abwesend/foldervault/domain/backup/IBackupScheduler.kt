@@ -20,12 +20,18 @@ interface IBackupScheduler {
      * separate periodic name) simply appends to whatever pending one-time chain exists, or
      * starts a fresh one. APPEND_OR_REPLACE queues the continuation to run after the current
      * run finishes in both cases.
+     *
+     * [forceInline] makes the enqueued worker run the backup inline instead of trampolining to the
+     * foreground service. It is set only by the budget-exhaustion degrade paths (the service /
+     * alarm receiver could not enter the foreground); otherwise the degraded run would trampoline
+     * straight back and loop.
      */
     fun scheduleOneTime(
         configId: String,
         networkPolicy: NetworkPolicy,
         requiresCharging: Boolean,
         asContinuation: Boolean = false,
+        forceInline: Boolean = false,
     )
 
     /**
@@ -92,6 +98,16 @@ interface IBackupScheduler {
      * database is reset: the configs the scheduled work belongs to no longer exist.
      */
     fun cancelAll()
+
+    /**
+     * (Re-)registers the single app-global watchdog: a cheap periodic worker that catches configs
+     * whose normal periodic schedule WorkManager has failed to fire (OEM battery-killer, Doze) and
+     * enqueues a one-time catch-up run for them. Idempotent — uses
+     * [androidx.work.ExistingPeriodicWorkPolicy.KEEP] so repeated calls (every app start) never
+     * reset the running cadence. The watchdog itself never starts a foreground service; a
+     * background worker cannot, and it only needs to enqueue ordinary WorkManager runs.
+     */
+    fun ensureWatchdogScheduled()
 
     /**
      * Emits `true` while a backup for [configId] is enqueued or actively running, `false` otherwise.

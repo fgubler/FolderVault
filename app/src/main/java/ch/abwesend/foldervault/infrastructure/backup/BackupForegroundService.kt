@@ -10,12 +10,16 @@ import androidx.core.app.ServiceCompat
 import ch.abwesend.foldervault.domain.backup.IBackupScheduler
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.logging.logger
+import ch.abwesend.foldervault.domain.model.MessageSeverity
+import ch.abwesend.foldervault.domain.model.MessageType
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.result.rethrowCancellation
 import ch.abwesend.foldervault.domain.util.injectAnywhere
 import ch.abwesend.foldervault.infrastructure.network.NetworkStateMonitor
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupConfigDao
+import ch.abwesend.foldervault.infrastructure.room.dao.BackupMessageDao
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupConfigEntity
+import ch.abwesend.foldervault.infrastructure.room.entity.BackupMessageEntity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -47,16 +51,20 @@ import java.time.Instant
  * marked in [ForegroundRunState] so the UI shows them as running, and they degrade to
  * WorkManager one-time runs when the OS dataSync time limit ends the session first.
  *
- * Must only be started from foreground UI via [ForegroundBackupLauncher] (Android 12+ forbids
- * background FGS starts — the reason the previous `setForeground`-inside-worker attempt was
- * removed, see commit `be3b3bd`). [android.app.Service.START_NOT_STICKY] for the same reason:
- * a sticky restart would be a background start.
+ * Two legitimate start paths only: from foreground UI via [ForegroundBackupLauncher], or from
+ * [BackupAlarmReceiver]'s exact-alarm callback (the opt-in "more reliable backups" trampoline —
+ * only an exact-alarm callback is exempt from Android 12+'s background-FGS-start restriction, the
+ * reason the previous `setForeground`-inside-worker attempt was removed, see commit `be3b3bd`).
+ * Never from a plain background context or a sticky restart, hence [android.app.Service.START_NOT_STICKY].
+ * Should foreground promotion be refused anyway (e.g. the dataSync time budget is exhausted for a
+ * background start), [enterForeground] degrades the run to WorkManager instead of crashing.
  */
 class BackupForegroundService : Service() {
     private val log get() = logger
 
     private val backupRunner: BackupRunner by injectAnywhere()
     private val backupConfigDao: BackupConfigDao by injectAnywhere()
+    private val backupMessageDao: BackupMessageDao by injectAnywhere()
     private val notificationManager: BackupNotificationManager by injectAnywhere()
     private val scheduler: IBackupScheduler by injectAnywhere()
     private val foregroundRunState: ForegroundRunState by injectAnywhere()
@@ -240,10 +248,39 @@ class BackupForegroundService : Service() {
             ?: NetworkPolicy.WIFI_ONLY
         val requiresCharging = intent?.getBooleanExtra(EXTRA_REQUIRES_CHARGING, false) ?: false
 
-        // Started via startForegroundService — must become foreground promptly on EVERY start,
-        // even when the intent turns out to be unusable. While a run is active its latest
-        // progress notification is re-posted, so the ongoing notification never flips to the
-        // incoming config's deep link and counts.
+        if (!enterForeground(configId)) {
+            // The OS refused foreground promotion — for a background (alarm-triggered) start this
+            // is typically the dataSync 6h/24h budget being exhausted
+            // (ForegroundServiceStartNotAllowedException). Hand the incoming run to WorkManager
+            // rather than crash; any run already in progress keeps going (stopWhenIdle spares it).
+            if (configId != null) {
+                log.warning("Foreground backup could not enter the foreground for $configId — handing to WorkManager")
+                // forceInline: a plain one-time run would trampoline straight back to this service
+                // (opted-in + long-window) and fail to enter the foreground again, looping.
+                scheduler.scheduleOneTime(configId, networkPolicy, requiresCharging, forceInline = true)
+                emitBudgetReachedMessage(configId)
+            }
+            stopWhenIdle()
+        } else if (configId == null) {
+            log.error("Foreground backup started without a config id")
+            stopWhenIdle()
+        } else {
+            enqueueOrLaunch(RunParameters(configId, networkPolicy, requiresCharging))
+        }
+    }
+
+    /**
+     * Enters the foreground with the active run's ongoing notification (or a fresh one for the very
+     * first start). Started via `startForegroundService`, the service must become foreground
+     * promptly on EVERY start — even when the intent turns out to be unusable — and while a run is
+     * active its latest progress notification is re-posted, so the ongoing notification never flips
+     * to the incoming config's deep link and counts.
+     *
+     * Returns `false` if the OS refused (e.g. `ForegroundServiceStartNotAllowedException` when the
+     * dataSync time budget is exhausted for a background start), so the caller degrades gracefully
+     * instead of letting the exception crash the service.
+     */
+    private fun enterForeground(configId: String?): Boolean = try {
         ServiceCompat.startForeground(
             this,
             BackupNotificationManager.PROGRESS_NOTIFICATION_ID,
@@ -256,12 +293,46 @@ class BackupForegroundService : Service() {
             ),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
         )
+        true
+    } catch (e: Exception) {
+        e.rethrowCancellation()
+        log.error("Foreground backup could not enter the foreground for ${configId.orEmpty()}", e)
+        false
+    }
 
-        if (configId == null) {
-            log.error("Foreground backup started without a config id")
-            stopWhenIdle()
-        } else {
-            enqueueOrLaunch(RunParameters(configId, networkPolicy, requiresCharging))
+    /**
+     * Records an informational message for [configId] that this opted-in run could not get the
+     * foreground service's long window (the shared dataSync time budget was exhausted) and fell
+     * back to WorkManager. Coalesced like the other run messages so a repeated fallback does not
+     * flood the config. Fire-and-forget on [scope] — a failure here must never take down the
+     * degrade path that already re-scheduled the run.
+     *
+     * Best-effort by design: when the degraded start finds the service idle it stops right after,
+     * and [onDestroy] cancels [scope] — so this insert may be cut short before it commits. That is
+     * an acceptable trade for an INFO breadcrumb: the run itself is already safely re-queued on
+     * WorkManager (the guaranteed part), and the fallback is also logged. Keeping the service alive
+     * to guarantee the message is not worth complicating this invariant-heavy control flow.
+     */
+    private fun emitBudgetReachedMessage(configId: String) {
+        scope.launch {
+            try {
+                backupMessageDao.coalesceInsert(
+                    BackupMessageEntity(
+                        backupConfigId = configId,
+                        runId = null,
+                        timestamp = System.currentTimeMillis(),
+                        severity = MessageSeverity.INFO,
+                        type = MessageType.FGS_TIME_BUDGET_REACHED,
+                        messageText = null,
+                        formatArgs = emptyList(),
+                        relativePath = null,
+                        readAt = null,
+                    )
+                )
+            } catch (e: Exception) {
+                e.rethrowCancellation()
+                log.error("Failed to record the extended-run-time fallback message for $configId", e)
+            }
         }
     }
 

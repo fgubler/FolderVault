@@ -4,6 +4,7 @@ import ch.abwesend.foldervault.domain.backup.BackupConfig
 import ch.abwesend.foldervault.domain.backup.IBackupConfigRepository
 import ch.abwesend.foldervault.domain.backup.IBackupMessageRepository
 import ch.abwesend.foldervault.domain.backup.IBackupScheduler
+import ch.abwesend.foldervault.domain.backup.IFgsLaunchScheduler
 import ch.abwesend.foldervault.domain.backup.IForegroundBackupLauncher
 import ch.abwesend.foldervault.domain.backup.StartManualBackupUseCase
 import ch.abwesend.foldervault.domain.cloud.CloudAuthResult
@@ -102,6 +103,8 @@ internal fun buildVm(
     releaseSaf: ReleaseSafPermissionIfUnusedUseCase = mockk(relaxed = true),
     authorizer: ICloudAuthorizer = mockk(relaxed = true),
     foregroundLauncher: IForegroundBackupLauncher = mockk(relaxed = true),
+    fgsLaunchScheduler: IFgsLaunchScheduler = mockk(relaxed = true),
+    appSettings: AppSettings = AppSettings(),
     autoStartBackup: Boolean = false,
 ): Pair<BackupDetailViewModel, IBackupScheduler> {
     val connectivity = mockk<INetworkConnectivityChecker> {
@@ -111,13 +114,14 @@ internal fun buildVm(
         every { isCharging() } returns isCharging
     }
     val settingsRepo = mockk<IAppSettingsRepository> {
-        every { settings } returns flowOf(AppSettings())
+        every { settings } returns flowOf(appSettings)
     }
     val vm = BackupDetailViewModel(
         configId = configId,
         configRepo = configRepo,
         messageRepo = messageRepo,
         scheduler = scheduler,
+        fgsLaunchScheduler = fgsLaunchScheduler,
         startManualBackup = StartManualBackupUseCase(scheduler, foregroundLauncher),
         authorizer = authorizer,
         encryptionRepo = mockk(),

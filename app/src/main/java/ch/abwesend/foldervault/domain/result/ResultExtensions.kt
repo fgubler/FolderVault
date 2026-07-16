@@ -38,14 +38,14 @@ inline fun <T> runCatchingOnResult(block: () -> BinaryResult<T, Exception>): Bin
 inline fun <TValue, TError, T> BinaryResult<TValue, TError>.mapValue(
     mapper: (TValue) -> T,
 ): BinaryResult<T, TError> = when (this) {
-    is ErrorResult -> ErrorResult(error)
+    is ErrorResult -> this
     is SuccessResult -> SuccessResult(mapper(value))
 }
 
 inline fun <TValue, TError, T> BinaryResult<TValue, TError>.mapError(
     mapper: (TError) -> T,
 ): BinaryResult<TValue, T> = when (this) {
-    is SuccessResult -> SuccessResult(value)
+    is SuccessResult -> this
     is ErrorResult -> ErrorResult(mapper(error))
 }
 

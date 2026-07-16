@@ -37,6 +37,7 @@ class FolderVaultApp : Application() {
         applyInitialTelemetrySettings()
         sweepStaleRunningBackupRuns()
         reRegisterPeriodicBackups()
+        get<IBackupScheduler>().ensureWatchdogScheduled()
     }
 
     /**

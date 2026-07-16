@@ -34,7 +34,8 @@ private class FakeRestoreEngine(
     private val gate: CompletableDeferred<Unit>? = null,
 ) : IRestoreEngine {
     var singleFileSourceUri: String? = null
-    var singleFileOutputUri: String? = null
+    var singleFileOutputFolderUri: String? = null
+    var singleFileOutputName: String? = null
     var singleFilePassword: String? = null
     var singleFileCallCount = 0
     var decryptAllCallCount = 0
@@ -56,12 +57,14 @@ private class FakeRestoreEngine(
 
     override suspend fun decryptSingleFile(
         sourceFileUri: String,
-        outputFileUri: String,
+        outputFolderUri: String,
+        outputFileName: String,
         password: String,
     ): RestoreResult {
         singleFileCallCount++
         singleFileSourceUri = sourceFileUri
-        singleFileOutputUri = outputFileUri
+        singleFileOutputFolderUri = outputFolderUri
+        singleFileOutputName = outputFileName
         singleFilePassword = password
         gate?.await()
         return singleFileResult
@@ -125,7 +128,8 @@ class RestoreViewModelTest : StringSpec({
         viewModel.startSingleFileRestore("content://out")
 
         engine.singleFileSourceUri shouldBe "content://src"
-        engine.singleFileOutputUri shouldBe "content://out"
+        engine.singleFileOutputFolderUri shouldBe "content://out"
+        engine.singleFileOutputName shouldBe "report.pdf"
         engine.singleFilePassword shouldBe "secret"
     }
 
@@ -165,7 +169,7 @@ class RestoreViewModelTest : StringSpec({
         gate.complete(Unit)
 
         engine.singleFileCallCount shouldBe 1
-        engine.singleFileOutputUri shouldBe "content://out"
+        engine.singleFileOutputFolderUri shouldBe "content://out"
     }
 
     "startRestore ignores a second start while a restore is running (review S2)" {

@@ -59,8 +59,6 @@ import ch.abwesend.foldervault.view.viewmodel.RestoreUiState
 import ch.abwesend.foldervault.view.viewmodel.RestoreViewModel
 import org.koin.androidx.compose.koinViewModel
 
-private const val OUTPUT_MIME_TYPE = "application/octet-stream"
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RestoreScreen(
@@ -75,7 +73,6 @@ fun RestoreScreen(
 
     val actions = rememberRestoreLaunchActions(
         viewModel = viewModel,
-        suggestedOutputName = { uiState.suggestedOutputName.orEmpty() },
     )
 
     if (uiState.state is RestoreState.Running) {
@@ -124,13 +121,11 @@ private class RestoreLaunchActions(
 
 /**
  * Creates the SAF launchers for both restore flows and returns their trigger callbacks. Keeping
- * them here keeps [RestoreScreen] short. [suggestedOutputName] is read lazily so the "Save as"
- * launcher sees the latest value at click time.
+ * them here keeps [RestoreScreen] short.
  */
 @Composable
 private fun rememberRestoreLaunchActions(
     viewModel: RestoreViewModel,
-    suggestedOutputName: () -> String,
 ): RestoreLaunchActions {
     val context = LocalContext.current
 
@@ -167,11 +162,17 @@ private fun rememberRestoreLaunchActions(
     }
 
     val saveAsLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument(OUTPUT_MIME_TYPE),
+        ActivityResultContracts.OpenDocumentTree(),
     ) { uri ->
-        // The password is read from the ViewModel state, which survives the activity recreation a
+        // The single-file output is a destination *folder*: the app then creates a fresh,
+        // non-colliding file inside it, so a restore can never overwrite an existing file. The
+        // password is read from the ViewModel state, which survives the activity recreation a
         // configuration change during the picker round-trip causes (composable state would not).
         if (uri != null) {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
             viewModel.startSingleFileRestore(uri.toString())
         }
     }
@@ -180,7 +181,7 @@ private fun rememberRestoreLaunchActions(
         pickSourceFolder = { sourceLauncher.launch(null) },
         pickOutputFolder = { outputLauncher.launch(null) },
         pickSourceFile = { sourceFileLauncher.launch(arrayOf("*/*")) },
-        decryptAndSave = { saveAsLauncher.launch(suggestedOutputName()) },
+        decryptAndSave = { saveAsLauncher.launch(null) },
     )
 }
 

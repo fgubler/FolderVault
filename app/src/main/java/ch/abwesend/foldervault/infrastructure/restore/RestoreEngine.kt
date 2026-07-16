@@ -199,44 +199,52 @@ class RestoreEngine(
     }
 
     /**
-     * Restores one picked file into the already-created [outputFileUri]. Reuses the same crypto
-     * path as [decryptAll]'s loop body for a single item. Whether to decrypt or copy is decided
-     * in two stages: first the FVC1 header is parsed — a file whose header parses is decrypted
-     * regardless of its name, since a user-picked SAF provider may report a display name without
-     * the `.crypt` suffix (or none at all). Only when the header does not parse (for any reason)
-     * does the `.crypt` filename suffix decide: a suffixed file is still treated as encrypted, so
-     * its unreadable header surfaces as a clear failure instead of copying encrypted bytes
-     * verbatim; anything else is copied. Only a GCM tag failure is reported as
+     * Restores one picked file into the destination folder [outputFolderUri], creating a fresh
+     * output file whose name is derived from [outputFileName] and made unique via
+     * [resolveUniqueOutput] — so an existing file of the same name is never overwritten. Reuses the
+     * same crypto path as [decryptAll]'s loop body for a single item. Whether to decrypt or copy is
+     * decided in two stages: first the FVC1 header is parsed — a file whose header parses is
+     * decrypted regardless of its name, since a user-picked SAF provider may report a display name
+     * without the `.crypt` suffix (or none at all). Only when the header does not parse (for any
+     * reason) does the `.crypt` filename suffix decide: a suffixed file is still treated as
+     * encrypted, so its unreadable header surfaces as a clear failure instead of copying encrypted
+     * bytes verbatim; anything else is copied. Only a GCM tag failure is reported as
      * [RestoreResult.InvalidPassword] — on a lone file that is overwhelmingly a wrong password,
      * and we cannot tell it apart from tampering without the rest of the backup to probe against.
      * Unreadable headers, corrupt files and stream failures surface as [RestoreResult.Failure]
      * instead.
      *
-     * On every non-success outcome — failures *and* cancellation — the output document is cleaned
-     * up again via [cleanUpSingleFileOutput] (with the caveat documented there for pre-existing
-     * documents the user chose to overwrite). Cancellation is honored cooperatively: a source
-     * above [CancellationChunking.thresholdBytes] — or of unknown size — is consumed through
-     * [ChunkedCancellationInputStream], which re-checks the coroutine's liveness after every
-     * chunk, so a cancel aborts within one chunk of work instead of after the whole file. Smaller
-     * files still run to completion first, which
-     * is why the explicit catch stays: `withContext` then discards the (possibly fully decrypted)
-     * result and throws, and without the cleanup the plaintext would silently remain at the
-     * picked location even though the user asked to abort.
+     * On every non-success outcome — failures *and* cancellation — the freshly created output
+     * document is deleted again via [cleanUpSingleFileOutput]. Cancellation is honored
+     * cooperatively: a source above [CancellationChunking.thresholdBytes] — or of unknown size — is
+     * consumed through [ChunkedCancellationInputStream], which re-checks the coroutine's liveness
+     * after every chunk, so a cancel aborts within one chunk of work instead of after the whole
+     * file. Smaller files still run to completion first, which is why the explicit catch stays:
+     * `withContext` then discards the (possibly fully decrypted) result and throws, and without the
+     * cleanup the plaintext would silently remain at the picked location even though the user asked
+     * to abort.
      */
     override suspend fun decryptSingleFile(
         sourceFileUri: String,
-        outputFileUri: String,
+        outputFolderUri: String,
+        outputFileName: String,
         password: String,
     ): RestoreResult {
         var outputWritten = false
         var cleanedUp = false
+        var createdOutput: DocumentFile? = null
         val markOutputWritten = { outputWritten = true }
         return try {
             withContext(dispatchers.io) {
                 val source = DocumentFile.fromSingleUri(context, Uri.parse(sourceFileUri))
-                val output = DocumentFile.fromSingleUri(context, Uri.parse(outputFileUri))
+                val outputRoot = DocumentFile.fromTreeUri(context, Uri.parse(outputFolderUri))
+                val output = outputRoot
+                    ?.let { resolveUniqueOutput(it, outputFileName) as? OutputResolution.Resolved }
+                    ?.file
+                createdOutput = output
                 val result = when {
                     source == null -> RestoreResult.Failure(RestoreFailureReason.SOURCE_FILE_NOT_ACCESSIBLE)
+                    outputRoot == null -> RestoreResult.Failure(RestoreFailureReason.OUTPUT_FOLDER_NOT_ACCESSIBLE)
                     output == null -> RestoreResult.Failure(RestoreFailureReason.OUTPUT_FILE_NOT_ACCESSIBLE)
                     else -> {
                         val wrapInput = singleFileCancellationWrapper(source.length()) { ensureActive() }
@@ -258,9 +266,10 @@ class RestoreEngine(
             // A failure result followed by a cancel at the withContext exit would otherwise clean
             // up twice — the second delete of the already-removed document only logs a warning.
             if (!cleanedUp) {
-                withContext(NonCancellable + dispatchers.io) {
-                    DocumentFile.fromSingleUri(context, Uri.parse(outputFileUri))
-                        ?.let { cleanUpSingleFileOutput(it, outputWritten) }
+                createdOutput?.let { output ->
+                    withContext(NonCancellable + dispatchers.io) {
+                        cleanUpSingleFileOutput(output, outputWritten)
+                    }
                 }
             }
             throw e
@@ -472,6 +481,14 @@ class RestoreEngine(
         dir.createFile(MIME_OCTET_STREAM, name)
             ?.let { OutputResolution.Resolved(it) }
             ?: OutputResolution.Failed
+
+    /**
+     * Resolves a fresh output file for the single-file flow: [fileName] if the folder has no such
+     * file yet, otherwise a suffixed variant via [resolveWithSuffix] (`name_restored`, …). Always
+     * creates a brand-new document, so restoring never overwrites an existing file.
+     */
+    private fun resolveUniqueOutput(dir: DocumentFile, fileName: String): OutputResolution =
+        if (dir.findFile(fileName) == null) createOutput(dir, fileName) else resolveWithSuffix(dir, fileName)
 
     /**
      * For [RestoreCollisionPolicy.RENAME_WITH_SUFFIX], loops `_restored`, `_restored_2`, … until a

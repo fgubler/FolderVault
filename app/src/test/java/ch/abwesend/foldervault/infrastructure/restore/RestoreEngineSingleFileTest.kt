@@ -46,16 +46,18 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * Robolectric coverage for [RestoreEngine.decryptSingleFile], focused on the two-stage
- * decrypt-vs-copy decision (review finding S2): a parseable FVC1 header wins over the display
- * name, and only when the header does not parse does the `.crypt` suffix decide. A
- * [FakeSingleFileProvider] backed by real temp files stands in for the SAF document provider, so
- * display names, streams and the post-failure output delete all go through the real
- * `DocumentFile` plumbing. Encrypted fixtures are hand-assembled version-1 FVC1 blobs with a low
- * PBKDF2 iteration count to keep key derivation fast (mirrors `Fvc1CipherTest.buildBlob`).
+ * Robolectric coverage for [RestoreEngine.decryptSingleFile], which now restores into a picked
+ * destination *folder* and creates a fresh, non-colliding output file inside it (so a restore can
+ * never overwrite an existing file). Focused on the two-stage decrypt-vs-copy decision (review
+ * finding S2) and the automatic unique-name de-duplication. A [FakeSafProvider] backed by real
+ * temp files stands in for the SAF document provider, so display names, streams, child listing,
+ * document creation and the post-failure output delete all go through the real `DocumentFile`
+ * plumbing. Encrypted fixtures are hand-assembled version-1 FVC1 blobs with a low PBKDF2 iteration
+ * count to keep key derivation fast (mirrors `Fvc1CipherTest.buildBlob`).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -78,140 +80,116 @@ class RestoreEngineSingleFileTest {
     private val engine = RestoreEngine(context, cipher, dispatchers)
     private val plaintext = "FolderVault single-file restore test payload".toByteArray()
 
+    private val treeUri: Uri = DocumentsContract.buildTreeDocumentUri(AUTHORITY, ROOT_ID)
+
     @Before
     fun setUp() {
-        FakeSingleFileProvider.documents.clear()
-        FakeSingleFileProvider.onOpen = null
-        FakeSingleFileProvider.deleteCallCount = 0
-        FakeSingleFileProvider.openModes.clear()
-        Robolectric.setupContentProvider(FakeSingleFileProvider::class.java, AUTHORITY)
+        FakeSafProvider.documents.clear()
+        FakeSafProvider.onOpen = null
+        FakeSafProvider.deleteCallCount = 0
+        FakeSafProvider.openModes.clear()
+        FakeSafProvider.idSequence = 0
+        Robolectric.setupContentProvider(FakeSafProvider::class.java, AUTHORITY)
+        // The destination folder itself: a directory the created output files hang under.
+        FakeSafProvider.documents[ROOT_ID] =
+            TestDocument(ROOT_ID, parentId = null, displayName = ROOT_ID, file = null, isDirectory = true)
     }
 
     @Test
     fun `a file with a parseable header is decrypted even when its name lacks the crypt suffix`() = runTest {
         // The S2 regression case: a renamed encrypted file must not be copied as ciphertext.
-        val source = addDocument("src", "report.pdf", encryptedBlob(PASSWORD))
-        val output = addDocument("out", "report.pdf", ByteArray(0))
+        val source = addSource("report.pdf", encryptedBlob(PASSWORD))
 
-        val result = engine.decryptSingleFile(source.uri.toString(), output.uri.toString(), PASSWORD)
+        val result = engine.decryptSingleFile(source.toString(), treeUri.toString(), "report.pdf", PASSWORD)
 
         assertEquals(RestoreResult.Success(decrypted = 1, copied = 0, skipped = 0, failed = 0), result)
-        assertContentEquals(plaintext, output.file.readBytes())
+        assertContentEquals(plaintext, outputBytes("report.pdf"))
     }
 
     @Test
     fun `a file with a parseable header is decrypted even when the provider reports no name`() = runTest {
-        val source = addDocument("src", displayName = null, content = encryptedBlob(PASSWORD))
-        val output = addDocument("out", "report.pdf", ByteArray(0))
+        val source = addSource(displayName = null, content = encryptedBlob(PASSWORD))
 
-        val result = engine.decryptSingleFile(source.uri.toString(), output.uri.toString(), PASSWORD)
+        val result = engine.decryptSingleFile(source.toString(), treeUri.toString(), "report.pdf", PASSWORD)
 
         assertEquals(RestoreResult.Success(decrypted = 1, copied = 0, skipped = 0, failed = 0), result)
-        assertContentEquals(plaintext, output.file.readBytes())
+        assertContentEquals(plaintext, outputBytes("report.pdf"))
     }
 
     @Test
     fun `a crypt-suffixed file with a parseable header is decrypted`() = runTest {
-        val source = addDocument("src", "report.pdf.crypt", encryptedBlob(PASSWORD))
-        val output = addDocument("out", "report.pdf", ByteArray(0))
+        val source = addSource("report.pdf.crypt", encryptedBlob(PASSWORD))
 
-        val result = engine.decryptSingleFile(source.uri.toString(), output.uri.toString(), PASSWORD)
+        val result = engine.decryptSingleFile(source.toString(), treeUri.toString(), "report.pdf", PASSWORD)
 
         assertEquals(RestoreResult.Success(decrypted = 1, copied = 0, skipped = 0, failed = 0), result)
-        assertContentEquals(plaintext, output.file.readBytes())
+        assertContentEquals(plaintext, outputBytes("report.pdf"))
     }
 
     @Test
     fun `a plain file without the crypt suffix is copied verbatim`() = runTest {
         val plainBytes = "just some plain text".toByteArray()
-        val source = addDocument("src", "notes.txt", plainBytes)
-        val output = addDocument("out", "notes.txt", ByteArray(0))
+        val source = addSource("notes.txt", plainBytes)
 
-        val result = engine.decryptSingleFile(source.uri.toString(), output.uri.toString(), PASSWORD)
+        val result = engine.decryptSingleFile(source.toString(), treeUri.toString(), "notes.txt", PASSWORD)
 
         assertEquals(RestoreResult.Success(decrypted = 0, copied = 1, skipped = 0, failed = 0), result)
-        assertContentEquals(plainBytes, output.file.readBytes())
+        assertContentEquals(plainBytes, outputBytes("notes.txt"))
+    }
+
+    @Test
+    fun `an existing output name is de-duplicated instead of overwritten`() = runTest {
+        // The core of this feature: a file of the same name already in the destination folder must
+        // survive untouched, and the restored file gets an automatic unique name.
+        val existingContent = "precious pre-existing content".toByteArray()
+        addChild("report.pdf", existingContent)
+        val source = addSource("report.pdf.crypt", encryptedBlob(PASSWORD))
+
+        val result = engine.decryptSingleFile(source.toString(), treeUri.toString(), "report.pdf", PASSWORD)
+
+        assertEquals(RestoreResult.Success(decrypted = 1, copied = 0, skipped = 0, failed = 0), result)
+        assertContentEquals(existingContent, outputBytes("report.pdf"), "the existing file must survive")
+        assertContentEquals(plaintext, outputBytes("report_restored.pdf"), "the restore gets a unique name")
     }
 
     @Test
     fun `a crypt-suffixed file with an unparseable header fails clearly and deletes the output`() = runTest {
         // The filename claims "encrypted", the content does not parse: copying the bytes verbatim
         // would hand the user ciphertext as a "successful" restore, so this must fail instead.
-        val source = addDocument("src", "broken.txt.crypt", "definitely not an FVC1 file".toByteArray())
-        val output = addDocument("out", "broken.txt", ByteArray(0))
+        val source = addSource("broken.txt.crypt", "definitely not an FVC1 file".toByteArray())
 
-        val result = engine.decryptSingleFile(source.uri.toString(), output.uri.toString(), PASSWORD)
+        val result = engine.decryptSingleFile(source.toString(), treeUri.toString(), "broken.txt", PASSWORD)
 
         assertIs<RestoreResult.Failure>(result)
         assertEquals(RestoreFailureReason.FILE_HEADER_NOT_READABLE, result.reason)
-        assertFalse(output.file.exists(), "the pre-created output document must be deleted on failure")
+        assertFalse(childExists("broken.txt"), "the freshly created output document must be deleted on failure")
     }
 
     @Test
     fun `a wrong password is reported as InvalidPassword and the output is deleted`() = runTest {
-        val source = addDocument("src", "report.pdf.crypt", encryptedBlob(PASSWORD))
-        val output = addDocument("out", "report.pdf", ByteArray(0))
+        val source = addSource("report.pdf.crypt", encryptedBlob(PASSWORD))
 
-        val result = engine.decryptSingleFile(source.uri.toString(), output.uri.toString(), "wrong-password")
-
-        assertEquals(RestoreResult.InvalidPassword, result)
-        assertFalse(output.file.exists(), "the pre-created output document must be deleted on failure")
-    }
-
-    @Test
-    fun `a failure before any write keeps a pre-existing non-empty output`() = runTest {
-        // "Save as" may return an EXISTING document the user chose to overwrite (review R2).
-        // When the restore fails without ever writing, deleting it would destroy that data.
-        val existingContent = "precious pre-existing content".toByteArray()
-        val source = addDocument("src", "broken.txt.crypt", "definitely not an FVC1 file".toByteArray())
-        val output = addDocument("out", "broken.txt", existingContent)
-
-        val result = engine.decryptSingleFile(source.uri.toString(), output.uri.toString(), PASSWORD)
-
-        assertIs<RestoreResult.Failure>(result)
-        assertContentEquals(existingContent, output.file.readBytes(), "the untouched document must survive")
-    }
-
-    @Test
-    fun `a failed copy keeps a pre-existing non-empty output that was never written`() = runTest {
-        val existingContent = "precious pre-existing content".toByteArray()
-        val source = addDocument("src", "notes.txt", "plain".toByteArray())
-        source.file.delete() // makes opening the source stream fail before the output is touched
-        val output = addDocument("out", "notes.txt", existingContent)
-
-        val result = engine.decryptSingleFile(source.uri.toString(), output.uri.toString(), PASSWORD)
-
-        assertIs<RestoreResult.Failure>(result)
-        assertContentEquals(existingContent, output.file.readBytes(), "the untouched document must survive")
-    }
-
-    @Test
-    fun `a wrong password deletes even a pre-existing output because it was already overwritten`() = runTest {
-        val source = addDocument("src", "report.pdf.crypt", encryptedBlob(PASSWORD))
-        val output = addDocument("out", "report.pdf", "old content, truncated by the write".toByteArray())
-
-        val result = engine.decryptSingleFile(source.uri.toString(), output.uri.toString(), "wrong-password")
+        val result = engine.decryptSingleFile(source.toString(), treeUri.toString(), "report.pdf", "wrong-password")
 
         assertEquals(RestoreResult.InvalidPassword, result)
-        assertFalse(output.file.exists(), "a written-to document holds only garbage and must be deleted")
+        assertFalse(childExists("report.pdf"), "the freshly created output document must be deleted on failure")
     }
 
     @Test
-    fun `a cancelled restore cleans up the pre-created empty output`() = runTest {
+    fun `a cancelled restore cleans up the created output`() = runTest {
         // A StandardTestDispatcher makes withContext(io) a real dispatch, so the UNDISPATCHED
         // launch suspends right at the engine's withContext entry — cancelling there exercises
         // the CancellationException cleanup path (review R1).
         val queuedEngine = RestoreEngine(context, cipher, dispatchersOf(StandardTestDispatcher(testScheduler)))
-        val source = addDocument("src", "report.pdf.crypt", encryptedBlob(PASSWORD))
-        val output = addDocument("out", "report.pdf", ByteArray(0))
+        val source = addSource("report.pdf.crypt", encryptedBlob(PASSWORD))
 
         val job = launch(start = CoroutineStart.UNDISPATCHED) {
-            queuedEngine.decryptSingleFile(source.uri.toString(), output.uri.toString(), PASSWORD)
+            queuedEngine.decryptSingleFile(source.toString(), treeUri.toString(), "report.pdf", PASSWORD)
         }
         job.cancel()
         job.join()
 
-        assertFalse(output.file.exists(), "the pre-created output document must be deleted on cancellation")
+        assertFalse(childExists("report.pdf"), "the created output document must be deleted on cancellation")
     }
 
     @Test
@@ -223,19 +201,18 @@ class RestoreEngineSingleFileTest {
         // completion despite the cancel, which is what the recording cipher asserts against.
         val recordingCipher = RecordingCipher(cipher)
         val chunkedEngine = RestoreEngine(context, recordingCipher, dispatchers, TEST_CHUNKING)
-        val source = addDocument("src", "report.pdf.crypt", encryptedBlob(PASSWORD))
-        val output = addDocument("out", "report.pdf", ByteArray(0))
+        val source = addSource("report.pdf.crypt", encryptedBlob(PASSWORD))
 
         lateinit var job: Job
-        FakeSingleFileProvider.onOpen = { documentId -> if (documentId == "out") job.cancel() }
+        FakeSafProvider.onOpen = { name -> if (name == "report.pdf") job.cancel() }
         job = launch {
-            chunkedEngine.decryptSingleFile(source.uri.toString(), output.uri.toString(), PASSWORD)
+            chunkedEngine.decryptSingleFile(source.toString(), treeUri.toString(), "report.pdf", PASSWORD)
         }
         job.join()
 
         assertTrue(job.isCancelled, "the restore coroutine must end cancelled, not complete normally")
         assertFalse(recordingCipher.decryptFileReturned, "the decrypt must be aborted mid-file, not run to the end")
-        assertFalse(output.file.exists(), "the output must be deleted when the decrypt is aborted mid-file")
+        assertFalse(childExists("report.pdf"), "the output must be deleted when the decrypt is aborted mid-file")
     }
 
     @Test
@@ -244,19 +221,18 @@ class RestoreEngineSingleFileTest {
         // finish with a failure result and clean up in-block; the CancellationException thrown at
         // the withContext exit must then NOT clean up a second time (review N1) — the redundant
         // delete of the already-removed document would only log a spurious warning.
-        val source = addDocument("src", "broken.txt.crypt", "definitely not an FVC1 file".toByteArray())
-        val output = addDocument("out", "broken.txt", ByteArray(0))
+        val source = addSource("broken.txt.crypt", "definitely not an FVC1 file".toByteArray())
 
         lateinit var job: Job
-        FakeSingleFileProvider.onOpen = { documentId -> if (documentId == "src") job.cancel() }
+        FakeSafProvider.onOpen = { name -> if (name == "broken.txt.crypt") job.cancel() }
         job = launch {
-            engine.decryptSingleFile(source.uri.toString(), output.uri.toString(), PASSWORD)
+            engine.decryptSingleFile(source.toString(), treeUri.toString(), "broken.txt", PASSWORD)
         }
         job.join()
 
         assertTrue(job.isCancelled, "the restore coroutine must end cancelled")
-        assertFalse(output.file.exists(), "the pre-created output document must still be deleted")
-        assertEquals(1, FakeSingleFileProvider.deleteCallCount, "cleanup must not run a second time")
+        assertFalse(childExists("broken.txt"), "the created output document must still be deleted")
+        assertEquals(1, FakeSafProvider.deleteCallCount, "cleanup must not run a second time")
     }
 
     @Test
@@ -266,34 +242,31 @@ class RestoreEngineSingleFileTest {
         // but the source's size column reports 0 despite the real content.
         val recordingCipher = RecordingCipher(cipher)
         val chunkedEngine = RestoreEngine(context, recordingCipher, dispatchers, TEST_CHUNKING)
-        val source = addDocument("src", "report.pdf.crypt", encryptedBlob(PASSWORD), reportedSize = 0L)
-        val output = addDocument("out", "report.pdf", ByteArray(0))
+        val source = addSource("report.pdf.crypt", encryptedBlob(PASSWORD), reportedSize = 0L)
 
         lateinit var job: Job
-        FakeSingleFileProvider.onOpen = { documentId -> if (documentId == "out") job.cancel() }
+        FakeSafProvider.onOpen = { name -> if (name == "report.pdf") job.cancel() }
         job = launch {
-            chunkedEngine.decryptSingleFile(source.uri.toString(), output.uri.toString(), PASSWORD)
+            chunkedEngine.decryptSingleFile(source.toString(), treeUri.toString(), "report.pdf", PASSWORD)
         }
         job.join()
 
         assertTrue(job.isCancelled, "the restore coroutine must end cancelled, not complete normally")
         assertFalse(recordingCipher.decryptFileReturned, "the decrypt must abort mid-file despite the unknown size")
-        assertFalse(output.file.exists(), "the output must be deleted when the decrypt is aborted mid-file")
+        assertFalse(childExists("report.pdf"), "the output must be deleted when the decrypt is aborted mid-file")
     }
 
     @Test
     fun `the output stream is opened with an explicit truncate mode`() = runTest {
         // The default "w" mode leaves truncation provider-dependent (Google Drive does not
-        // truncate), which would leave trailing bytes of a longer pre-existing document behind
-        // (review B1 of review/develop.md). The engine must request "wt" explicitly.
-        val source = addDocument("src", "report.pdf.crypt", encryptedBlob(PASSWORD))
-        val output = addDocument("out", "report.pdf", "old content much longer than the plaintext".toByteArray())
+        // truncate) (review B1 of review/develop.md). The engine must request "wt" explicitly.
+        val source = addSource("report.pdf.crypt", encryptedBlob(PASSWORD))
 
-        val result = engine.decryptSingleFile(source.uri.toString(), output.uri.toString(), PASSWORD)
+        val result = engine.decryptSingleFile(source.toString(), treeUri.toString(), "report.pdf", PASSWORD)
 
         assertEquals(RestoreResult.Success(decrypted = 1, copied = 0, skipped = 0, failed = 0), result)
-        assertEquals("wt", FakeSingleFileProvider.openModes["out"], "the output must be opened truncating")
-        assertContentEquals(plaintext, output.file.readBytes())
+        assertEquals("wt", FakeSafProvider.openModes["report.pdf"], "the output must be opened truncating")
+        assertContentEquals(plaintext, outputBytes("report.pdf"))
     }
 
     @Test
@@ -301,33 +274,42 @@ class RestoreEngineSingleFileTest {
         // Guards the chunk-check stream wrapper itself: crossing several chunk boundaries must not
         // corrupt or truncate what the cipher reads.
         val chunkedEngine = RestoreEngine(context, cipher, dispatchers, TEST_CHUNKING)
-        val source = addDocument("src", "report.pdf.crypt", encryptedBlob(PASSWORD))
-        val output = addDocument("out", "report.pdf", ByteArray(0))
+        val source = addSource("report.pdf.crypt", encryptedBlob(PASSWORD))
 
-        val result = chunkedEngine.decryptSingleFile(source.uri.toString(), output.uri.toString(), PASSWORD)
+        val result = chunkedEngine.decryptSingleFile(source.toString(), treeUri.toString(), "report.pdf", PASSWORD)
 
         assertEquals(RestoreResult.Success(decrypted = 1, copied = 0, skipped = 0, failed = 0), result)
-        assertContentEquals(plaintext, output.file.readBytes())
+        assertContentEquals(plaintext, outputBytes("report.pdf"))
     }
 
-    /**
-     * Registers a document with the fake provider, backed by a real temp file holding [content].
-     * A `null` [displayName] simulates a SAF provider that reports no name for the document; a
-     * non-null [reportedSize] simulates one whose size column differs from the real content
-     * (e.g. reports 0 for a document whose size it does not know).
-     */
-    private fun addDocument(
-        id: String,
-        displayName: String?,
-        content: ByteArray,
-        reportedSize: Long? = null,
-    ): TestDocument {
+    /** Registers a picked *source* document (single-document uri), backed by a real temp file. */
+    private fun addSource(displayName: String?, content: ByteArray, reportedSize: Long? = null): Uri {
+        val id = "src-${FakeSafProvider.idSequence++}"
         val file = File.createTempFile("restore-single-file-test", null, context.cacheDir)
         file.writeBytes(content)
-        val document =
-            TestDocument(displayName, file, DocumentsContract.buildDocumentUri(AUTHORITY, id), reportedSize)
-        FakeSingleFileProvider.documents[id] = document
-        return document
+        FakeSafProvider.documents[id] =
+            TestDocument(id, parentId = null, displayName = displayName, file = file, reportedSize = reportedSize)
+        return DocumentsContract.buildDocumentUri(AUTHORITY, id)
+    }
+
+    /** Registers a pre-existing file inside the destination folder, backed by a real temp file. */
+    private fun addChild(displayName: String, content: ByteArray) {
+        val id = "child-${FakeSafProvider.idSequence++}"
+        val file = File.createTempFile("restore-single-file-test", null, context.cacheDir)
+        file.writeBytes(content)
+        FakeSafProvider.documents[id] =
+            TestDocument(id, parentId = ROOT_ID, displayName = displayName, file = file)
+    }
+
+    private fun childByName(name: String): TestDocument? =
+        FakeSafProvider.documents.values.firstOrNull { it.parentId == ROOT_ID && it.displayName == name }
+
+    private fun childExists(name: String): Boolean = childByName(name)?.file?.exists() == true
+
+    private fun outputBytes(name: String): ByteArray {
+        val document = childByName(name)
+        assertNotNull(document, "expected an output document named $name")
+        return document.file!!.readBytes()
     }
 
     /**
@@ -360,6 +342,7 @@ class RestoreEngineSingleFileTest {
 
     private companion object {
         const val AUTHORITY = "ch.abwesend.foldervault.test.restore.docs"
+        const val ROOT_ID = "tree"
         const val PASSWORD = "correct-horse-battery-staple"
         const val TEST_ITERATIONS = 1_000
 
@@ -385,20 +368,23 @@ private class RecordingCipher(private val delegate: IFvc1Cipher) : IFvc1Cipher b
 }
 
 private data class TestDocument(
+    val id: String,
+    val parentId: String?,
     val displayName: String?,
-    val file: File,
-    val uri: Uri,
+    val file: File?,
+    val isDirectory: Boolean = false,
     /** Overrides the size column when set, decoupling the reported size from the real content. */
     val reportedSize: Long? = null,
 )
 
 /**
- * Minimal SAF stand-in answering exactly what `DocumentFile.fromSingleUri` needs: the display-name
- * query, `openFile` for streams (backed by a real temp file), and the `deleteDocument` provider
- * call that `DocumentFile.delete()` issues. Contents are injected via [documents] before
+ * Minimal SAF stand-in answering what `DocumentFile.fromSingleUri` and `DocumentFile.fromTreeUri`
+ * need: display-name/child queries, `openFile` for streams (backed by real temp files), the
+ * `createDocument` provider call `DocumentFile.createFile` issues, and the `deleteDocument` call
+ * `DocumentFile.delete()` issues. Contents are injected via [documents] before
  * [Robolectric.setupContentProvider].
  */
-private class FakeSingleFileProvider : ContentProvider() {
+private class FakeSafProvider : ContentProvider() {
     override fun onCreate(): Boolean = true
 
     override fun query(
@@ -410,43 +396,73 @@ private class FakeSingleFileProvider : ContentProvider() {
     ): Cursor {
         val columns = projection ?: DEFAULT_COLUMNS
         val cursor = MatrixCursor(columns)
-        val documentId = DocumentsContract.getDocumentId(uri)
-        documents[documentId]?.let { document ->
-            val row = columns.map { column ->
-                when (column) {
-                    Document.COLUMN_DOCUMENT_ID -> documentId
-                    Document.COLUMN_DISPLAY_NAME -> document.displayName
-                    Document.COLUMN_MIME_TYPE -> "application/octet-stream"
-                    Document.COLUMN_SIZE -> document.reportedSize ?: document.file.length()
-                    Document.COLUMN_LAST_MODIFIED -> 0L
-                    Document.COLUMN_FLAGS -> 0
-                    else -> null
-                }
-            }
-            cursor.addRow(row)
+        val segments = uri.pathSegments
+        if (segments.isNotEmpty() && segments.last() == "children") {
+            val parentId = DocumentsContract.getDocumentId(uri)
+            documents.values.filter { it.parentId == parentId }.forEach { addRow(cursor, columns, it) }
+        } else {
+            val documentId = DocumentsContract.getDocumentId(uri)
+            documents[documentId]?.let { addRow(cursor, columns, it) }
         }
         return cursor
+    }
+
+    private fun addRow(cursor: MatrixCursor, columns: Array<out String>, document: TestDocument) {
+        val row = columns.map { column ->
+            when (column) {
+                Document.COLUMN_DOCUMENT_ID -> document.id
+                Document.COLUMN_DISPLAY_NAME -> document.displayName
+                Document.COLUMN_MIME_TYPE ->
+                    if (document.isDirectory) Document.MIME_TYPE_DIR else "application/octet-stream"
+                Document.COLUMN_SIZE -> document.reportedSize ?: document.file?.length() ?: 0L
+                Document.COLUMN_LAST_MODIFIED -> 0L
+                Document.COLUMN_FLAGS -> if (document.isDirectory) Document.FLAG_DIR_SUPPORTS_CREATE else 0
+                else -> null
+            }
+        }
+        cursor.addRow(row)
     }
 
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
         val documentId = DocumentsContract.getDocumentId(uri)
         val document = documents[documentId] ?: throw FileNotFoundException("No document for $uri")
-        openModes[documentId] = mode
-        onOpen?.invoke(documentId)
-        return ParcelFileDescriptor.open(document.file, ParcelFileDescriptor.parseMode(mode))
+        val file = document.file ?: throw FileNotFoundException("No file for $uri")
+        openModes[document.displayName ?: documentId] = mode
+        onOpen?.invoke(document.displayName)
+        return ParcelFileDescriptor.open(file, ParcelFileDescriptor.parseMode(mode))
     }
 
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle? =
-        if (method == METHOD_DELETE_DOCUMENT) {
-            @Suppress("DEPRECATION")
-            val uri = extras?.getParcelable<Uri>(EXTRA_URI) ?: error("deleteDocument without uri")
-            val documentId = DocumentsContract.getDocumentId(uri)
-            deleteCallCount++
-            documents.remove(documentId)?.file?.delete()
-            Bundle.EMPTY
-        } else {
-            super.call(method, arg, extras)
+        when (method) {
+            METHOD_CREATE_DOCUMENT -> createDocument(extras)
+            METHOD_DELETE_DOCUMENT -> deleteDocument(extras)
+            else -> super.call(method, arg, extras)
         }
+
+    private fun createDocument(extras: Bundle?): Bundle {
+        @Suppress("DEPRECATION")
+        val parentUri = extras?.getParcelable<Uri>(EXTRA_URI) ?: error("createDocument without parent uri")
+        val parentId = DocumentsContract.getDocumentId(parentUri)
+        val name = extras.getString(Document.COLUMN_DISPLAY_NAME) ?: error("createDocument without display name")
+        val id = "created-${idSequence++}"
+        val file = File.createTempFile("restore-single-file-created", null, application.cacheDir)
+        documents[id] = TestDocument(id, parentId = parentId, displayName = name, file = file)
+        return Bundle().apply {
+            putParcelable(EXTRA_URI, DocumentsContract.buildDocumentUriUsingTree(parentUri, id))
+        }
+    }
+
+    private fun deleteDocument(extras: Bundle?): Bundle {
+        @Suppress("DEPRECATION")
+        val uri = extras?.getParcelable<Uri>(EXTRA_URI) ?: error("deleteDocument without uri")
+        val documentId = DocumentsContract.getDocumentId(uri)
+        deleteCallCount++
+        documents.remove(documentId)?.file?.delete()
+        return Bundle.EMPTY
+    }
+
+    private val application: Context
+        get() = InstrumentationRegistry.getInstrumentation().targetContext
 
     override fun getType(uri: Uri): String? = null
     override fun insert(uri: Uri, values: ContentValues?): Uri? = null
@@ -461,17 +477,21 @@ private class FakeSingleFileProvider : ContentProvider() {
     companion object {
         val documents: MutableMap<String, TestDocument> = mutableMapOf()
 
-        /** Test hook invoked with the document id whenever a document is opened for streaming. */
-        var onOpen: ((String) -> Unit)? = null
+        /** Test hook invoked with the display name whenever a document is opened for streaming. */
+        var onOpen: ((String?) -> Unit)? = null
 
-        /** The last mode string each document was opened with, keyed by document id. */
+        /** The last mode string each document was opened with, keyed by display name. */
         val openModes: MutableMap<String, String> = mutableMapOf()
 
         /** Number of deleteDocument provider calls, to detect redundant double cleanups. */
         var deleteCallCount = 0
 
-        /** Hidden `DocumentsContract.METHOD_DELETE_DOCUMENT` / `EXTRA_URI` values. */
+        /** Monotonic counter for generated document ids. */
+        var idSequence = 0
+
+        /** Hidden `DocumentsContract` method / extra values. */
         private const val METHOD_DELETE_DOCUMENT = "android:deleteDocument"
+        private const val METHOD_CREATE_DOCUMENT = "android:createDocument"
         private const val EXTRA_URI = "uri"
 
         private val DEFAULT_COLUMNS = arrayOf(

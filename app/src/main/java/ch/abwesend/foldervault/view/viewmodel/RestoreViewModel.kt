@@ -192,15 +192,18 @@ class RestoreViewModel(
         }
     }
 
-    fun startSingleFileRestore(outputFileUri: String) {
-        val src = _uiState.value.sourceFileUri
-        if (src != null && restoreJob?.isActive != true) {
+    fun startSingleFileRestore(outputFolderUri: String) {
+        val snapshot = _uiState.value
+        val src = snapshot.sourceFileUri
+        val outputName = snapshot.suggestedOutputName
+        if (src != null && outputName != null && restoreJob?.isActive != true) {
             restoreJob = safeLaunch {
                 _uiState.update { it.copy(state = RestoreState.Running, progress = null) }
                 try {
                     val result = engine.decryptSingleFile(
                         sourceFileUri = src,
-                        outputFileUri = outputFileUri,
+                        outputFolderUri = outputFolderUri,
+                        outputFileName = outputName,
                         password = _uiState.value.singleFilePassword,
                     )
                     _uiState.update {

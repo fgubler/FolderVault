@@ -99,6 +99,7 @@ Crashlytics confinement: ONLY `infrastructure/logging/CrashlyticsSink.kt` may im
 ### Style
 - Prefer KDoc style comments over normal comments on methods, classes and properties
 - Avoid early returns unless they bring a lot of benefit
+- Never hard-code user-facing texts: always use Android's string resources.
 
 ## Sandbox: when to ask the user instead of working around it
 Never change code, dependencies, or build config just to make something pass *inside* the

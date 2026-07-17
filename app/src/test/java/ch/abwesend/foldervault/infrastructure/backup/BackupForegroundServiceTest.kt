@@ -41,6 +41,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowNetworkCapabilities
 import java.util.UUID
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertFalse
@@ -95,10 +96,10 @@ class BackupForegroundServiceTest {
             .setSmallIcon(android.R.drawable.stat_sys_upload)
             .build()
         every {
-            notificationManager.buildProgressNotification(any(), any(), any(), any(), any())
+            notificationManager.buildProgressNotification(any(), any(), any(), any(), any(), any())
         } returns progressNotification
         every {
-            notificationManager.updateProgressNotification(any(), any(), any(), any(), any())
+            notificationManager.updateProgressNotification(any(), any(), any(), any(), any(), any())
         } returns progressNotification
         every { scheduler.scheduleOneTime(any(), any(), any(), any()) } answers {
             continuationScheduled.countDown()
@@ -158,7 +159,7 @@ class BackupForegroundServiceTest {
         // The config row snapshot has totalFilesDiscovered = 0 (first run) — counts can only
         // come from the run control's live flows.
         every {
-            notificationManager.updateProgressNotification(any(), any(), any(), any(), any())
+            notificationManager.updateProgressNotification(any(), any(), any(), any(), any(), any())
         } answers {
             val filesUploaded = arg<Int>(1)
             val totalDiscovered = arg<Int>(2)
@@ -191,12 +192,49 @@ class BackupForegroundServiceTest {
     }
 
     @Test
+    fun `baseline pass shows the indexing notification instead of upload counts`() {
+        val indexingShown = CountDownLatch(1)
+        // A "only sync changes from now on" config whose baseline is still pending: the run
+        // records metadata and uploads nothing, so the notification must not read "0 / N".
+        coEvery { configDao.getByIdOnce(configId) } returns
+            backupConfigEntity(configId).copy(syncLaterChangesOnly = true, baselineCompletedAt = null)
+        every {
+            notificationManager.updateProgressNotification(any(), any(), any(), any(), any(), any())
+        } answers {
+            if (arg<Boolean>(5)) {
+                indexingShown.countDown()
+            }
+            progressNotification
+        }
+        coEvery { runner.runBackup(configId, any()) } coAnswers {
+            val control = secondArg<BackupRunControl?>()
+            runStarted.countDown()
+            control?.reportFilesDiscovered(42)
+            while (control?.shouldStop() != true) {
+                delay(20)
+            }
+            RunResult.Success(summary = RunSummary().apply { hitTimeBudget = true }, runId = "run-1")
+        }
+
+        val service = Robolectric.buildService(BackupForegroundService::class.java).create().get()
+        service.onStartCommand(startIntent(), 0, 1)
+        assertTrue(runStarted.await(10, TimeUnit.SECONDS), "the backup run should have started")
+
+        assertTrue(
+            indexingShown.await(10, TimeUnit.SECONDS),
+            "a baseline (only-sync-changes) run should show the indexing notification, not upload counts",
+        )
+
+        service.onStartCommand(stopIntent(), 0, 2)
+    }
+
+    @Test
     fun `a second config started while busy is queued and runs after the active run completes`() {
         val releaseFirstRun = CountDownLatch(1)
         val secondRunStarted = CountDownLatch(1)
         val queuedCountShown = CountDownLatch(1)
         every {
-            notificationManager.updateProgressNotification(any(), any(), any(), any(), any())
+            notificationManager.updateProgressNotification(any(), any(), any(), any(), any(), any())
         } answers {
             if (arg<Int>(3) == 1) {
                 queuedCountShown.countDown()
@@ -231,6 +269,60 @@ class BackupForegroundServiceTest {
             "the queued run should start once the active one completes",
         )
         awaitNotRunning(secondConfigId)
+    }
+
+    @Test
+    fun `a queued second config never takes over the active run's ongoing notification`() {
+        // Robolectric runs the test — and the synchronous onStartCommand → enqueueOrLaunch →
+        // postProgressNotification chain — on the main thread; publishProgress runs on the default
+        // dispatcher (a background thread). Recording the calling thread lets us assert the
+        // synchronous main-thread post the fix introduced, independently of async ticks.
+        val mainThread = Thread.currentThread()
+        val synchronousPosts = CopyOnWriteArrayList<Pair<String, Int>>()
+        every {
+            notificationManager.updateProgressNotification(any(), any(), any(), any(), any(), any())
+        } answers {
+            if (Thread.currentThread() === mainThread) {
+                synchronousPosts.add(arg<String>(0) to arg<Int>(3))
+            }
+            progressNotification
+        }
+        val releaseFirstRun = CountDownLatch(1)
+        mockRunnerHeldOpen(configId, runStarted, releaseFirstRun)
+        coEvery { runner.runBackup(secondConfigId, any()) } coAnswers {
+            RunResult.Success(summary = RunSummary(), runId = "run-2")
+        }
+
+        val service = Robolectric.buildService(BackupForegroundService::class.java).create().get()
+        service.onStartCommand(startIntent(), 0, 1)
+        assertTrue(runStarted.await(10, TimeUnit.SECONDS), "the first backup run should have started")
+
+        service.onStartCommand(startIntent(secondConfigId), 0, 2)
+        assertTrue(foregroundRunState.isRunning(secondConfigId), "the second config should be queued (running)")
+
+        // While the second config is only queued, the ongoing progress notification must keep
+        // reflecting the ACTIVE (first) run — it must never be built or updated for the queued
+        // config, which is the "second backup overrides the first" regression.
+        verify(exactly = 0) {
+            notificationManager.buildProgressNotification(secondConfigId, any(), any(), any(), any(), any())
+        }
+        verify(exactly = 0) {
+            notificationManager.updateProgressNotification(secondConfigId, any(), any(), any(), any(), any())
+        }
+
+        // Deterministic tripwire: queuing the second config must SYNCHRONOUSLY re-post the ACTIVE
+        // (first) run's notification with the new queued count, on the calling (main) thread — the
+        // moment `onStartCommand` returns, before any publishProgress tick. Pre-fix the queued count
+        // only appeared on the asynchronous default-dispatcher tick, so no such main-thread post
+        // exists and this fails, whereas the `verify(exactly = 0)` checks above pass either way.
+        assertTrue(
+            synchronousPosts.any { (postedConfigId, queued) -> postedConfigId == configId && queued == 1 },
+            "queuing a second config should synchronously re-post the active run's notification with queuedRuns = 1",
+        )
+
+        releaseFirstRun.countDown()
+        awaitNotRunning(secondConfigId)
+        service.onStartCommand(stopIntent(), 0, 3)
     }
 
     @Test

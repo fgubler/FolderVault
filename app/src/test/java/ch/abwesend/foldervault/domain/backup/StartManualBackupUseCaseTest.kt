@@ -56,6 +56,7 @@ class StartManualBackupUseCaseTest : StringSpec({
             networkPolicy: NetworkPolicy,
             requiresCharging: Boolean,
             asContinuation: Boolean,
+            forceInline: Boolean,
         ) {
             oneTimeCalls.add(SchedulerCall(configId, networkPolicy, requiresCharging))
         }
@@ -74,6 +75,7 @@ class StartManualBackupUseCaseTest : StringSpec({
         override fun cancelOneTime(configId: String) = Unit
         override fun cancel(configId: String) = Unit
         override fun cancelAll() = Unit
+        override fun ensureWatchdogScheduled() = Unit
         override fun observeIsRunning(configId: String): Flow<Boolean> = flowOf(false)
     }
 

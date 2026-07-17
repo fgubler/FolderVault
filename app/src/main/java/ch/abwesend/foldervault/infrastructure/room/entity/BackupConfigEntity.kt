@@ -65,4 +65,11 @@ data class BackupConfigEntity(
     val filesUploadedTotal: Int,
     val lastRunCompletedNormally: Boolean,
     val isPaused: Boolean = false,
-)
+) {
+    /**
+     * True while a [syncLaterChangesOnly] config still owes its baseline pass (see
+     * [baselineCompletedAt]). Not a column — a computed view Room ignores. The progress
+     * notification uses it to show "checking existing files" instead of upload counts.
+     */
+    val isBaselinePending: Boolean get() = syncLaterChangesOnly && baselineCompletedAt == null
+}

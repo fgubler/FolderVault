@@ -2,6 +2,9 @@ package ch.abwesend.foldervault.view.screens
 
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.StringRes
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
@@ -14,8 +17,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
@@ -25,6 +30,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -34,6 +40,8 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -51,6 +59,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -72,7 +81,10 @@ import ch.abwesend.foldervault.view.components.PasswordTextField
 import ch.abwesend.foldervault.view.components.UnexpectedErrorDialog
 import ch.abwesend.foldervault.view.util.formatRelativeAgo
 import ch.abwesend.foldervault.view.viewmodel.BackupDetailViewModel
+import ch.abwesend.foldervault.view.viewmodel.CloudDeleteState
 import ch.abwesend.foldervault.view.viewmodel.DetailEvent
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
 import java.time.Instant
@@ -120,21 +132,25 @@ fun BackupDetailScreen(
 ) {
     val config by viewModel.config.collectAsState()
     val continuesAutomatically by viewModel.continuesAutomatically.collectAsState()
+    val reliableExecutionActive by viewModel.reliableExecutionActive.collectAsState()
     val messages by viewModel.messages.collectAsState()
     val passwordCheckResult by viewModel.passwordCheckResult.collectAsState()
     val isRunning by viewModel.isRunning.collectAsState()
     val unexpectedError by viewModel.unexpectedError.collectAsState()
     val showMeteredOverridePrompt by viewModel.showMeteredOverridePrompt.collectAsState()
     val showChargingOverridePrompt by viewModel.showChargingOverridePrompt.collectAsState()
-    val currentOnDelete by rememberUpdatedState(onDelete)
 
     UnexpectedErrorDialog(error = unexpectedError, onDismiss = viewModel::dismissUnexpectedError)
 
-    LaunchedEffect(Unit) {
-        viewModel.events.collect { event ->
-            if (event is DetailEvent.Deleted) currentOnDelete()
-        }
-    }
+    val snackbarHostState = remember { SnackbarHostState() }
+    DetailEventsHandler(events = viewModel.events, snackbarHostState = snackbarHostState, onDelete = onDelete)
+
+    val cloudDeleteState by viewModel.cloudDeleteState.collectAsState()
+    CloudFolderDeleteHandler(
+        state = cloudDeleteState,
+        onConsentResult = viewModel::handleDriveConsentResult,
+        onAcknowledgeFailure = viewModel::acknowledgeFolderDeleteFailure,
+    )
 
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showPasswordDialog by remember { mutableStateOf(false) }
@@ -145,9 +161,9 @@ fun BackupDetailScreen(
         showMeteredOverridePrompt = showMeteredOverridePrompt,
         showChargingOverridePrompt = showChargingOverridePrompt,
         passwordCheckResult = passwordCheckResult,
-        onDeleteConfirm = {
+        onDeleteConfirm = { alsoDeleteCloudFolder ->
             showDeleteDialog = false
-            viewModel.deleteBackup()
+            viewModel.deleteBackup(alsoDeleteCloudFolder)
         },
         onDeleteDismiss = { showDeleteDialog = false },
         onCheckPassword = viewModel::checkPassword,
@@ -163,6 +179,7 @@ fun BackupDetailScreen(
 
     Scaffold(
         modifier = modifier,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             BackupDetailTopBar(
                 title = config?.displayName ?: stringResource(R.string.detail_default_title),
@@ -170,6 +187,10 @@ fun BackupDetailScreen(
                 onShowRunHistory = onShowRunHistory,
                 onEdit = onEdit,
                 onDelete = { showDeleteDialog = true },
+                // Deleting is blocked while a run is active (either host): deleting the config —
+                // and especially its Drive folder — mid-upload would fail or orphan the in-flight
+                // run. The button re-enables as soon as the run finishes.
+                deleteEnabled = !isRunning,
             )
         },
     ) { innerPadding ->
@@ -182,6 +203,7 @@ fun BackupDetailScreen(
                 messages = messages,
                 isRunning = isRunning,
                 continuesAutomatically = continuesAutomatically,
+                reliableExecutionActive = reliableExecutionActive,
                 onBackUpNow = viewModel::backUpNow,
                 onTogglePause = viewModel::togglePause,
                 onCheckPassword = { showPasswordDialog = true },
@@ -203,6 +225,7 @@ private fun BackupDetailTopBar(
     onShowRunHistory: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
+    deleteEnabled: Boolean,
 ) {
     TopAppBar(
         title = { Text(title) },
@@ -221,7 +244,7 @@ private fun BackupDetailTopBar(
             IconButton(onClick = onEdit) {
                 Icon(Icons.Default.Edit, stringResource(R.string.edit_backup_title))
             }
-            IconButton(onClick = onDelete) {
+            IconButton(onClick = onDelete, enabled = deleteEnabled) {
                 Icon(Icons.Default.Delete, stringResource(R.string.dialog_delete_title))
             }
         },
@@ -235,6 +258,7 @@ private fun DetailContent(
     messages: List<BackupMessage>,
     isRunning: Boolean,
     continuesAutomatically: Boolean,
+    reliableExecutionActive: Boolean,
     onBackUpNow: () -> Unit,
     onTogglePause: () -> Unit,
     onCheckPassword: () -> Unit,
@@ -249,7 +273,7 @@ private fun DetailContent(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        item { ConfigInfoSection(config = config) }
+        item { ConfigInfoSection(config = config, reliableExecutionActive = reliableExecutionActive) }
         if (showInitialSyncBanner(config, isRunning)) {
             item {
                 InitialSyncIncompleteBanner(
@@ -300,7 +324,7 @@ private fun DetailContent(
 }
 
 @Composable
-private fun ConfigInfoSection(config: BackupConfig) {
+private fun ConfigInfoSection(config: BackupConfig, reliableExecutionActive: Boolean) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         CloudFolderRow(config.cloudSubFolderName, config.cloudSubFolderId)
         InfoRow(stringResource(R.string.label_account), config.cloudAccountIdentifier)
@@ -320,6 +344,14 @@ private fun ConfigInfoSection(config: BackupConfig) {
             stringResource(if (config.encryptionEnabled) R.string.encryption_enabled else R.string.encryption_disabled),
         )
         InfoRow(stringResource(R.string.label_retention), config.retentionPolicy.displayName())
+        // Shown only while the "extended run time" enhancement is active for this install — the
+        // common WorkManager path needs no line (the standard behavior).
+        if (reliableExecutionActive) {
+            InfoRow(
+                stringResource(R.string.label_reliable_execution),
+                stringResource(R.string.value_reliable_execution_exact_alarm),
+            )
+        }
         Spacer(modifier = Modifier.height(8.dp))
         StatusSection(config)
     }
@@ -482,7 +514,9 @@ private fun showInitialSyncBanner(config: BackupConfig, isRunning: Boolean): Boo
  * Reassuring "this is not an error" banner for an interrupted initial sync (spec §7.6), with a
  * one-tap way to continue in the foreground service — going through the same prompt chain as
  * the "Back up now" button. A manual-only config gets a text without the "continues
- * automatically" promise: nothing is scheduled for it, so only the tap continues the sync.
+ * automatically" promise: nothing is scheduled for it, so only the tap continues the sync. An
+ * interrupted baseline pass ([BackupConfig.isBaselinePending]) gets "checking existing files"
+ * wording without an upload count — the pass records metadata and uploads nothing.
  */
 @Composable
 private fun InitialSyncIncompleteBanner(
@@ -490,10 +524,16 @@ private fun InitialSyncIncompleteBanner(
     continuesAutomatically: Boolean,
     onContinue: () -> Unit,
 ) {
-    val textRes = if (continuesAutomatically) {
-        R.string.detail_initial_sync_incomplete
+    val textRes = when {
+        config.isBaselinePending && continuesAutomatically -> R.string.detail_initial_sync_indexing
+        config.isBaselinePending -> R.string.detail_initial_sync_indexing_manual
+        continuesAutomatically -> R.string.detail_initial_sync_incomplete
+        else -> R.string.detail_initial_sync_incomplete_manual
+    }
+    val bannerText = if (config.isBaselinePending) {
+        stringResource(textRes)
     } else {
-        R.string.detail_initial_sync_incomplete_manual
+        stringResource(textRes, config.filesUploadedTotal, config.totalFilesDiscovered)
     }
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -501,11 +541,7 @@ private fun InitialSyncIncompleteBanner(
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             Text(
-                text = stringResource(
-                    textRes,
-                    config.filesUploadedTotal,
-                    config.totalFilesDiscovered,
-                ),
+                text = bannerText,
                 style = MaterialTheme.typography.bodyMedium,
             )
             Row(
@@ -588,7 +624,7 @@ private fun BackupDetailDialogs(
     showMeteredOverridePrompt: Boolean,
     showChargingOverridePrompt: Boolean,
     passwordCheckResult: Boolean?,
-    onDeleteConfirm: () -> Unit,
+    onDeleteConfirm: (alsoDeleteCloudFolder: Boolean) -> Unit,
     onDeleteDismiss: () -> Unit,
     onCheckPassword: (String) -> Unit,
     onPasswordDismiss: () -> Unit,
@@ -660,15 +696,141 @@ private fun ChargingOverrideDialog(onConfirm: () -> Unit, onDismiss: () -> Unit)
     )
 }
 
+/**
+ * Confirms deleting the config. The "also delete the Drive folder" checkbox is unchecked by default
+ * so nothing on Google Drive is removed by accident — the user has to opt in, and a red caption then
+ * spells out that the deletion is permanent. [onConfirm] carries the checkbox state.
+ */
 @Composable
-private fun DeleteConfirmDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+private fun DeleteConfirmDialog(onConfirm: (alsoDeleteCloudFolder: Boolean) -> Unit, onDismiss: () -> Unit) {
+    var alsoDeleteCloudFolder by remember { mutableStateOf(false) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.dialog_delete_title)) },
-        text = { Text(stringResource(R.string.dialog_delete_body)) },
-        confirmButton = { Button(onClick = onConfirm) { Text(stringResource(R.string.button_delete)) } },
+        text = {
+            Column {
+                Text(stringResource(R.string.dialog_delete_body))
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .toggleable(
+                            value = alsoDeleteCloudFolder,
+                            role = Role.Checkbox,
+                            onValueChange = { alsoDeleteCloudFolder = it },
+                        ),
+                ) {
+                    // onCheckedChange is null: the row's toggleable carries the checkbox semantics,
+                    // so screen readers see a single toggle target rather than two.
+                    Checkbox(
+                        checked = alsoDeleteCloudFolder,
+                        onCheckedChange = null,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        stringResource(R.string.dialog_delete_cloud_checkbox),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                if (alsoDeleteCloudFolder) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        stringResource(R.string.dialog_delete_cloud_warning),
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onConfirm(alsoDeleteCloudFolder) }) {
+                Text(stringResource(R.string.button_delete))
+            }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.button_cancel)) } },
     )
+}
+
+/**
+ * Reacts to the ViewModel's one-shot [DetailEvent]s: navigates back (via [onDelete]) after a
+ * completed delete, and shows a snackbar when a confirmed delete was refused because a backup run
+ * is active — the refusal must not be silent.
+ */
+@Composable
+private fun DetailEventsHandler(
+    events: SharedFlow<DetailEvent>,
+    snackbarHostState: SnackbarHostState,
+    onDelete: () -> Unit,
+) {
+    val currentOnDelete by rememberUpdatedState(onDelete)
+    val deleteRefusedMessage = stringResource(R.string.snackbar_delete_refused_running)
+    LaunchedEffect(Unit) {
+        events.collect { event ->
+            when (event) {
+                DetailEvent.Deleted -> currentOnDelete()
+                // launch so the snackbar's display time doesn't block collecting further events
+                DetailEvent.DeleteRefusedWhileRunning ->
+                    launch { snackbarHostState.showSnackbar(deleteRefusedMessage) }
+            }
+        }
+    }
+}
+
+/**
+ * Wires the optional "also delete the Drive folder" branch to the UI: launches the re-consent
+ * screen when silent authorization needs it (mirroring AddEditBackupScreen's Drive consent flow),
+ * feeding its result back through [onConsentResult], and shows the progress / failure dialogs.
+ */
+@Composable
+private fun CloudFolderDeleteHandler(
+    state: CloudDeleteState,
+    onConsentResult: (Intent?) -> Unit,
+    onAcknowledgeFailure: () -> Unit,
+) {
+    val driveConsentLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult(),
+    ) { result -> onConsentResult(result.data) }
+    LaunchedEffect(state) {
+        if (state is CloudDeleteState.ConsentRequired) {
+            driveConsentLauncher.launch(
+                IntentSenderRequest.Builder(state.pendingIntent.intentSender).build(),
+            )
+        }
+    }
+    CloudDeleteStatusDialogs(state = state, onAcknowledgeFailure = onAcknowledgeFailure)
+}
+
+/**
+ * Blocking status dialogs for the "also delete the Drive folder" branch: a progress dialog while the
+ * folder is being deleted, and a warning if it couldn't be — acknowledging the warning still deletes
+ * the config locally (via [onAcknowledgeFailure]), so the user's delete is always honored.
+ */
+@Composable
+private fun CloudDeleteStatusDialogs(state: CloudDeleteState, onAcknowledgeFailure: () -> Unit) {
+    when (state) {
+        CloudDeleteState.InProgress -> AlertDialog(
+            onDismissRequest = { /* non-cancelable: a delete is in flight */ },
+            text = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Text(stringResource(R.string.dialog_delete_in_progress))
+                }
+            },
+            confirmButton = {},
+        )
+        CloudDeleteState.FolderDeleteFailed -> AlertDialog(
+            onDismissRequest = onAcknowledgeFailure,
+            title = { Text(stringResource(R.string.dialog_delete_cloud_failed_title)) },
+            text = { Text(stringResource(R.string.dialog_delete_cloud_failed_body)) },
+            confirmButton = {
+                Button(onClick = onAcknowledgeFailure) { Text(stringResource(R.string.button_ok)) }
+            },
+        )
+        CloudDeleteState.Idle, is CloudDeleteState.ConsentRequired -> Unit
+    }
 }
 
 @Composable
@@ -779,6 +941,7 @@ private fun BackupDetailPreview() {
             messages = sampleMessages,
             isRunning = false,
             continuesAutomatically = true,
+            reliableExecutionActive = true,
             onBackUpNow = {},
             onTogglePause = {},
             onCheckPassword = {},

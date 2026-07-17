@@ -7,6 +7,612 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-07-16 — Branch review vs master + fixes B1/S1/S2 (truncate mode, unknown-size cancel, shared suffix)
+
+### What was requested
+Review the branch against `master` (`/code-review`), then fix findings B1, S1 and S2 from
+`review/develop.md`.
+
+### What was done
+- **B1 — provider-dependent truncation**: both restore output streams were opened with the
+  default `"w"` mode, whose truncation is provider-dependent — Google Drive's DocumentsProvider
+  notoriously does *not* truncate. The single-file flow is the first path writing into a
+  *pre-existing* document (the "Save as" overwrite case; the folder flow's OVERWRITE deletes and
+  recreates), so shorter output would have left trailing bytes of the old content behind while
+  reporting `Success`. Both call sites now pass an explicit `OUTPUT_STREAM_MODE = "wt"` (single
+  constant in `RestoreEngine` carrying the rationale). Regression test records the mode string
+  arriving at `FakeSingleFileProvider.openFile` — the local test cannot show the corruption
+  itself because `ParcelFileDescriptor.parseMode("w")` truncates locally, so it pins the intent.
+- **S1 — unknown-size sources uncancellable**: `singleFileCancellationWrapper` treated
+  `length() == 0` (provider reports no size) as "small" and skipped the chunked-cancellation
+  wrapper, making such a run uncancellable for its whole duration. Unknown size now wraps too
+  (`<= 0L || > threshold`) — the wrapper costs only a counter per read. Regression test gives
+  `TestDocument` an optional `reportedSize` override (size column decoupled from real content)
+  and asserts a mid-file abort despite a reported size of 0.
+- **S2 — `.crypt` hard-coded four times**: extracted `Fvc1Header.CRYPT_FILE_SUFFIX` (domain,
+  next to the format constants it belongs to) and pointed `RestoreEngine`, `RestorePathResolver`,
+  `RemoteNameBuilder` and `RestoreViewModel.suggestedOutputName` at it.
+- N1 (no "cancelled" feedback after a single-file cancel) was raised as a nitpick and left open.
+
+### Verification
+`assembleDebug`, full `test` suite (incl. the two new engine tests), `detekt` — all clean.
+
+## 2026-07-16 — Review follow-up N1/N2: single cleanup + typed restore-failure reasons
+
+### What was requested
+Fix the two remaining nitpicks from `review/develop.md`: N1 (double cleanup on cancellation logs
+a spurious warning) and N2 (user-facing restore failure messages hardcoded in English inside the
+engine).
+
+### What was done
+- **N1 — double cleanup**: when `decryptSingleFile`'s block finished with a failure (in-block
+  cleanup ran) *and* a cancel arrived before the `withContext` exit, the `CancellationException`
+  catch cleaned up a second time — the delete of the already-removed document failed and logged
+  "Could not delete partial output". A `cleanedUp` flag set after the in-block cleanup now makes
+  the catch skip it. Regression test cancels from the *source* document's `openFile` (so the
+  block completes with a failure while already cancelled) and asserts via a new
+  `deleteCallCount` on `FakeSingleFileProvider` that exactly one delete reaches the provider.
+  Pitfall found while writing it: with `CoroutineStart.UNDISPATCHED` the `onOpen` hook fires
+  before the `lateinit job` is assigned — plain `launch` is required for this test's ordering.
+- **N2 — typed failure reasons**: `RestoreResult.Failure(message: String)` became
+  `Failure(reason: RestoreFailureReason)` — a new domain enum with `@StringRes messageResId`
+  following the established `RestoreCollisionPolicy`/`RestoreMode` pattern (domain enums carry
+  string-resource ids in this single-module app). Eight values cover all engine failure sites,
+  including the whole-folder flow's source/output-folder failures. `RestoreResultSection`
+  resolves the reason via `stringResource` into the existing `restore_failed` format string;
+  the eight message texts moved to `strings.xml`.
+
+### Verification
+`assembleDebug`, `test` (477 tests, engine spec 13/13), `detekt` — all clean.
+
+## 2026-07-16 — Review follow-up S2/S3: double-start guard + password hygiene
+
+### What was requested
+Fix the two remaining suggestions from `review/develop.md`: S2 (no guard against starting a
+second restore while one is running) and S3 (single-file password retained in the ViewModel
+after a successful restore).
+
+### What was done
+- **S2 — double-start guard**: `startRestore` and `startSingleFileRestore` previously overwrote
+  `restoreJob` without cancelling it, so a second call (unreachable through today's UI, but open
+  at the ViewModel API) raced two engine runs on the same `_uiState` and orphaned the first job's
+  handle. Both now additionally guard on `restoreJob?.isActive != true` and *ignore* the second
+  start — cancelling the in-flight restore on a spurious call would be the worse failure mode.
+  `cancel()`/`reset()` null the job, so a deliberate cancel still allows an immediate re-start.
+- **S3 — password hygiene**: on `Done(Success)` the single-file flow now clears
+  `singleFilePassword` from the `StateFlow` (it already never touched saved state); failed
+  attempts (e.g. `InvalidPassword`) keep it so the user can correct a typo instead of retyping.
+- Tests: `FakeRestoreEngine` gained call counters and an optional `CompletableDeferred` gate that
+  holds `decryptAll`/`decryptSingleFile` in flight, making the concurrent-start guard observable.
+  Four new cases: second-start ignored (both flows), password cleared on success, password kept
+  on failure.
+
+### Verification
+`assembleDebug`, `test` (ViewModel spec 19/19), `detekt` — all clean.
+
+## 2026-07-16 — Review follow-up B1/S1: mode-switch guard + chunked cancellation
+
+### What was requested
+A fresh `/code-review` pass of `develop` vs `master` (new findings file `review/develop.md`:
+B1, S1–S3, N1–N2), then fix B1 and S1 — S1 via chunking for files above 100 MB, with the
+number of chunks depending on the file size.
+
+### What was done
+- **B1 (blocking) — stray mode-tap wiped user input**: `SegmentedButton.onClick` fires even for
+  the already-selected segment, and `RestoreViewModel.setMode` unconditionally reset the whole UI
+  state (picked file, typed password, scan result). `setMode` is now a no-op when the mode is
+  unchanged. Existing test "setMode clears the single-file password" adjusted (it relied on the
+  same-mode reset); new test pins the guard.
+- **S1 — cancel was unresponsive during a single-file restore**: nothing inside
+  `decryptSingleFile`'s `withContext` block was cancellable, so a cancel waited for the *whole*
+  file to be decrypted before the cleanup ran. New `CancellationChunking` config on
+  `RestoreEngine` (default: threshold 100 MiB, chunk 50 MiB — the chunk *count* scales with the
+  file size): sources above the threshold are read through a `ChunkedCancellationInputStream`
+  that calls `ensureActive()` after every chunk, so a cancel aborts within one chunk of work.
+  The thrown `CancellationException` propagates through `Fvc1Cipher.decryptFile`
+  (`runCatchingAsResult` rethrows cancellation) into the existing cancellation-cleanup catch.
+  Sources at/below the threshold — and providers reporting no size (`length() == 0`) — keep the
+  old run-to-completion-then-clean-up behavior. Whole-folder restore is untouched (it already
+  checks `isActive` between files).
+- Tests: `FakeSingleFileProvider` gained an `onOpen` hook; the chunked-cancel test cancels the
+  job from the *output* document's `openFile` (i.e. mid-run, deterministically) and asserts via a
+  `RecordingCipher` that `decryptFile` was genuinely aborted mid-file — the outcome assertions
+  alone (cancelled + output deleted) would also pass via the old cancel-at-exit path. A second
+  test decrypts across several chunk boundaries to prove the wrapper doesn't corrupt the stream.
+
+### Verification
+`assembleDebug`, `test` (engine spec 12/12, ViewModel spec green), `detekt` — all clean.
+
+## 2026-07-16 — Review follow-up R1–R6: single-file restore robustness + UI polish
+
+### What was requested
+A fresh `/code-review` pass of `develop` vs `master` (the previous findings file was gone;
+all earlier findings B1–B4/S1/S2/S6 verified fixed first), then fix all six new findings
+R1–R6 from `review/develop.md`.
+
+### What was done
+- **R1 (blocking) — cancel left the decrypted file behind**: `RestoreEngine.decryptSingleFile`
+  is one uninterrupted blocking block, so a user cancel never interrupted it — `withContext`
+  discarded the (fully decrypted!) result and the plaintext silently remained at the picked
+  location. The engine now catches `CancellationException` around the `withContext`, deletes the
+  output under `NonCancellable + dispatchers.io`, and rethrows. Test uses
+  `launch(start = UNDISPATCHED)` + a `StandardTestDispatcher` io so the coroutine parks exactly
+  at the engine's `withContext` entry, then cancels.
+- **R2 — cleanup could delete a pre-existing file**: `ACTION_CREATE_DOCUMENT` returns an
+  *existing* document when the user confirms an overwrite; the unwritten-failure paths then
+  deleted data the restore never touched. Cleanup is now centralized in `decryptSingleFile`
+  (single cleanup point, incl. the previously uncleaned `source == null` guard) and gated by
+  `cleanUpSingleFileOutput`: delete only if the output stream was actually opened
+  (`onOutputOpened` callback threaded through `decryptEntryDetailed`/`copyEntry`/`withStreams`,
+  default no-op for the folder flow) or the document is still empty (freshly picker-created).
+  `decryptSingle`/`copySingle` no longer delete themselves.
+- **R3 — process death during the "Save as" round-trip**: mode + single-file selection now live
+  in `SavedStateHandle` (`restore.mode`, `restore.singleFile.*`); the password deliberately still
+  does not. After process death the picker result now runs normally; the empty password surfaces
+  as "wrong password" (with the output cleaned up per R2) instead of a silent no-op that
+  orphaned the picker-created zero-byte file. Koin: `viewModel { RestoreViewModel(get(), get()) }`
+  — Koin 4 injects `SavedStateHandle` for `koinViewModel()`-created VMs.
+- **R4** — progress dialog shows a new "Decrypting the file…" string in single-file mode instead
+  of the misleading "Verifying password…" (`RestoreProgressDialog` takes the `RestoreMode`).
+- **R5** — single-file results use dedicated success strings ("The file was decrypted and
+  saved." / "The file was not encrypted, so it was saved as an unchanged copy.") instead of the
+  counter-based folder message (`RestoreResultSection` takes the `RestoreMode`).
+- **R6** — `@StringRes` on `ExplanationSection`'s parameters.
+- `IRestoreEngine.decryptSingleFile` KDoc updated to the new cleanup contract (cancellation
+  cleans up; pre-existing untouched documents survive).
+- Tests: +4 engine cases (unwritten failure keeps pre-existing output ×2, wrong password deletes
+  an overwritten output, cancellation deletes the empty output), +3 ViewModel cases
+  (saved-state restore incl. password-not-persisted, reset/setMode clear the persistence).
+- `review/develop.md`: R1–R6 marked fixed.
+
+### Notes
+- Build gates green: `assembleDebug`, `test` (all green, incl. the 7 new cases), `detekt`.
+
+## 2026-07-16 — Review follow-up S2: header-based decrypt-vs-copy for single-file restore
+
+### What was requested
+Fix S1 and S2 from `review/develop.md`. S2 explicitly with a multi-stage approach: try to parse the
+file header; if that fails (for any reason), fall back to guessing by filename.
+
+### What was done
+- **S1** (`reset()` drops the selected mode): already fixed in the working tree
+  (`RestoreViewModel.reset` preserves `mode`, covered by the ViewModel test
+  "reset keeps the selected mode…") — verified, no change needed.
+- **S2** (`decryptSingleFile` decided decrypt-vs-copy solely by the `.crypt` suffix):
+  `RestoreEngine.decryptSingleFile` now decides in two stages. Stage 1 parses the FVC1 header
+  (`readHeader`) — a file whose header parses is decrypted regardless of its display name, so a
+  renamed/suffix-less encrypted file from an arbitrary SAF provider no longer gets its ciphertext
+  copied verbatim as a "successful" restore. Stage 2 (header does not parse, for any reason)
+  falls back to the `.crypt` suffix: a suffixed file is still treated as encrypted and fails with
+  "Cannot read file header" (plus output cleanup) rather than copying ciphertext; anything else is
+  copied verbatim as before.
+- The parsed header is passed into `decryptSingle`, which derives the key directly
+  (`cipher.deriveKey`) — no second header read, no pointless single-entry key cache.
+- `readHeader` gained a `warnOnFailure: Boolean = true` parameter: the single-file probe logs a
+  parse failure at **info** level (an expected outcome when the user picked a plain file), the
+  whole-folder path keeps the warning.
+- `review/develop.md`: S2 status updated to fixed.
+
+### Issues resolved
+- `LogPathRedactionArchitectureTest` flagged the new info log: it requires
+  `FileNameRedactor.redact` *inline in the same logger call* (a pre-redacted local named
+  `fileName` still matches the sensitive-identifier regex). Redaction inlined.
+- Post-fix code review (B4 in `review/develop.md`): the new info log interpolated `${e.message}`
+  verbatim — SAF exception messages routinely embed the content URI (file name included), and
+  `CrashlyticsSink.info` forwards breadcrumbs unredacted (BUG-3 class; invisible to the
+  architecture test). Wrapped in `FileNameRedactor.redactPathsIn`.
+
+### Follow-up (same day): S6 — Robolectric coverage for `decryptSingleFile`
+- New `RestoreEngineSingleFileTest` (first test of `RestoreEngine` at all): Robolectric +
+  `FakeSingleFileProvider`, a minimal SAF stand-in answering the display-name query, `openFile`
+  (backed by real temp files in `cacheDir`), and the hidden `android:deleteDocument` provider
+  call that `DocumentFile.delete()` issues — so streams, names and the post-failure output delete
+  all run through the real `DocumentFile` plumbing (pattern extends `ScopedStorageHelperTest`'s
+  fake provider).
+- Encrypted fixtures are hand-assembled **version-1** FVC1 blobs (no AAD, so a bare AES/GCM
+  cipher can produce the body) with `iterations = 1_000` in the header — the engine must derive
+  with the header's parameters (BUG-5), and the low count keeps PBKDF2 fast in tests (mirrors
+  `Fvc1CipherTest.buildBlob`).
+- 6 cases: renamed encrypted file (no `.crypt` suffix) decrypts — the S2 regression; nameless
+  document with valid header decrypts; suffixed file decrypts; plain file copies verbatim;
+  unparseable-header `.crypt` file fails with "Cannot read file header" and deletes the
+  pre-created output; wrong password → `InvalidPassword` and deletes the output.
+
+### Notes
+- Build gates green: `assembleDebug`, `test` (462 tests), `detekt`.
+
+## 2026-07-16 — Restore a single file (alongside whole-folder restore)
+
+### What was requested
+The Restore screen only supported restoring an entire downloaded backup folder. Add a second option
+to restore just **one** file, and let the user choose between the two modes.
+
+### Design (locked with the user)
+- **Mode switch** = a `SingleChoiceSegmentedButtonRow` toggle at the top of the existing Restore
+  screen (`Whole folder` / `Single file`) — one screen, both flows, maximum reuse. Switching modes
+  resets the screen state so the two flows never bleed into each other.
+- **Single-file output** = the system **"Save as"** picker (`CreateDocument`), pre-filled with the
+  decrypted filename (source display name, last path segment, `.crypt` stripped). No output-folder
+  step and no collision-policy dropdown — the picker owns destination + naming.
+
+### What was done
+- `domain/restore/RestoreMode.kt` (new): `WHOLE_FOLDER` / `SINGLE_FILE` enum with `@StringRes`
+  labels (mirrors `RestoreCollisionPolicy`).
+- `domain/restore/IRestoreEngine.kt`: added
+  `decryptSingleFile(sourceFileUri, outputFileUri, password): RestoreResult`.
+- `infrastructure/restore/RestoreEngine.kt`: implemented `decryptSingleFile` as a thin single-item
+  version of the `decryptAll` loop body, reusing `keyFor` / `decryptEntry` / `copyEntry` /
+  `deletePartialOutput`. A `.crypt` file is decrypted, anything else copied; on a decrypt failure it
+  deletes the partial output and returns `InvalidPassword` (a lone GCM tag failure can't be told
+  apart from tampering/corruption, and wrong password dominates — documented in KDoc).
+- `view/viewmodel/RestoreViewModel.kt`: added `mode`, `sourceFileUri`, `sourceFileName`,
+  `suggestedOutputName` to state; `setMode` (resets state), `setSourceFile`, `startSingleFileRestore`
+  (mirrors `startRestore`, reuses the same `restoreJob`/`cancel()` machinery). Suggested-name logic
+  lives in the ViewModel (the view layer may not depend on infrastructure's `RestorePathResolver`).
+- `view/screens/RestoreScreen.kt`: added the mode toggle and branched content into
+  `WholeFolderContent` (unchanged flow) vs `SingleFileContent` (pick file → password →
+  **Decrypt & save…**). SAF launchers extracted into `rememberRestoreLaunchActions` to keep
+  `RestoreScreen` under the `LongMethod` limit. Reuses the progress dialog and result section.
+- `strings.xml`: mode-toggle labels, single-file step headers, `button_decrypt_and_save`, and a
+  single-file explanation.
+- `app/src/test/.../view/RestoreViewModelTest.kt` (new): hand-written `FakeRestoreEngine` (per the
+  fake-behind-a-seam convention), covering mode switching/reset, source-file selection + suggested
+  name, engine delegation, and `Success`/`InvalidPassword` outcomes.
+- No DI changes (method added to the existing `IRestoreEngine`; ViewModel constructor unchanged).
+
+### Verify
+- `./gradlew assembleDebug` / `test` / `detekt` all green. Manual UI verification (screenshots) and
+  the `/code-review` pass are the remaining checkpoint hand-off items.
+
+### Review fixes (same day, second `/code-review` pass — blocking findings B1–B3)
+- **B1 — password now lives in the ViewModel** (`RestoreUiState.singleFilePassword` +
+  `setSingleFilePassword`, `startSingleFileRestore(outputFileUri)` reads it from state): plain
+  `remember` state did not survive the activity recreation caused by a configuration change while
+  the "Save as" picker was open, so the launcher callback ran the restore with an empty password
+  and the user saw "Wrong password". Deliberately not in `SavedStateHandle` — never persisted;
+  cleared by `setMode`/`reset`.
+- **B2 — only a GCM tag failure maps to `InvalidPassword`**: new `decryptEntryDetailed` returns
+  `BinaryResult<Unit, DecryptionError>` (the Boolean `decryptEntry` now delegates to it);
+  `decryptSingleFile` maps `INVALID_FILE`/`UNKNOWN`/stream failures to `Failure` instead. Matters
+  because the flow advertises picking the file straight off Google Drive, where transient I/O
+  errors are realistic and must not present as "wrong password".
+- **B3 — every single-file failure path deletes the pre-created output document** (the "Save as"
+  picker creates it before the engine runs): previously the unreadable-header path leaked a
+  zero-byte file that looked restored. `decryptSingleFile` restructured into
+  `decryptSingle`/`copySingle` helpers with a single cleanup point.
+- Tests updated/added in `RestoreViewModelTest` (password in state, cleared on mode switch/reset);
+  `assembleDebug` / full `test` / `detekt` green.
+
+## 2026-07-15 — More reliable backup execution (exact-alarm trampoline + watchdog)
+
+### What was requested
+Add an **opt-in** enhancement so scheduled backups that need a long window can run in the existing
+`dataSync` foreground service even when fired from the background — where Android 12+ forbids
+starting an FGS. Built in 6 slices, each with a checkpoint + `/code-review` hand-back (§12.0). The
+idea was questioned thoroughly first, which produced the **trampoline** design (below) over a second
+scheduler.
+
+### Design (locked with the user)
+- **WorkManager stays the single scheduler** for every config. The exact alarm is demoted to an
+  FGS-launch *trampoline*: when `BackupWorker` fires for a run needing a long window
+  (`StartManualBackupUseCase.needsForegroundService`) and the user opted in and holds
+  `SCHEDULE_EXACT_ALARM`, it sets a one-shot ~10 s exact alarm (`FgsLaunchScheduler`) whose receiver
+  (`BackupAlarmReceiver`, not exported) starts `BackupForegroundService` from the launch-exempt
+  callback, then returns without running the backup. Otherwise it runs inline exactly as before.
+- **Opt-in, OFF by default.** `SCHEDULE_EXACT_ALARM` (not the Play-restricted `USE_EXACT_ALARM`);
+  degrades cleanly for the majority who never grant it.
+- **Watchdog runs entirely in WorkManager** — a daily backstop that enqueues an ordinary one-time
+  catch-up run for overdue configs; it never needs a service.
+
+### What was done (by slice)
+- **Slice 1 — pure logic:** `NextTriggerCalculator` (interval math, overdue detection, deterministic
+  stagger) and `ExecutionStrategySelector.scheduledMode` (`EXACT_ALARM` iff opted-in AND permitted;
+  API < 31 needs no grant) + `ScheduledExecutionMode`. Full Kotest matrices.
+- **Slice 2 — trampoline:** `IFgsLaunchScheduler` + `FgsLaunchScheduler` — one `PendingIntent` per
+  config (request code = configId hash, per-config data `Uri` so `cancel` never hits the wrong
+  alarm), `setExactAndAllowWhileIdle`, `canScheduleExactAlarms()` guarded at every call.
+- **Slice 3 — worker/receiver/guard:** trampoline-vs-inline decision at the top of `doWork()`;
+  `BackupAlarmReceiver`; `BackupForegroundService.startForeground` wrapped in try/catch — on
+  `ForegroundServiceStartNotAllowedException` (shared dataSync budget exhausted) it degrades via
+  `scheduleOneTime(forceInline = true)`, the flag stopping the degraded run from trampolining back
+  and looping. Config delete cancels any pending trampoline alarm. Manifest: `SCHEDULE_EXACT_ALARM`
+  + the non-exported receiver.
+- **Slice 4 — messages + permission UX:** `MessageType.FGS_TIME_BUDGET_REACHED` (INFO, emitted
+  best-effort from the degrade path); settings opt-in row inside `ReliableBackupsSection`
+  (`ExactAlarmBackupsRow` toggle + info popup + live grant status on resume + "Allow extended run
+  time" button → `ACTION_REQUEST_SCHEDULE_EXACT_ALARM`); detail-screen "Run time: Extended" line
+  shown only while the enhancement is active. Dropped `EXACT_ALARM_PERMISSION_REVOKED` (no
+  config-scoped UI home; the settings status + per-run re-check cover it) and skipped the optional
+  `ExactAlarmPermissionReceiver`.
+- **Slice 5 — watchdog:** `BackupWatchdogWorker` (WorkManager-only, daily, unique-name KEEP,
+  registered once from `FolderVaultApp.ensureWatchdogScheduled`). Selects non-paused configs overdue
+  by more than a *full extra* interval (`NextTriggerCalculator.isOverdue`, anchored on
+  `lastRunAt ?: createdAt`); because `commitRunStats` writes `lastRunAt` at the end of every window
+  (continuations + cancellations included), a progressing run is never mis-flagged, so the watchdog
+  only catches schedules that genuinely never fired. Emits one `WATCHDOG_TRIGGERED_RUN` (WARNING,
+  non-notifying) per config, throttled by presence (a null-`runId` message cannot coalesce).
+- **Slice 6 — docs + DoD:** this entry; `CLAUDE.md` "Two run hosts" section extended with the
+  opt-in trampoline + watchdog + alarm-origin invariant relaxation; README "Publishing: Play Console
+  declarations" section (dataSync justification + the borderline `SCHEDULE_EXACT_ALARM` declaration,
+  flagged honestly with its clean-degradation fallback).
+
+### Verification status
+- `./gradlew assembleDebug` ✅ · full `./gradlew test` ✅ · `./gradlew detekt` ✅ · `./gradlew lint`
+  ✅ (exit 0; **no** `ExactAlarm` finding — F-21 confirmed; none of the new strings/resources flagged
+  unused).
+- `/code-review` run per slice; findings tracked in `review/develop.md` (F-22 FGS message
+  best-effort, F-23/F-24 scoped Slice 4 deviations, F-25 watchdog breadcrumb throttled globally not
+  per-incident). No blocking findings.
+- **Sight-loop NOT run** — CPST is commented out in `app/build.gradle.kts` and there is no
+  Roborazzi/Paparazzi, so screenshots cannot render in the sandbox (enabling CPST needs a blocked
+  Maven download). Handed to the user for on-device visual verification of the settings row +
+  detail line (light + dark), plus the emulator end-to-end steps in the plan (grant → alarm fires →
+  FGS runs; constraint-deferral; budget-exhaustion degrade; revoke; watchdog catch-up).
+
+### Decisions carried forward
+- The FGS "foreground-UI-only start" invariant is relaxed *only* for the launch-exempt alarm origin.
+- `WATCHDOG_TRIGGERED_RUN` throttles by presence, not per-incident — acceptable while the catch-up
+  run (the guaranteed part) is always enqueued and the unread-WARNING badge stays visible.
+- The exact-alarm feature can be dropped wholesale with no impact on the default WorkManager path if
+  Play rejects the permission declaration.
+
+## 2026-07-15 — Code-review follow-up F-16 (charging-popup wording)
+
+### What was requested
+Branch-vs-remote review of `develop` (6 commits) found F-16: the simplified
+`info_requires_charging_body` tied the network requirement to the charging toggle (it applies in
+both modes) and dropped the only user-facing mention of the still-existing charging-only fallback
+run. Fix by dropping the internet mention and adding a short, non-technical note on the fallback.
+
+### What was done
+- `strings.xml` — `info_requires_charging_body`: "When on, backups only run while the phone is
+  plugged in. When off, backups also run on battery — though if several attempts in a row get cut
+  short, one extra attempt will wait for the charger."
+
+### Verification status
+- `./gradlew assembleDebug` ✅ (string-only change; tests + detekt green on the same tree in the
+  F-14/F-15 round).
+
+## 2026-07-15 — Code-review follow-ups F-14/F-15 (delete-while-running guard)
+
+### What was requested
+Fix findings F-14 and F-15 from `review/develop.md` (the re-review of the delete-while-running
+guard), using a fresh `first()` read for F-14.
+
+### What was done
+- **F-14** (`BackupDetailViewModel.deleteBackup`): the guard now reads the scheduler's live state
+  (`scheduler.observeIsRunning(configId).first()`) instead of `isRunning.value` — the
+  `WhileSubscribed` stateIn cache is only fresh while the screen collects it, so a future caller
+  without an active collector would have read the initial `false` and bypassed the guard.
+- **F-15** (`BackupDetailViewModel` + `BackupDetailScreen`): a refused delete now emits
+  `DetailEvent.DeleteRefusedWhileRunning`; the screen shows it as a snackbar ("A backup is running
+  right now. Try again when it finishes." — new `SnackbarHost` on the detail `Scaffold`, the app's
+  first). Event handling moved into a `DetailEventsHandler` composable (also keeps
+  `BackupDetailScreen` under detekt's LongMethod limit).
+- **Test split** (detekt LargeClass): `BackupDetailViewModelTest` had outgrown the threshold —
+  the shared fixtures (`makeConfig`, `buildVm`, `cloudDeps`) moved to
+  `BackupDetailViewModelTestFixtures.kt` (internal top-level functions) and the eight delete tests
+  into a new `BackupDetailViewModelDeleteTest` spec. The refused-while-running test now runs with
+  deliberately NO collector on `vm.isRunning` (proving the F-14 fix) and asserts one
+  `DeleteRefusedWhileRunning` event per refused call.
+
+### Verification status
+- `./gradlew assembleDebug` ✅ · full `./gradlew test` ✅ · `./gradlew detekt` ✅ (interim detekt
+  findings — LongMethod on the screen, LargeClass on the test, past-tense composable lambda — all
+  resolved as described above, not suppressed).
+
+## 2026-07-15 — Code-review follow-ups F-9…F-13 (optional Drive-folder deletion)
+
+### What was requested
+Fix findings F-9 and later from `review/develop.md` (the post-commit review of the optional
+Drive-folder deletion feature).
+
+### What was done
+- **F-9** (`BackupDetailViewModel.handleDriveConsentResult`): set
+  `_cloudDeleteState.value = CloudDeleteState.InProgress` as the first statement so the blocking
+  progress dialog shows during the *resume* path (after re-consent), not just the first attempt.
+  Previously the screen stayed interactive during a slow Drive delete, allowing a second
+  `deleteBackup` or a backup started into the folder being deleted.
+- **F-10** (`strings.xml`): reworded `dialog_delete_cloud_failed_body` to future tense — the local
+  delete only happens on acknowledgment, so the old "The backup was removed" claim was premature.
+- **F-11** (`BackupDetailViewModelTest`): new test pinning the BUG-12 SAF-release ordering
+  (`configRepo.deleteById` → `releaseSaf.invoke(treeUri, excludingConfigId = configId)`),
+  exercising the previously-unused `releaseSaf` hook in `buildVm`.
+- **F-12** (`BackupDetailViewModelTest`): imported `BinaryResult` and use the short name in
+  `cloudDeps` instead of the fully-qualified path.
+- **F-13** (`BackupDetailScreen.DeleteConfirmDialog`): replaced the row `.clickable` + the
+  `Checkbox`'s own `onCheckedChange` with `Modifier.toggleable(role = Role.Checkbox)` on the row
+  and `onCheckedChange = null` on the `Checkbox`, so TalkBack sees one toggle target with
+  checkbox semantics.
+
+### Verification status
+- `./gradlew assembleDebug` ✅ · full `./gradlew test` ✅ · `./gradlew detekt` ✅ (initial
+  ImportOrdering hit from the swapped import, fixed by moving `selection.toggleable` after the
+  `foundation.lazy.*` imports).
+
+## 2026-07-15 — Optional Drive-folder deletion when deleting a backup config
+
+### What was requested
+When the user deletes a backup config, offer a choice to also delete its cloud (Google Drive)
+folder — with the UX deliberately leading toward *keeping* the folder, so nothing on Drive is
+removed by accident.
+
+### What was done
+- **UX**: the delete-confirm dialog (`BackupDetailScreen.DeleteConfirmDialog`) now has an
+  **unchecked-by-default** checkbox "Also delete the backup folder on Google Drive". Checking it
+  reveals a red caption warning the deletion is permanent. Default (unchecked) = keep the folder,
+  same as before.
+- **ViewModel** (`BackupDetailViewModel`): `deleteBackup()` → `deleteBackup(alsoDeleteCloudFolder)`.
+  When true it authorizes for the config's account (`ICloudAuthorizer.authorize`, injected) and
+  deletes the sub-folder via `ICloudStorageProvider.deleteFile(cloudSubFolderId)` **before** the
+  local delete. In Drive v3, deleting a folder cascades to all descendants owned by the user, so
+  one `deleteFile` removes the whole sub-folder tree; the shared account root is left untouched.
+  A new `CloudDeleteState` StateFlow drives progress / consent / failure UI.
+- **Re-consent**: if silent authorization returns `ConsentRequired`, the screen launches the
+  PendingIntent (`CloudFolderDeleteHandler`, mirroring `AddEditBackupScreen`) and resumes via
+  `handleDriveConsentResult`.
+- **Failure handling** (confirmed with the user): a failed Drive delete (network error or declined
+  consent) does not block the delete — the user sees a "Drive folder not deleted" warning and the
+  config is still removed locally on acknowledgement (`acknowledgeFolderDeleteFailure`). An
+  already-gone folder (`CloudNotFoundException`) counts as success.
+- **Guard (review F-7)**: deletion is refused while a backup is running (either host) — the
+  top-bar delete button is disabled while `isRunning`, and `deleteBackup` no-ops defensively to
+  cover the dialog-open→run-starts race. Deleting the config (or its Drive folder) mid-upload would
+  fail or orphan the in-flight run.
+- **Tests**: 7 new `BackupDetailViewModelTest` cases (keep-folder, happy path ordering,
+  already-gone, failure→ack, consent→resume, consent-cancelled→ack, refused-while-running).
+- Docs: this entry; CLAUDE.md v1 note updated (config delete now optionally removes the Drive
+  sub-folder). `assembleDebug` / `test` / `detekt` all green.
+
+## 2026-07-15 — Fix: a second first-time backup overrode the first's foreground notification
+
+### What was requested
+The initial-upload foreground service works in normal conditions, but starting a *second* backup
+for the first time while the first is still uploading did not behave as a queue: the second run
+"seemed to override the first" (at least its notification). Expected: the second run waits in the
+queue until the first finishes, and ideally the ongoing notification shows the current progress
+plus that another backup is waiting.
+
+### Root cause
+The queue mechanism itself was correct (`enqueueOrLaunch` queues the second config, `advanceQueue`
+runs it back-to-back). The defect was in the ongoing-notification handoff:
+- `startRun` posts `latestProgressNotification ?: buildProgressNotification(incomingConfig)` on
+  every `startForegroundService`. `latestProgressNotification` was only ever populated
+  *asynchronously* by `publishProgress`, which runs on `dispatchers.default` — the same dispatcher
+  the analyzer scan can saturate. If the active run's first progress tick hadn't landed (or was
+  starved), the field was still `null`, so the second start built and posted the **queued** (incoming)
+  config's notification — the visible "override".
+- The queued-run count likewise only refreshed on the next `publishProgress` tick, so it lagged.
+
+### What was done (`BackupForegroundService`)
+- Added a `@Volatile activeProgress: ProgressSnapshot?` (configId + counts + indexing) and a
+  `postProgressNotification()` that rebuilds the ongoing notification for the **active** run from
+  that snapshot plus the live `pendingRunCount`, caching it in `latestProgressNotification`.
+- `launchRun` now seeds `activeProgress` and posts synchronously, so `latestProgressNotification`
+  is non-null the moment a run becomes active (before any later `onStartCommand` can run — starts
+  are serialized on the main thread). The fallback build in `startRun` now only ever fires for the
+  genuinely-first start.
+- The queue branch of `enqueueOrLaunch` calls `postProgressNotification()` so the "N waiting"
+  count appears immediately on the active run's notification, not on the next tick.
+- `publishProgress` now updates `activeProgress` then posts; `pendingRunCount` stays in the
+  `combine` purely to re-trigger the collector. `advanceQueue` clears `activeProgress` when going
+  idle.
+- Test: `BackupForegroundServiceTest` gains "a queued second config never takes over the active
+  run's ongoing notification" — verifies the progress notification is never built/updated for the
+  merely-queued config while the first run is held open.
+
+### Verification status
+- `./gradlew assembleDebug`, full `./gradlew test`, and `./gradlew detekt` all green.
+
+### Review follow-ups (`review/develop.md`, 2026-07-15)
+- **F-1**: hardened the new regression test into a deterministic tripwire — it now records the
+  calling thread of every `updateProgressNotification` and asserts the synchronous main-thread
+  re-post of the *active* run's notification with `queuedRuns = 1`, which only exists post-fix
+  (pre-fix the queued count arrived solely on the async `publishProgress` tick).
+- **F-2**: `advanceQueue` now nils `latestProgressNotification` alongside `activeProgress` when
+  going idle, so an in-flight start can't re-post the finished session's stale notification.
+- **F-4**: `drainQueue` re-posts the notification after zeroing `pendingRunCount` so "N waiting"
+  clears immediately instead of lingering a tick; this prompt-history entry corrected.
+- **F-3** left as-is: the lock-free `postProgressNotification` from `publishProgress` is a known,
+  accepted trade-off (self-correcting within one tick; both callers target the active config).
+- **F-5** (from the re-review): the F-4 refresh could re-post the notification from `onDestroy`
+  *after* `stopForeground(REMOVE)` on the OS-timeout hard-cancel path, orphaning it. `drainQueue`
+  gained a `refreshNotification` flag (default `true`); `onDestroy` passes `false` so its drain is
+  pure cleanup, while the live-session callers (user stop, OS timeout) keep the immediate refresh.
+- **F-6**: added the `java.util.concurrent.CopyOnWriteArrayList` import in the service test instead
+  of the inline fully-qualified name.
+
+## 2026-07-14 — Review fix RV-18: first-run delay shortened to 30 s + worker foreground guard
+
+### What was requested
+Fix RV-18 from `review/develop.md`: re-enabling (unpausing) a backup should run it promptly, not
+wait for the one-day `FIRST_RUN_DELAY_HOURS` that RV-15 introduced. A first attempt added a
+`deferFirstRun` flag (delay only on the creation path); on review the user preferred the simpler
+uniform alternative: keep the delay for every fresh enqueue but shrink it to 30 s, which still
+lets the foreground service start first without ever being user-visible.
+
+### What was done
+- **`BackupScheduler`**: `FIRST_RUN_DELAY_HOURS = 24` → `FIRST_RUN_DELAY_SECONDS = 30`, applied
+  unconditionally; the `deferFirstRun` flag was reverted. A uniform delay also keeps
+  `ExistingPeriodicWorkPolicy.UPDATE` a no-op on app-start re-registration (UPDATE recomputes the
+  next-run time from the *new* request's initial delay, so mixed per-caller delays could pull a
+  deferred first run forward).
+- **`BackupWorker`**: new foreground-run guard — before running, the worker checks
+  `ForegroundRunState.isRunning(configId)` (which includes configs *queued* in the busy service)
+  and defers with retry+backoff. This closes the hole the 24 h delay was silently covering: a
+  queued config doesn't hold `BackupRunner`'s per-config lock, so its periodic worker firing 30 s
+  after creation could otherwise steal the initial upload into 8-minute background windows.
+- Tests: `BackupSchedulerTest` updated (first run ≥ 29 s and < 15 min out; UPDATE re-registration
+  10 s later preserves the next-run time); new `BackupWorkerForegroundGuardTest` (worker retries
+  without running while the service owns the config, runs once released);
+  `BackupDetailViewModelTest` pins that unpause re-registers the schedule.
+
+### Verification
+`assembleDebug`, full `test`, and `detekt` all green.
+
+## 2026-07-14 — Review fix RV-17: mid-scan cancel must not wipe `totalFilesDiscovered`
+
+### What was requested
+Fix RV-17 from `review/develop.md`: a run hard-cancelled *during* the SAF tree walk commits the
+`CrossRunProgress.PERSIST` branch with `summary.totalFilesDiscovered` still `0`, overwriting the
+previous run's non-zero count — so `needsForegroundService` routes the next resume of an in-flight
+initial sync back to WorkManager's short windows (the exact regression the previous commit fixed),
+and the counters can end up with `uploaded > total`.
+
+### What was done
+- **`BackupRunner.commitRunStats`** (`PERSIST` branch): the discovered total never regresses — when
+  the summary's count is `0` (scan never completed), the previous config row's
+  `totalFilesDiscovered` is kept; a completed scan's fresh count still wins.
+- **New `BackupRunnerCancelledScanTest`**: drives the real `runBackup` pipeline (fake
+  `ILocalFileScanner`, relaxed DAO mocks, stubbed authorizer/settings/dispatchers) and hard-cancels
+  the run coroutine. Two cases: cancel *mid-scan* (scanner suspends via `awaitCancellation`) keeps
+  the previous total of 42; cancel *after* the scan (analyzer hangs on `getCurrentVersion`) persists
+  the fresh total — the latter also closes RV-16's optional end-to-end persistence test.
+- `review/develop.md`: RV-16 and RV-17 marked fixed.
+
+### Verification
+`assembleDebug`, full `test`, and `detekt` all green.
+
+## 2026-07-14 — Fix: periodic worker stealing the initial upload from the foreground service
+
+### What was requested
+Analyse a device log (`foldervault-log-1783960727872.log.txt`) from creating a new backup config:
+no foreground-service notification appeared and the run was cancelled several times. Explain what
+happened and fix it.
+
+### Diagnosis (from the log)
+On config save, `AddEditBackupViewModel.save()` calls `schedulePeriodicIfNeeded`, which enqueued a
+`PeriodicWorkRequest` with **no initial delay** — WorkManager runs the first occurrence immediately.
+That background worker grabbed `BackupRunner`'s per-config lock ~40 ms before the foreground-service
+auto-start (`StartManualBackupUseCase` → `ForegroundBackupLauncher`) could, so the FGS's `runBackup`
+returned `SkippedConcurrentRun` and the service stopped (notification only flashed). The initial
+upload then crawled inside the 8-min WorkManager window and was cancelled/restarted repeatedly
+(analyzer re-ran at 18:31, 18:33, 18:38; the flaky network in the test amplified the churn).
+Secondary bug: a hard-cancelled initial run committed `CANCELLED` but never persisted
+`totalFilesDiscovered`, so `needsForegroundService` (which relies on that counter) wrongly routed the
+next run to the background too.
+
+### What was done
+- **`BackupScheduler.schedulePeriodicIfNeeded`**: added a fixed `FIRST_RUN_DELAY_HOURS = 24` initial
+  delay (regardless of DAILY/WEEKLY/MONTHLY cadence) so a freshly-created periodic schedule defers
+  its first run by a day, handing the initial sync to the FGS. `ExistingPeriodicWorkPolicy.UPDATE`
+  preserves the scheduled run time on the app-start re-registration, so the delay only ever applies
+  to the first enqueue.
+- **`FileSystemAnalyzer.analyze`**: records `summary.totalFilesDiscovered` the moment the scan
+  completes (was only assigned after the whole pipeline returned, which a hard cancellation skips);
+  return type dropped to `Unit` as the count is no longer read back.
+- **`BackupRunner`**: extracted a pure `resolveCrossRunProgress(status, summary, completedNormally)`
+  → `CrossRunProgress {PERSIST, RESET, UNCHANGED}` and used it in `commitRunStats`. A hard-cancelled
+  run now PERSISTs its discovered/uploaded progress (like a time-budget stop) instead of leaving the
+  counters unchanged, so an interrupted initial sync keeps routing to the FGS.
+- **Tests**: `CrossRunProgressResolverTest` (pure decision matrix) and `BackupSchedulerTest`
+  (Robolectric + `WorkManagerTestInitHelper` with an injected `Clock`) — the latter verifies the
+  first run is deferred ~24 h and that `UPDATE` preserves the next-run time (resolves review RV-15).
+- Review findings logged in `review/develop.md` (RV-15 verified/fixed, RV-16 accepted behaviour).
+
+### Verification
+`./gradlew assembleDebug`, `testDebugUnitTest`, `detekt` all green.
+
 ## 2026-07-13 — "Only sync changes from now on" option for new backup configs
 
 ### What was requested

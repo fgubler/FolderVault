@@ -1,5 +1,6 @@
 package ch.abwesend.foldervault.infrastructure.backup
 
+import ch.abwesend.foldervault.domain.crypto.Fvc1Header
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
@@ -15,7 +16,7 @@ object RemoteNameBuilder {
             UploadMode.NEW, UploadMode.CHANGED_OVERWRITE -> localName
             UploadMode.CHANGED_DUPLICATE -> buildTimestampedName(localName, Instant.now())
         }
-        return if (encrypted) "$baseName.crypt" else baseName
+        return if (encrypted) "$baseName${Fvc1Header.CRYPT_FILE_SUFFIX}" else baseName
     }
 
     internal fun buildTimestampedName(localName: String, timestamp: Instant): String {

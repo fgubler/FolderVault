@@ -1,6 +1,7 @@
 package ch.abwesend.foldervault.view.viewmodel
 
 import androidx.lifecycle.viewModelScope
+import ch.abwesend.foldervault.domain.backup.IFgsLaunchScheduler
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.logging.ILogExporter
 import ch.abwesend.foldervault.domain.logging.ITelemetryToggle
@@ -24,6 +25,7 @@ internal class SettingsViewModel(
     private val telemetryToggle: ITelemetryToggle,
     private val logExporter: ILogExporter,
     private val restrictionChecker: IBackgroundRestrictionChecker,
+    private val fgsLaunchScheduler: IFgsLaunchScheduler,
     private val dispatchers: IDispatchers,
 ) : BaseViewModel() {
 
@@ -38,14 +40,25 @@ internal class SettingsViewModel(
     val backgroundRestrictions: StateFlow<BackgroundRestrictionStatus> = _backgroundRestrictions.asStateFlow()
 
     /**
-     * Re-reads the OS restriction states. Called whenever the settings screen (re-)enters the
-     * foreground, so the shown status reflects changes the user just made in the system settings.
+     * Whether the OS currently lets FolderVault set exact alarms (`SCHEDULE_EXACT_ALARM`), which
+     * the "extended run time" opt-in needs to trampoline a background run to the foreground service.
+     * Always `true` below API 31 (no such permission). Refreshed on resume so a grant/revoke the
+     * user just made in the system settings is reflected without leaving the screen.
+     */
+    private val _exactAlarmPermitted = MutableStateFlow(false)
+    val exactAlarmPermitted: StateFlow<Boolean> = _exactAlarmPermitted.asStateFlow()
+
+    /**
+     * Re-reads the OS permission/restriction states. Called whenever the settings screen
+     * (re-)enters the foreground, so the shown status reflects changes the user just made in the
+     * system settings.
      */
     fun refreshBackgroundRestrictions() {
         _backgroundRestrictions.value = BackgroundRestrictionStatus(
             ignoringBatteryOptimizations = restrictionChecker.isIgnoringBatteryOptimizations(),
             backgroundDataRestricted = restrictionChecker.isBackgroundDataRestricted(),
         )
+        _exactAlarmPermitted.value = fgsLaunchScheduler.isExactAlarmPermitted()
     }
 
     fun setDefaultSchedule(schedule: BackupSchedule) = update { it.copy(defaultSchedule = schedule) }
@@ -68,6 +81,15 @@ internal class SettingsViewModel(
 
     fun setNotifyOnBackupCompletion(enabled: Boolean) =
         update { it.copy(notifyOnBackupCompletion = enabled) }
+
+    /**
+     * Turns the "extended run time" opt-in on or off. Persisting the flag is all that is needed:
+     * the worker re-reads it (and re-checks the permission) on every run, so there is no schedule to
+     * migrate. The screen separately prompts for `SCHEDULE_EXACT_ALARM` when the user enables it
+     * without the grant.
+     */
+    fun setExactAlarmBackupsEnabled(enabled: Boolean) =
+        update { it.copy(exactAlarmBackupsEnabled = enabled) }
 
     fun setShowOnboarding(show: Boolean) = update { it.copy(showOnboarding = show) }
 

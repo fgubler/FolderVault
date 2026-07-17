@@ -10,12 +10,16 @@ import androidx.core.app.ServiceCompat
 import ch.abwesend.foldervault.domain.backup.IBackupScheduler
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.logging.logger
+import ch.abwesend.foldervault.domain.model.MessageSeverity
+import ch.abwesend.foldervault.domain.model.MessageType
 import ch.abwesend.foldervault.domain.model.NetworkPolicy
 import ch.abwesend.foldervault.domain.result.rethrowCancellation
 import ch.abwesend.foldervault.domain.util.injectAnywhere
 import ch.abwesend.foldervault.infrastructure.network.NetworkStateMonitor
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupConfigDao
+import ch.abwesend.foldervault.infrastructure.room.dao.BackupMessageDao
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupConfigEntity
+import ch.abwesend.foldervault.infrastructure.room.entity.BackupMessageEntity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -47,16 +51,20 @@ import java.time.Instant
  * marked in [ForegroundRunState] so the UI shows them as running, and they degrade to
  * WorkManager one-time runs when the OS dataSync time limit ends the session first.
  *
- * Must only be started from foreground UI via [ForegroundBackupLauncher] (Android 12+ forbids
- * background FGS starts — the reason the previous `setForeground`-inside-worker attempt was
- * removed, see commit `be3b3bd`). [android.app.Service.START_NOT_STICKY] for the same reason:
- * a sticky restart would be a background start.
+ * Two legitimate start paths only: from foreground UI via [ForegroundBackupLauncher], or from
+ * [BackupAlarmReceiver]'s exact-alarm callback (the opt-in "more reliable backups" trampoline —
+ * only an exact-alarm callback is exempt from Android 12+'s background-FGS-start restriction, the
+ * reason the previous `setForeground`-inside-worker attempt was removed, see commit `be3b3bd`).
+ * Never from a plain background context or a sticky restart, hence [android.app.Service.START_NOT_STICKY].
+ * Should foreground promotion be refused anyway (e.g. the dataSync time budget is exhausted for a
+ * background start), [enterForeground] degrades the run to WorkManager instead of crashing.
  */
 class BackupForegroundService : Service() {
     private val log get() = logger
 
     private val backupRunner: BackupRunner by injectAnywhere()
     private val backupConfigDao: BackupConfigDao by injectAnywhere()
+    private val backupMessageDao: BackupMessageDao by injectAnywhere()
     private val notificationManager: BackupNotificationManager by injectAnywhere()
     private val scheduler: IBackupScheduler by injectAnywhere()
     private val foregroundRunState: ForegroundRunState by injectAnywhere()
@@ -91,12 +99,25 @@ class BackupForegroundService : Service() {
     private var stopReason: ForegroundStopReason? = null
 
     /**
-     * Last notification posted by [publishProgress]. A second `startForegroundService` while a
+     * Last notification posted for the active run. A second `startForegroundService` while a
      * run is active must call `startForeground` again — re-posting this instance keeps the
      * ongoing notification on the *active* run instead of flipping it to the incoming config.
+     * Always kept non-null while a run is active (seeded synchronously by [launchRun]), so the
+     * fallback build in [startRun] only ever runs for the genuinely-first start.
      */
     @Volatile
     private var latestProgressNotification: Notification? = null
+
+    /**
+     * Latest per-file progress of the active run, or `null` while idle. [postProgressNotification]
+     * rebuilds the ongoing notification for the *active* run from this snapshot plus the live
+     * [pendingRunCount] — synchronously, on demand, so neither a second `startForeground` nor a
+     * newly queued run has to wait for the asynchronous [publishProgress] tick (which runs on the
+     * default dispatcher and can be starved while the analyzer saturates it). Volatile: written
+     * from the run coroutine, read from the main thread.
+     */
+    @Volatile
+    private var activeProgress: ProgressSnapshot? = null
 
     companion object {
         const val EXTRA_CONFIG_ID = "configId"
@@ -128,6 +149,14 @@ class BackupForegroundService : Service() {
         val configId: String,
         val networkPolicy: NetworkPolicy,
         val requiresCharging: Boolean,
+    )
+
+    /** Snapshot of the active run's progress, rebuilt into the ongoing notification on demand. */
+    private data class ProgressSnapshot(
+        val configId: String,
+        val filesUploaded: Int,
+        val totalDiscovered: Int,
+        val indexing: Boolean,
     )
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -205,8 +234,10 @@ class BackupForegroundService : Service() {
     override fun onDestroy() {
         scope.cancel()
         // The active run's own finally unmarks it even when cancelled; queued runs have no
-        // coroutine yet and would otherwise stay marked as running forever.
-        drainQueue()
+        // coroutine yet and would otherwise stay marked as running forever. No notification
+        // refresh here: the service is being torn down (its foreground notification already
+        // removed on the paths that reach onDestroy), so a re-post would orphan a notification.
+        drainQueue(refreshNotification = false)
         super.onDestroy()
     }
 
@@ -217,10 +248,39 @@ class BackupForegroundService : Service() {
             ?: NetworkPolicy.WIFI_ONLY
         val requiresCharging = intent?.getBooleanExtra(EXTRA_REQUIRES_CHARGING, false) ?: false
 
-        // Started via startForegroundService — must become foreground promptly on EVERY start,
-        // even when the intent turns out to be unusable. While a run is active its latest
-        // progress notification is re-posted, so the ongoing notification never flips to the
-        // incoming config's deep link and counts.
+        if (!enterForeground(configId)) {
+            // The OS refused foreground promotion — for a background (alarm-triggered) start this
+            // is typically the dataSync 6h/24h budget being exhausted
+            // (ForegroundServiceStartNotAllowedException). Hand the incoming run to WorkManager
+            // rather than crash; any run already in progress keeps going (stopWhenIdle spares it).
+            if (configId != null) {
+                log.warning("Foreground backup could not enter the foreground for $configId — handing to WorkManager")
+                // forceInline: a plain one-time run would trampoline straight back to this service
+                // (opted-in + long-window) and fail to enter the foreground again, looping.
+                scheduler.scheduleOneTime(configId, networkPolicy, requiresCharging, forceInline = true)
+                emitBudgetReachedMessage(configId)
+            }
+            stopWhenIdle()
+        } else if (configId == null) {
+            log.error("Foreground backup started without a config id")
+            stopWhenIdle()
+        } else {
+            enqueueOrLaunch(RunParameters(configId, networkPolicy, requiresCharging))
+        }
+    }
+
+    /**
+     * Enters the foreground with the active run's ongoing notification (or a fresh one for the very
+     * first start). Started via `startForegroundService`, the service must become foreground
+     * promptly on EVERY start — even when the intent turns out to be unusable — and while a run is
+     * active its latest progress notification is re-posted, so the ongoing notification never flips
+     * to the incoming config's deep link and counts.
+     *
+     * Returns `false` if the OS refused (e.g. `ForegroundServiceStartNotAllowedException` when the
+     * dataSync time budget is exhausted for a background start), so the caller degrades gracefully
+     * instead of letting the exception crash the service.
+     */
+    private fun enterForeground(configId: String?): Boolean = try {
         ServiceCompat.startForeground(
             this,
             BackupNotificationManager.PROGRESS_NOTIFICATION_ID,
@@ -233,12 +293,46 @@ class BackupForegroundService : Service() {
             ),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
         )
+        true
+    } catch (e: Exception) {
+        e.rethrowCancellation()
+        log.error("Foreground backup could not enter the foreground for ${configId.orEmpty()}", e)
+        false
+    }
 
-        if (configId == null) {
-            log.error("Foreground backup started without a config id")
-            stopWhenIdle()
-        } else {
-            enqueueOrLaunch(RunParameters(configId, networkPolicy, requiresCharging))
+    /**
+     * Records an informational message for [configId] that this opted-in run could not get the
+     * foreground service's long window (the shared dataSync time budget was exhausted) and fell
+     * back to WorkManager. Coalesced like the other run messages so a repeated fallback does not
+     * flood the config. Fire-and-forget on [scope] — a failure here must never take down the
+     * degrade path that already re-scheduled the run.
+     *
+     * Best-effort by design: when the degraded start finds the service idle it stops right after,
+     * and [onDestroy] cancels [scope] — so this insert may be cut short before it commits. That is
+     * an acceptable trade for an INFO breadcrumb: the run itself is already safely re-queued on
+     * WorkManager (the guaranteed part), and the fallback is also logged. Keeping the service alive
+     * to guarantee the message is not worth complicating this invariant-heavy control flow.
+     */
+    private fun emitBudgetReachedMessage(configId: String) {
+        scope.launch {
+            try {
+                backupMessageDao.coalesceInsert(
+                    BackupMessageEntity(
+                        backupConfigId = configId,
+                        runId = null,
+                        timestamp = System.currentTimeMillis(),
+                        severity = MessageSeverity.INFO,
+                        type = MessageType.FGS_TIME_BUDGET_REACHED,
+                        messageText = null,
+                        formatArgs = emptyList(),
+                        relativePath = null,
+                        readAt = null,
+                    )
+                )
+            } catch (e: Exception) {
+                e.rethrowCancellation()
+                log.error("Failed to record the extended-run-time fallback message for $configId", e)
+            }
         }
     }
 
@@ -263,6 +357,9 @@ class BackupForegroundService : Service() {
                 // Marked right away so the UI reflects the accepted tap instead of looking
                 // like it was dropped; the service owns this run from now on.
                 foregroundRunState.markRunning(params.configId)
+                // Surface the newly queued run in the *active* run's ongoing notification at
+                // once, rather than waiting for the next publishProgress tick.
+                postProgressNotification()
             }
         }
     }
@@ -272,7 +369,39 @@ class BackupForegroundService : Service() {
         stopReason = null
         activeRun = params
         foregroundRunState.markRunning(params.configId)
+        // Seed the ongoing notification synchronously for the new active run so a
+        // near-simultaneous second start (which re-posts latestProgressNotification) can never
+        // flip it to the incoming config — publishProgress only refines this asynchronously and
+        // may be delayed. Counts start at 0 and are corrected on the first tick.
+        activeProgress = ProgressSnapshot(
+            configId = params.configId,
+            filesUploaded = 0,
+            totalDiscovered = 0,
+            indexing = false,
+        )
+        postProgressNotification()
         runJob = scope.launch { executeRun(params) }
+    }
+
+    /**
+     * Rebuilds and posts the ongoing progress notification for the active run from the latest
+     * [activeProgress] snapshot and the live [pendingRunCount], caching it in
+     * [latestProgressNotification]. A no-op while idle. Because it always targets the active
+     * run's config, a second `startForeground` can never flip the ongoing notification to a
+     * merely-queued incoming config.
+     */
+    private fun postProgressNotification() {
+        val snapshot = activeProgress
+        if (snapshot != null) {
+            latestProgressNotification = notificationManager.updateProgressNotification(
+                configId = snapshot.configId,
+                filesUploaded = snapshot.filesUploaded,
+                totalDiscovered = snapshot.totalDiscovered,
+                queuedRuns = pendingRunCount.value,
+                stopIntent = stopPendingIntent(),
+                indexing = snapshot.indexing,
+            )
+        }
     }
 
     /**
@@ -288,6 +417,11 @@ class BackupForegroundService : Service() {
                 launchRun(next)
             } else {
                 activeRun = null
+                activeProgress = null
+                // Drop the finished run's cached notification too: a start already in flight
+                // could otherwise re-post the previous session's notification (wrong config
+                // deep-link and counts) via startForeground before launchRun overwrites it.
+                latestProgressNotification = null
                 stopService()
             }
         }
@@ -296,8 +430,13 @@ class BackupForegroundService : Service() {
     /**
      * Empties the pending queue, unmarking each config and passing it to [onDrained] —
      * dropped on a user stop, handed to WorkManager on an OS timeout.
+     *
+     * [refreshNotification] re-posts the active run's ongoing notification so the emptied queue
+     * ("N waiting" → gone) shows at once instead of on the next [publishProgress] tick. Callers on
+     * a live session (user stop, OS timeout) leave it `true`; [onDestroy] passes `false` — the
+     * service's foreground notification is already removed by then, so a re-post would orphan one.
      */
-    private fun drainQueue(onDrained: (RunParameters) -> Unit = {}) {
+    private fun drainQueue(refreshNotification: Boolean = true, onDrained: (RunParameters) -> Unit = {}) {
         synchronized(runLock) {
             pendingRuns.forEach { params ->
                 foregroundRunState.markStopped(params.configId)
@@ -305,6 +444,9 @@ class BackupForegroundService : Service() {
             }
             pendingRuns.clear()
             pendingRunCount.value = 0
+            if (refreshNotification) {
+                postProgressNotification()
+            }
         }
     }
 
@@ -401,14 +543,16 @@ class BackupForegroundService : Service() {
             pendingRunCount,
         ) { uploaded, discovered, queued ->
             Triple(uploaded, discovered, queued)
-        }.collect { (uploadedThisRun, discoveredThisRun, queuedRuns) ->
-            latestProgressNotification = notificationManager.updateProgressNotification(
+        }.collect { (uploadedThisRun, discoveredThisRun, _) ->
+            // pendingRunCount is kept in the combine above only to re-trigger this collector when
+            // the queue changes; postProgressNotification reads its current value directly.
+            activeProgress = ProgressSnapshot(
                 configId = config.id,
                 filesUploaded = config.filesUploadedTotal + uploadedThisRun,
                 totalDiscovered = if (discoveredThisRun > 0) discoveredThisRun else config.totalFilesDiscovered,
-                queuedRuns = queuedRuns,
-                stopIntent = stopPendingIntent(),
+                indexing = config.isBaselinePending,
             )
+            postProgressNotification()
             delay(PROGRESS_UPDATE_INTERVAL_MS)
         }
     }

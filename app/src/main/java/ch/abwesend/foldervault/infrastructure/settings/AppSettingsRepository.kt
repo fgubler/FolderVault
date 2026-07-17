@@ -63,6 +63,7 @@ class AppSettingsRepository(private val dataStore: DataStore<Preferences>) : IAp
             defaultNetworkPolicy = enum(Keys.DEFAULT_NETWORK_POLICY, d.defaultNetworkPolicy),
             anonymousErrorReports = this[Keys.ANONYMOUS_ERROR_REPORTS] ?: d.anonymousErrorReports,
             notifyOnBackupCompletion = this[Keys.NOTIFY_ON_BACKUP_COMPLETION] ?: d.notifyOnBackupCompletion,
+            exactAlarmBackupsEnabled = this[Keys.EXACT_ALARM_BACKUPS_ENABLED] ?: d.exactAlarmBackupsEnabled,
             cloudRoots = readCloudRoots(),
         )
     }
@@ -116,6 +117,7 @@ class AppSettingsRepository(private val dataStore: DataStore<Preferences>) : IAp
         setEnum(Keys.DEFAULT_NETWORK_POLICY, s.defaultNetworkPolicy)
         set(Keys.ANONYMOUS_ERROR_REPORTS, s.anonymousErrorReports)
         set(Keys.NOTIFY_ON_BACKUP_COMPLETION, s.notifyOnBackupCompletion)
+        set(Keys.EXACT_ALARM_BACKUPS_ENABLED, s.exactAlarmBackupsEnabled)
         set(Keys.CLOUD_ROOTS_JSON, Json.encodeToString(s.cloudRoots))
         // The legacy single-root keys were folded into CLOUD_ROOTS_JSON on read — drop them so
         // they don't linger forever.
@@ -133,6 +135,7 @@ class AppSettingsRepository(private val dataStore: DataStore<Preferences>) : IAp
         val DEFAULT_NETWORK_POLICY = stringPreferencesKey("default_network_policy")
         val ANONYMOUS_ERROR_REPORTS = booleanPreferencesKey("anonymous_error_reports")
         val NOTIFY_ON_BACKUP_COMPLETION = booleanPreferencesKey("notify_on_backup_completion")
+        val EXACT_ALARM_BACKUPS_ENABLED = booleanPreferencesKey("exact_alarm_backups_enabled")
         val CLOUD_ROOTS_JSON = stringPreferencesKey("cloud_roots_json")
     }
 

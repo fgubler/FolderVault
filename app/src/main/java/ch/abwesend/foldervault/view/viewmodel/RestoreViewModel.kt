@@ -1,7 +1,10 @@
 package ch.abwesend.foldervault.view.viewmodel
 
+import androidx.lifecycle.SavedStateHandle
+import ch.abwesend.foldervault.domain.crypto.Fvc1Header
 import ch.abwesend.foldervault.domain.restore.IRestoreEngine
 import ch.abwesend.foldervault.domain.restore.RestoreCollisionPolicy
+import ch.abwesend.foldervault.domain.restore.RestoreMode
 import ch.abwesend.foldervault.domain.restore.RestoreProgress
 import ch.abwesend.foldervault.domain.restore.RestoreResult
 import kotlinx.coroutines.Job
@@ -20,6 +23,7 @@ sealed interface RestoreState {
 }
 
 data class RestoreUiState(
+    val mode: RestoreMode = RestoreMode.WHOLE_FOLDER,
     val state: RestoreState = RestoreState.Idle,
     val sourceUri: String? = null,
     val outputUri: String? = null,
@@ -27,14 +31,94 @@ data class RestoreUiState(
     val otherFileCount: Int = 0,
     val collisionPolicy: RestoreCollisionPolicy = RestoreCollisionPolicy.SKIP,
     val progress: RestoreProgress? = null,
+    val sourceFileUri: String? = null,
+    val sourceFileName: String? = null,
+    val suggestedOutputName: String? = null,
+    val singleFilePassword: String = "",
 )
 
-class RestoreViewModel(private val engine: IRestoreEngine) : BaseViewModel() {
+/**
+ * The restore mode and the single-file selection survive process death via [SavedStateHandle]:
+ * the "Save as" picker round-trip leaves the app in the background, and if the process is killed
+ * there, the picker result still arrives at the recreated activity — without the restored
+ * selection it would be a silent no-op that leaves the picker-created empty document orphaned.
+ * The password is deliberately NOT saved (see [setSingleFilePassword]); after process death the
+ * restore runs with the empty password and surfaces as "wrong password", prompting re-entry.
+ */
+class RestoreViewModel(
+    private val engine: IRestoreEngine,
+    private val savedStateHandle: SavedStateHandle,
+) : BaseViewModel() {
 
-    private val _uiState = MutableStateFlow(RestoreUiState())
+    private val _uiState = MutableStateFlow(restoredUiState())
     val uiState: StateFlow<RestoreUiState> = _uiState.asStateFlow()
 
     private var restoreJob: Job? = null
+
+    /** Rebuilds the saved-state-backed part of the UI state after process death. */
+    private fun restoredUiState(): RestoreUiState {
+        val mode = savedStateHandle.get<String>(KEY_MODE)
+            ?.let { saved -> RestoreMode.entries.find { it.name == saved } }
+            ?: RestoreMode.WHOLE_FOLDER
+        val sourceFileUri = savedStateHandle.get<String>(KEY_SOURCE_FILE_URI)
+        val sourceFileName = savedStateHandle.get<String>(KEY_SOURCE_FILE_NAME)
+        return RestoreUiState(
+            mode = mode,
+            sourceFileUri = sourceFileUri,
+            sourceFileName = sourceFileName,
+            suggestedOutputName = sourceFileName?.let { suggestedOutputName(it) },
+            state = if (sourceFileUri != null) RestoreState.SourceReady else RestoreState.Idle,
+        )
+    }
+
+    private fun persistSingleFileSelection(uri: String?, name: String?) {
+        savedStateHandle[KEY_SOURCE_FILE_URI] = uri
+        savedStateHandle[KEY_SOURCE_FILE_NAME] = name
+    }
+
+    /**
+     * Switches restore mode, discarding any half-finished selection so the two flows stay
+     * separate. Re-selecting the already-active mode is a no-op: the segmented button fires its
+     * click even for the selected segment, and a stray tap must not wipe the user's input.
+     */
+    fun setMode(mode: RestoreMode) {
+        if (mode != _uiState.value.mode) {
+            restoreJob?.cancel()
+            restoreJob = null
+            savedStateHandle[KEY_MODE] = mode.name
+            persistSingleFileSelection(uri = null, name = null)
+            _uiState.value = RestoreUiState(mode = mode)
+        }
+    }
+
+    /** Records the single file the user picked and marks the source as ready. */
+    fun setSourceFile(uri: String, name: String) {
+        persistSingleFileSelection(uri = uri, name = name)
+        _uiState.update {
+            it.copy(
+                sourceFileUri = uri,
+                sourceFileName = name,
+                suggestedOutputName = suggestedOutputName(name),
+                state = RestoreState.SourceReady,
+            )
+        }
+    }
+
+    /**
+     * Name to pre-fill the "Save as" picker with: the file's last path segment with the `.crypt`
+     * suffix stripped, so `report.pdf.crypt` is suggested as `report.pdf`.
+     */
+    private fun suggestedOutputName(displayName: String): String =
+        displayName.substringAfterLast('/').removeSuffix(Fvc1Header.CRYPT_FILE_SUFFIX)
+
+    /**
+     * The single-file password lives here (not in composable state) because it must survive the
+     * activity recreation that a configuration change during the "Save as" picker round-trip
+     * causes. It is deliberately not written to any saved state, so it is never persisted.
+     */
+    fun setSingleFilePassword(password: String) {
+        _uiState.update { it.copy(singleFilePassword = password) }
+    }
 
     fun setSourceFolder(uri: String) {
         _uiState.update { it.copy(sourceUri = uri, state = RestoreState.Scanning) }
@@ -77,7 +161,7 @@ class RestoreViewModel(private val engine: IRestoreEngine) : BaseViewModel() {
         val snapshot = _uiState.value
         val src = snapshot.sourceUri
         val out = snapshot.outputUri
-        if (src != null && out != null) {
+        if (src != null && out != null && restoreJob?.isActive != true) {
             restoreJob = safeLaunch {
                 _uiState.update { it.copy(state = RestoreState.Running, progress = null) }
                 try {
@@ -108,6 +192,40 @@ class RestoreViewModel(private val engine: IRestoreEngine) : BaseViewModel() {
         }
     }
 
+    fun startSingleFileRestore(outputFolderUri: String) {
+        val snapshot = _uiState.value
+        val src = snapshot.sourceFileUri
+        val outputName = snapshot.suggestedOutputName
+        if (src != null && outputName != null && restoreJob?.isActive != true) {
+            restoreJob = safeLaunch {
+                _uiState.update { it.copy(state = RestoreState.Running, progress = null) }
+                try {
+                    val result = engine.decryptSingleFile(
+                        sourceFileUri = src,
+                        outputFolderUri = outputFolderUri,
+                        outputFileName = outputName,
+                        password = _uiState.value.singleFilePassword,
+                    )
+                    _uiState.update {
+                        // On success the password has served its purpose — drop it from the state
+                        // so it does not outlive the restore. A failed attempt keeps it so the
+                        // user can correct a typo instead of retyping from scratch.
+                        val password = if (result is RestoreResult.Success) "" else it.singleFilePassword
+                        it.copy(state = RestoreState.Done(result), singleFilePassword = password)
+                    }
+                } finally {
+                    _uiState.update { current ->
+                        if (current.state is RestoreState.Running) {
+                            current.copy(state = RestoreState.SourceReady)
+                        } else {
+                            current
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fun cancel() {
         restoreJob?.cancel()
         restoreJob = null
@@ -116,6 +234,14 @@ class RestoreViewModel(private val engine: IRestoreEngine) : BaseViewModel() {
     fun reset() {
         restoreJob?.cancel()
         restoreJob = null
-        _uiState.value = RestoreUiState()
+        persistSingleFileSelection(uri = null, name = null)
+        // Keep the selected mode so "Start over" clears the selection without flipping flows.
+        _uiState.value = RestoreUiState(mode = _uiState.value.mode)
+    }
+
+    private companion object {
+        private const val KEY_MODE = "restore.mode"
+        private const val KEY_SOURCE_FILE_URI = "restore.singleFile.sourceUri"
+        private const val KEY_SOURCE_FILE_NAME = "restore.singleFile.sourceName"
     }
 }

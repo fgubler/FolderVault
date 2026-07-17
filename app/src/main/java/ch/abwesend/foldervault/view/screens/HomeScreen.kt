@@ -251,6 +251,8 @@ private fun BackupStatusLine(config: BackupConfig) {
 
     val statusText = when {
         config.isPaused -> stringResource(R.string.home_status_paused)
+        config.lastRunStatus == BackupRunStatus.INITIAL_SYNC_IN_PROGRESS && config.isBaselinePending ->
+            stringResource(R.string.home_status_indexing)
         config.lastRunStatus == BackupRunStatus.INITIAL_SYNC_IN_PROGRESS ->
             stringResource(R.string.home_status_initial_sync, config.filesUploadedTotal, config.totalFilesDiscovered)
         config.lastRunStatus == BackupRunStatus.RUNNING -> stringResource(R.string.home_status_running)

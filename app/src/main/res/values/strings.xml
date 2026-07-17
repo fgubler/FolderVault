@@ -8,7 +8,8 @@
     <string name="backup_notification_progress_title">FolderVault Backup</string>
     <string name="backup_notification_progress_text">Uploading files…</string>
     <string name="backup_notification_progress_text_with_count">Uploading %1$d / %2$d files</string>
-    <string name="backup_notification_progress_text_with_queued">%1$s — %2$s</string>
+    <string name="backup_notification_indexing_text">Checking which files are already there…</string>
+    <string name="backup_notification_progress_separator">" — "</string>
     <plurals name="backup_notification_progress_queued">
         <item quantity="one">%d more backup waiting</item>
         <item quantity="other">%d more backups waiting</item>
@@ -16,6 +17,8 @@
     <string name="backup_notification_stop_action">Stop</string>
     <string name="detail_initial_sync_incomplete">First backup not finished yet (%1$d of %2$d files uploaded). It continues automatically in the background — or finish it now while the app is open.</string>
     <string name="detail_initial_sync_incomplete_manual">First backup not finished yet (%1$d of %2$d files uploaded). Finish it now while the app is open.</string>
+    <string name="detail_initial_sync_indexing">Still checking which files are already in the folder, so they can be skipped later. It continues automatically in the background — or finish it now while the app is open.</string>
+    <string name="detail_initial_sync_indexing_manual">Still checking which files are already in the folder, so they can be skipped later. Finish it now while the app is open.</string>
     <string name="detail_initial_sync_continue">Continue now</string>
     <string name="notification_channel_problems_name">Backup problems</string>
     <string name="notification_channel_problems_description">Alerts when a backup stops working or needs your attention</string>
@@ -43,6 +46,7 @@
     <string name="button_cancel">Cancel</string>
     <string name="button_delete">Delete</string>
     <string name="button_close">Close</string>
+    <string name="button_ok">OK</string>
     <string name="button_got_it">Got it</string>
     <string name="info_cd_about">About %1$s</string>
     <string name="password_cd_show">Show password</string>
@@ -107,6 +111,8 @@
     <string name="msg_unreliable_timestamps">File timestamps are unreliable. Some unchanged files may be re-checked.</string>
     <string name="msg_rate_limited">Upload was rate-limited. Backup will continue in the next run.</string>
     <string name="msg_charging_fallback_scheduled">Several backup runs were interrupted. The next attempt will wait until the device is charging so it can finish undisturbed.</string>
+    <string name="msg_fgs_time_budget_reached">This backup could not get extended run time right now, so it will continue in shorter background steps instead.</string>
+    <string name="msg_watchdog_triggered_run">This backup was overdue, so FolderVault started it for you. If it keeps running late, your phone may be limiting background activity.</string>
     <string name="msg_generic_info">Info</string>
     <string name="msg_generic_warning">Warning</string>
     <string name="msg_generic_error">Error</string>
@@ -124,6 +130,7 @@
     <string name="home_empty_restore_action">Restore your data</string>
     <string name="home_status_paused">Disabled</string>
     <string name="home_status_initial_sync">Initial backup: %1$d / %2$d files — continues in next run</string>
+    <string name="home_status_indexing">Checking existing files — continues in next run</string>
     <string name="home_status_running">Running…</string>
     <string name="home_status_never_run">Never run</string>
     <string name="time_ago_just_now">just now</string>
@@ -173,7 +180,7 @@
     <string name="button_discard">Leave</string>
     <string name="button_keep_editing">Keep editing</string>
     <string name="info_requires_charging_title">Only run while charging</string>
-    <string name="info_requires_charging_body">When on, FolderVault waits for the phone to be plugged in before starting a backup. When off, backups run whenever the phone has power to spare — but if several attempts in a row get cut short (for example the phone unplugs or reboots), FolderVault will schedule one extra charging-only run in the background so at least one attempt gets to finish. Your normal schedule keeps running either way.</string>
+    <string name="info_requires_charging_body">When on, backups only run while the phone is plugged in. When off, backups also run on battery — though if several attempts in a row get cut short, one extra attempt will wait for the charger.</string>
     <string name="info_sync_later_changes_only_title">Only sync changes from now on</string>
     <string name="info_sync_later_changes_only_body">When on, the files already in the folder are not uploaded. The first run just takes note of what is there; from then on, only files you add or change get backed up. The files present now stay on your phone and are never uploaded — as long as you don\'t change them. If you edit one later, that new version does get backed up. This choice is fixed once the backup is created. When off, everything in the folder is backed up.</string>
     <string name="info_changed_file_policy_title">Changed-file policy</string>
@@ -216,6 +223,8 @@
     <string name="common_no">No</string>
     <string name="label_encryption">Encryption</string>
     <string name="label_retention">Retention</string>
+    <string name="label_reliable_execution">Run time</string>
+    <string name="value_reliable_execution_exact_alarm">Extended (starts as one long session)</string>
     <string name="encryption_enabled">Enabled</string>
     <string name="encryption_disabled">Disabled</string>
     <string name="status_section_header">Status</string>
@@ -245,7 +254,13 @@
     <string name="dialog_open_drive_error_title">Cannot open Google Drive</string>
     <string name="dialog_open_drive_error_body">No app is available to open the Drive folder. Install the Google Drive app or a browser to view it.</string>
     <string name="dialog_delete_title">Delete backup?</string>
-    <string name="dialog_delete_body">Your data on Google Drive is safe. The app will forget which files have been backed up — if you ever re-create this backup, it will upload everything again. You can delete the Drive folder yourself in the Google Drive app if you wish.</string>
+    <string name="dialog_delete_body">Your files on Google Drive are kept. The app just forgets which files have been backed up — if you ever re-create this backup, it will upload everything again.</string>
+    <string name="dialog_delete_cloud_checkbox">Also delete the backup folder on Google Drive</string>
+    <string name="dialog_delete_cloud_warning">The backed-up files on Google Drive will be permanently deleted. This can\'t be undone.</string>
+    <string name="dialog_delete_in_progress">Deleting the folder on Google Drive…</string>
+    <string name="dialog_delete_cloud_failed_title">Drive folder not deleted</string>
+    <string name="dialog_delete_cloud_failed_body">The folder on Google Drive couldn\'t be deleted — the backup will still be removed from this app. You can delete the folder yourself in the Google Drive app.</string>
+    <string name="snackbar_delete_refused_running">A backup is running right now. Try again when it finishes.</string>
     <string name="dialog_check_password_title">Check my password</string>
     <string name="dialog_check_password_body">Enter your backup password to verify you still remember it.</string>
     <string name="password_correct">✓ Password is correct</string>
@@ -289,6 +304,13 @@
     <string name="button_open_data_settings">Open data settings</string>
     <string name="info_background_data_title">Background data</string>
     <string name="info_background_data_body">When Data Saver is on, Android blocks background data for apps while you are on mobile data. Backups that are allowed to use mobile data then have to wait until you are on Wi-Fi. If you allow unrestricted data usage for FolderVault, those backups can run anyway.\n\nBackups set to Wi-Fi only are not affected by this.</string>
+    <string name="label_exact_alarm_backups">Extended run time for large backups</string>
+    <string name="desc_exact_alarm_backups">Let big backups run in one long session instead of many short ones</string>
+    <string name="status_exact_alarm_permitted">✓ Extended run time is allowed</string>
+    <string name="status_exact_alarm_not_permitted">Allow \"alarms &amp; reminders\" so backups can start on time</string>
+    <string name="button_allow_exact_alarms">Allow extended run time</string>
+    <string name="info_exact_alarm_title">Extended run time</string>
+    <string name="info_exact_alarm_body">Normally Android only lets background backups run in short bursts of a few minutes, so a large backup is split across many of them. If you turn this on, FolderVault can start the backup as a single long-running session, which finishes big backups faster and more reliably.\n\nAndroid needs the \"alarms &amp; reminders\" permission for this. If you turn it off, backups keep working the normal way.</string>
     <string name="button_show_onboarding">Show onboarding again</string>
     <string name="button_export_today_log">Export today\'s logfile</string>
     <string name="dialog_export_log_success_title">Export successful</string>
@@ -339,11 +361,36 @@
     <string name="restore_wrong_password">Wrong password. No files were modified.</string>
     <string name="restore_cancelled">Restore was cancelled.</string>
     <string name="restore_failed">Restore failed: %1$s</string>
+
+    <!-- Restore failure reasons (inserted into restore_failed) -->
+    <string name="restore_failure_source_folder">Cannot access the source folder</string>
+    <string name="restore_failure_output_folder">Cannot access the output folder</string>
+    <string name="restore_failure_source_file">Cannot access the selected file</string>
+    <string name="restore_failure_output_file">Cannot access the output file</string>
+    <string name="restore_failure_header_not_readable">Cannot read the file header</string>
+    <string name="restore_failure_invalid_encrypted_file">The file is not a valid encrypted backup file</string>
+    <string name="restore_failure_decryption">Failed to read or decrypt the file</string>
+    <string name="restore_failure_copy">Failed to copy the file</string>
     <string name="button_restore_start_over">Start over (clear selection)</string>
     <string name="dialog_restoring_title">Restoring…</string>
     <string name="restore_verifying_password">Verifying password…</string>
     <string name="restore_decrypting_progress">Decrypting %1$d / %2$d files</string>
     <string name="restore_failed_count">%1$d failed</string>
+
+    <!-- Restore mode toggle -->
+    <string name="restore_mode_whole_folder">Whole folder</string>
+    <string name="restore_mode_single_file">Single file</string>
+
+    <!-- Restore single file -->
+    <string name="restore_single_explanation_body">1. Pick one encrypted file. If the Google Drive app is installed, you can select it directly on Google Drive in the file picker — no download needed.\n2. Enter your backup password.\n3. Choose a destination folder. The decrypted file is saved there under its original name; if a file with that name already exists, a unique name (with a \"_restored\" suffix) is used so nothing is overwritten.</string>
+    <string name="restore_single_step1_header">Step 1: encrypted file</string>
+    <string name="restore_pick_encrypted_file">Pick encrypted file</string>
+    <string name="restore_single_file_selected">Selected: %1$s</string>
+    <string name="restore_single_step2_header">Step 2: password</string>
+    <string name="button_decrypt_and_save">Decrypt &amp; save to folder…</string>
+    <string name="restore_single_decrypting">Decrypting the file…</string>
+    <string name="restore_single_success_decrypted">The file was decrypted and saved.</string>
+    <string name="restore_single_success_copied">The file was not encrypted, so it was saved as an unchanged copy.</string>
 
     <!-- Restore collision policy display names -->
     <string name="collision_skip">Skip existing files</string>

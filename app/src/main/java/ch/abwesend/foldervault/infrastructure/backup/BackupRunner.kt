@@ -91,6 +91,44 @@ internal fun resolveRunStatus(summary: RunSummary): BackupRunStatus = when {
 }
 
 /**
+ * How a run's terminal state changes the cross-run progress counters (`totalFilesDiscovered` /
+ * `filesUploadedTotal`) that [ch.abwesend.foldervault.domain.backup.StartManualBackupUseCase]
+ * reads to keep routing an incomplete initial sync to the foreground service.
+ */
+internal enum class CrossRunProgress {
+    /**
+     * The run made progress but did not finish the sync: a cooperative time-budget stop
+     * ([RunSummary.hitTimeBudget]) or a hard cancellation ([BackupRunStatus.CANCELLED]). Keep the
+     * discovered total and accumulate the uploaded count so the sync resumes on the right host.
+     */
+    PERSIST,
+
+    /** The run completed normally — the sync is done, so the counters clear to zero. */
+    RESET,
+
+    /** A failed / quota-exceeded run — leave whatever the last progressing run recorded. */
+    UNCHANGED,
+}
+
+/**
+ * Decides the [CrossRunProgress] transition for a finished run. Extracted as a pure function so the
+ * [BackupRunStatus.CANCELLED] case in particular — a hard cancellation (e.g. the OS killing a
+ * background worker mid-upload) must remember its progress, otherwise the next run falls back to
+ * WorkManager's short windows instead of the foreground service — is unit-testable without the full
+ * run pipeline. Order matters: [CrossRunProgress.PERSIST] is checked before [CrossRunProgress.RESET]
+ * because a cancelled run never completes normally anyway.
+ */
+internal fun resolveCrossRunProgress(
+    status: BackupRunStatus,
+    summary: RunSummary,
+    completedNormally: Boolean,
+): CrossRunProgress = when {
+    summary.hitTimeBudget || status == BackupRunStatus.CANCELLED -> CrossRunProgress.PERSIST
+    completedNormally -> CrossRunProgress.RESET
+    else -> CrossRunProgress.UNCHANGED
+}
+
+/**
  * Maps the current index rows to cloud-manifest entries. Baseline rows are excluded — they
  * describe files that were deliberately never uploaded, so nothing exists in the cloud for them.
  */
@@ -363,6 +401,9 @@ class BackupRunner internal constructor(
         } catch (e: CancellationException) {
             // Mirrors the upload path: the DB writes must run NonCancellable, otherwise the
             // RUNNING row would stay stuck forever (this coroutine is already cancelled).
+            // Unlike the upload path this deliberately does NOT consult ChargingFallbackTrigger:
+            // a baseline pass is a DB-only tree walk (no network, no charge-hungry uploads), so a
+            // charging-only fallback run would buy nothing — the next ordinary run resumes it.
             log.warning("Baseline pass cancelled for config ${config.id}")
             withContext(NonCancellable) {
                 commitRunStats(config.id, runId, BackupRunStatus.CANCELLED, summary, completedNormally = false)
@@ -485,13 +526,20 @@ class BackupRunner internal constructor(
     ) {
         val normalChannel = Channel<UploadTask>(capacity = 64)
         val oversizedChannel = Channel<UploadTask>(capacity = 8)
-        var filesDiscovered = 0
         coroutineScope {
-            // Producer: walk the file system and enqueue tasks
+            // Producer: walk the file system and enqueue tasks. The analyzer records the
+            // discovered total onto [summary] itself as soon as the scan completes, so the count
+            // survives a hard cancellation mid-upload (the code below would otherwise never run).
             launch {
                 try {
-                    filesDiscovered = analyzer.analyze(
-                        config, normalChannel, oversizedChannel, fileSizeLimitBytes, runId, folderCache, summary,
+                    analyzer.analyze(
+                        config,
+                        normalChannel,
+                        oversizedChannel,
+                        fileSizeLimitBytes,
+                        runId,
+                        folderCache,
+                        summary,
                         control,
                     )
                 } finally {
@@ -513,7 +561,6 @@ class BackupRunner internal constructor(
                 )
             }
         }
-        summary.totalFilesDiscovered = filesDiscovered
     }
 
     /**
@@ -565,22 +612,30 @@ class BackupRunner internal constructor(
             bytesUploaded = summary.bytesUploaded,
         )
         backupRunDao.pruneOld(configId)
-        when {
-            summary.hitTimeBudget -> {
+        when (resolveCrossRunProgress(status, summary, completedNormally)) {
+            CrossRunProgress.PERSIST -> {
                 val prev = backupConfigDao.getByIdOnce(configId)
-                val prevTotal = prev?.filesUploadedTotal ?: 0
+                val prevUploaded = prev?.filesUploadedTotal ?: 0
+                // A run hard-cancelled mid-scan never completed the tree walk, so its discovered
+                // total is still 0 — keep the previous run's count instead of regressing it (which
+                // would drop the next run back from the foreground service to WorkManager).
+                val discovered = if (summary.totalFilesDiscovered > 0) {
+                    summary.totalFilesDiscovered
+                } else {
+                    prev?.totalFilesDiscovered ?: 0
+                }
                 backupConfigDao.updateCrossRunProgress(
                     id = configId,
-                    totalFilesDiscovered = summary.totalFilesDiscovered,
-                    filesUploadedTotal = prevTotal + summary.filesUploaded,
+                    totalFilesDiscovered = discovered,
+                    filesUploadedTotal = prevUploaded + summary.filesUploaded,
                 )
             }
-            completedNormally -> backupConfigDao.updateCrossRunProgress(
+            CrossRunProgress.RESET -> backupConfigDao.updateCrossRunProgress(
                 id = configId,
                 totalFilesDiscovered = 0,
                 filesUploadedTotal = 0,
             )
-            // Failed/quota run without hitTimeBudget — leave cross-run counters unchanged.
+            CrossRunProgress.UNCHANGED -> Unit // failed/quota run — leave cross-run counters as-is
         }
     }
 }

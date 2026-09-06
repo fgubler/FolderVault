@@ -192,6 +192,33 @@ class BackupWorker(
                     logger.error("Backup run for $id failed fatally", result.error)
                     Result.failure()
                 }
+                is RunResult.NetworkUnavailable -> {
+                    // The device had no usable network (typically DNS failing when the run fires
+                    // before connectivity is up — the classic morning failure). Ride WorkManager's
+                    // backoff instead of failing immediately, and only surface the "upload failed"
+                    // notification once connectivity has not returned within the retry cap.
+                    logger.info("Backup for $id could not reach the network; retrying with WorkManager backoff")
+                    val retryResult = errorHandler.retryOrGiveUp(
+                        runAttemptCount,
+                        WorkerErrorHandler.MAX_NETWORK_RETRY_COUNT,
+                    )
+                    // retryOrGiveUp returns Result.failure() once the cap is reached; the equality
+                    // check avoids touching the library-restricted Result.Failure type directly.
+                    if (retryResult == Result.failure()) {
+                        notificationManager.postProblemNotificationIfNeeded(
+                            configId = id,
+                            configName = config.displayName,
+                            runId = result.runId,
+                        )
+                        notificationManager.postCompletionNotificationIfEnabled(
+                            configId = id,
+                            configName = config.displayName,
+                            outcome = BackupRunOutcome.FAILURE,
+                            filesUploaded = result.summary.filesUploaded,
+                        )
+                    }
+                    retryResult
+                }
                 is RunResult.SkippedConcurrentRun -> {
                     // Manual + periodic overlap: another run of this config is executing right
                     // now. Retry with backoff instead of waiting — the in-flight run will have

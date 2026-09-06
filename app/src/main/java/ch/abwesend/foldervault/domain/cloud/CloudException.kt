@@ -11,8 +11,19 @@ class CloudRateLimitException(cause: Throwable? = null) :
 class CloudQuotaExceededException(cause: Throwable? = null) :
     CloudException("Cloud storage quota exceeded", cause)
 
-class CloudTransientException(message: String = "Transient cloud error", cause: Throwable? = null) :
+open class CloudTransientException(message: String = "Transient cloud error", cause: Throwable? = null) :
     CloudException(message, cause)
+
+/**
+ * A transient failure caused by the device having no usable network connection at all — most
+ * commonly a DNS-resolution failure (`UnknownHostException`) when a scheduled backup fires before
+ * connectivity is actually up (e.g. the phone just woke in the morning). A specialisation of
+ * [CloudTransientException] so the existing retry machinery still applies, but distinguishable so
+ * the worker can ride WorkManager's backoff and defer the user-facing "upload failed" notification
+ * until connectivity genuinely does not return.
+ */
+class CloudNetworkUnavailableException(cause: Throwable? = null) :
+    CloudTransientException("No usable network connection", cause)
 
 class CloudNotFoundException(message: String = "Cloud resource not found", cause: Throwable? = null) :
     CloudException(message, cause)

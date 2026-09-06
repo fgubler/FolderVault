@@ -4,6 +4,7 @@ import android.content.Context
 import ch.abwesend.foldervault.domain.cloud.CloudAuthException
 import ch.abwesend.foldervault.domain.cloud.CloudAuthResult
 import ch.abwesend.foldervault.domain.cloud.CloudFile
+import ch.abwesend.foldervault.domain.cloud.CloudNetworkUnavailableException
 import ch.abwesend.foldervault.domain.cloud.CloudQuotaExceededException
 import ch.abwesend.foldervault.domain.cloud.ICloudAuthorizer
 import ch.abwesend.foldervault.domain.cloud.ICloudStorageProvider
@@ -57,7 +58,8 @@ class BackupUploader(
         // Always drain the channel even when stopped — a break without draining would leave the
         // producer blocked on send(), hanging the coroutineScope indefinitely.
         for (task in channel) {
-            val shouldSkip = summary.authLost || summary.quotaExceeded || summary.hitTimeBudget
+            val shouldSkip = summary.authLost || summary.quotaExceeded ||
+                summary.hitTimeBudget || summary.networkUnavailable
             if (shouldSkip && task.tier == UploadTier.OVERSIZED) {
                 summary.oversizedDeferred++
             } else if (!shouldSkip) {
@@ -98,6 +100,10 @@ class BackupUploader(
 
         val folderResult = folderCache.ensurePath(config.cloudSubFolderId, folderPath)
         if (folderResult is ErrorResult) {
+            if (folderResult.error is CloudNetworkUnavailableException) {
+                markNetworkUnavailable(task, summary)
+                return
+            }
             log.warning(
                 "Could not ensure remote folder for ${FileNameRedactor.redactPath(task.relativePath)}: " +
                     "${folderResult.error}"
@@ -158,6 +164,10 @@ class BackupUploader(
             ) ?: return // auth-lost or quota — summary flags set; caller will skip subsequent tasks
 
             if (uploadResult is ErrorResult) {
+                if (uploadResult.error is CloudNetworkUnavailableException) {
+                    markNetworkUnavailable(task, summary)
+                    return
+                }
                 log.warning(
                     "Upload failed for ${FileNameRedactor.redactPath(task.relativePath)}: ${uploadResult.error}"
                 )
@@ -170,6 +180,21 @@ class BackupUploader(
         } finally {
             staging?.file?.delete()
         }
+    }
+
+    /**
+     * Flags the run as network-unavailable so [BackupRunner] can map it to a retryable
+     * result and the worker can defer the failure notification. Deliberately does NOT count
+     * the file as failed or emit an UPLOAD_FAILED message: nothing is wrong with the file, the
+     * device simply had no connection, and the remaining tasks are drained without being attempted
+     * (see the `shouldSkip` guard in [processChannel]).
+     */
+    private fun markNetworkUnavailable(task: UploadTask, summary: RunSummary) {
+        summary.networkUnavailable = true
+        log.info(
+            "No usable network while uploading ${FileNameRedactor.redactPath(task.relativePath)} — " +
+                "will retry the run once connectivity returns"
+        )
     }
 
     private suspend fun commitSuccess(

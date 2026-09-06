@@ -373,6 +373,7 @@
     <string name="restore_failure_decryption">Failed to read or decrypt the file</string>
     <string name="restore_failure_copy">Failed to copy the file</string>
     <string name="restore_failure_same_as_source">The destination is the encrypted file itself. Please choose a different name or folder, so the backup file is not overwritten.</string>
+    <string name="restore_failure_folder_same_as_source">The output folder is the backup folder itself. Please choose a different folder, so the backed-up files are not overwritten.</string>
     <string name="restore_failure_interrupted">The restore was interrupted before it finished</string>
     <string name="button_restore_start_over">Start over (clear selection)</string>
     <string name="dialog_restoring_title">Restoring…</string>

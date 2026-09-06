@@ -7,6 +7,68 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-09-06 — Review round 4: FGS start obligation, network-retry loop, validation flapping, restore-into-itself
+
+Fourth review pass over `develop` vs `master` (`review/develop.md`), then the fixes the user asked
+for: B9–B11 and S16/S17. Every round-3 finding marked `fixed` was re-checked first and holds.
+
+### B9 — a declined restore-service start never called `startForeground`
+`RestoreForegroundService.startRun`'s "nothing to claim" branch went straight to `stopSelf()`. Since
+every start arrives through `startForegroundService`, the platform's promotion obligation was still
+outstanding, which is the `Context.startForegroundService() did not then call
+Service.startForeground()` crash. Reachable whenever the coordinator's 5 s fallback wins the race
+against a delayed service dispatch. `BackupForegroundService` already documents the invariant
+("must become foreground promptly on EVERY start") and promotes unconditionally.
+
+- The decline path now promotes first and only then stops.
+- `latestProgress` is tracked from `observeProgress`, so the promotion of a *second* start command
+  re-posts the live run's progress instead of resetting the notification to "preparing".
+- Regression test: `a start with nothing to claim still promotes before stopping itself`, asserted
+  through the notification build — `stopForeground(STOP_FOREGROUND_REMOVE)` has already cleared
+  Robolectric's `lastForegroundNotification` by the time the assertion runs.
+
+### B10 — a network-unavailable foreground run re-enqueued itself into a loop
+`handleResult`'s `RunResult.NetworkUnavailable` arm called `scheduleOneTime(...)` with no delay and
+without `forceInline`. With the exact-alarm opt-in and a long-window run that trampolines straight
+back into the service, finds the network still gone and re-enqueues — and because every re-enqueue
+is a *fresh* `WorkRequest`, `runAttemptCount` resets, so `MAX_NETWORK_RETRY_COUNT` never bounded it.
+Each cycle cost a run row and a slice of the dataSync budget shared with the restore service.
+
+- Now `scheduleOneTime(..., forceInline = true)`, so the retry runs inline in the worker and rides
+  `Result.retry()`'s exponential backoff up to the cap — the same reasoning the budget-exhaustion
+  degrade path already used. `KEY_FORCE_INLINE`'s KDoc now lists both callers.
+- Regression test in `BackupForegroundServiceTest` (cannot run in the sandbox — SQLite/aarch64).
+
+### B11 — the new `RestoreForegroundServiceTest` was flaky
+`a staged restore is claimed, promoted to the foreground and executed` was the only case that did
+not hold the fake's run open, so `launchRun`'s `finally` could call
+`stopForeground(STOP_FOREGROUND_REMOVE)` — which nulls Robolectric's `lastForegroundNotification` —
+before the assertion read it. Green alone, red in the full suite (twice). Fixed with
+`holdRunOpen()`.
+
+### S16 — `NET_CAPABILITY_VALIDATED` removed from `NetworkStateMonitor` again
+The monitor's flow only ever *stops* a run, and a stop schedules a continuation whose WorkManager
+constraint is the weaker one: `NetworkUnmeteredController.isConstrained` is `!isConnected ||
+isMetered` — no validation (only `NetworkConnectedController` checks it, on API 26+, verified
+against `work-runtime-2.10.0`). Requiring validation here therefore made a `WIFI_ONLY` run stop and
+immediately restart on the very network it had just rejected. An unvalidated network is handled
+properly one layer down instead: `CloudNetworkUnavailableException` → `RunResult.NetworkUnavailable`
+→ WorkManager backoff with a cap. Also note `BackupForegroundServiceTest`'s own network fake never
+added `VALIDATED`, so the stricter check would have had its watcher stop every run in that suite.
+
+### S17 — a whole-folder restore into its own source folder is refused
+A plain (non-encrypted) entry keeps its relative path, so it resolved to *itself* as its own output;
+under `OVERWRITE` the collision handling deleted the document and then had nothing to copy from, so
+the file was simply gone (counted as `failed`). The single-file flow got this guard on 2026-09-06,
+the folder flow had not. New `RestoreFailureReason.OUTPUT_FOLDER_SAME_AS_SOURCE` + string, checked
+before anything is listed, covered by `RestoreEngineFolderTest`.
+
+### Verification
+`assembleDebug` and `detekt` clean; `./gradlew test` → 541 tests, 45 failures, **all** of them the
+known SQLite-on-aarch64 sandbox limit (the extra one is B10's new test, which lands in that same
+suite). The full suite was re-run three times to confirm B11's flake is gone. The 7 SQLite-backed
+suites still need `! ./gradlew test` outside the sandbox.
+
 ## 2026-09-06 — Folder restore: robust password probing, cooperative stop, foreground service, SAF cost
 
 Follow-up to the same day's single-file picker change. The user reported that restoring a whole

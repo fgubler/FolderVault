@@ -19,7 +19,7 @@ kotlinxSerialization = "1.8.0"          # Nav3 typed routes + crypto/JSON payloa
 
 # ── Persistence / background / DI ────────────────────────────────────────────
 room = "2.7.2"
-datastore = "1.1.1"
+datastore = "1.1.7"
 workManager = "2.10.0"
 koin = "4.0.0"                          # koin-android + koin-androidx-compose + koin-workmanager
 documentfile = "1.0.1"                  # SAF DocumentFile traversal

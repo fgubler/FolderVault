@@ -18,6 +18,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Hosts a whole-folder restore as a dataSync foreground service, so leaving the app cannot have
@@ -55,6 +56,9 @@ class RestoreForegroundService : Service() {
     companion object {
         const val ACTION_STOP = "ch.abwesend.foldervault.action.STOP_RESTORE"
         private const val STOP_REQUEST_CODE = 2101
+
+        /** How long [onTimeout] waits for the cooperative stop before tearing the service down. */
+        private const val TIMEOUT_DRAIN_MS = 4_000L
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -137,6 +141,39 @@ class RestoreForegroundService : Service() {
                     notificationManager.updateProgressNotification(progress, stopPendingIntent())
                 }
         }
+    }
+
+    /**
+     * Android 15+ dataSync time limit. The budget is *cumulative across the app's dataSync
+     * services*, so this service shares it with `BackupForegroundService` and can hit the wall
+     * even on a short restore that follows a long backup day. When it does, the platform calls
+     * this and the service must stop itself within seconds — otherwise the app is killed with
+     * `ForegroundServiceDidNotStopInTimeException`.
+     *
+     * Stopping goes through the cooperative [IRestoreRunCoordinator.requestStop] so the run ends
+     * at the next file boundary and still reports its partial counts as
+     * [ch.abwesend.foldervault.domain.restore.RestoreResult.Cancelled]. A run that cannot drain in
+     * [TIMEOUT_DRAIN_MS] is abandoned — the service must go regardless, and unlike a backup there
+     * is no continuation to schedule: a restore depends on session-scoped picked tree uris and an
+     * in-memory password, so no worker could resume it. The user restarts it from the screen.
+     *
+     * Must be the two-argument overload: the dataSync time-limit path calls only
+     * `onTimeout(startId, fgsType)`; the one-argument [Service.onTimeout] is invoked solely for
+     * `shortService` timeouts and its two-argument default implementation is empty.
+     */
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        log.warning("Foreground restore hit the OS dataSync time limit — stopping the run")
+        coordinator.requestStop()
+        scope.launch {
+            runJob?.let { withTimeoutOrNull(TIMEOUT_DRAIN_MS) { it.join() } }
+            stopService()
+        }
+    }
+
+    /** Drops the foreground notification and ends the service. */
+    private fun stopService() {
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     private fun stopPendingIntent(): PendingIntent {

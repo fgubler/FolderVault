@@ -17,6 +17,7 @@ import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
 import ch.abwesend.foldervault.domain.util.injectAnywhere
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupConfigDao
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupMessageDao
+import ch.abwesend.foldervault.infrastructure.room.entity.BackupConfigEntity
 import ch.abwesend.foldervault.infrastructure.room.entity.BackupMessageEntity
 import kotlinx.coroutines.flow.first
 import java.time.Instant
@@ -161,74 +162,95 @@ class BackupWorker(
                 }
             }
 
-            when (result) {
-                is RunResult.Success -> {
-                    if (result.summary.hitTimeBudget) {
-                        // Made progress but ran out of time — re-enqueue for the next slot. A
-                        // charging-fallback run re-enqueues as a fallback so it keeps its charging
-                        // constraint and dedicated name; all others re-enqueue as one-time work.
-                        logger.info("Run hit time budget with progress; re-enqueueing for config $id")
-                        BackupContinuationScheduler.scheduleContinuation(
-                            scheduler = scheduler,
-                            configId = id,
-                            networkPolicy = config.networkPolicy,
-                            requiresCharging = config.requiresCharging,
-                            isChargingFallback = isChargingFallback,
-                        )
-                        Result.success() // not retry() — we don't want backoff accumulation
-                    } else {
-                        notificationManager.clearResolvedThrottles(id)
-                        Result.success()
-                    }
-                }
-                is RunResult.AuthLost -> {
-                    // Auth loss needs user re-consent, so give up after a low cap instead of
-                    // hammering the auth stack for 20 backed-off attempts (BUG-9). A problem
-                    // notification is already posted, so the user knows action is required.
-                    logger.warning("Backup run for $id lost auth; retrying with WorkManager backoff")
-                    errorHandler.retryOrGiveUp(runAttemptCount, WorkerErrorHandler.MAX_AUTH_RETRY_COUNT)
-                }
-                is RunResult.FatalError -> {
-                    logger.error("Backup run for $id failed fatally", result.error)
-                    Result.failure()
-                }
-                is RunResult.NetworkUnavailable -> {
-                    // The device had no usable network (typically DNS failing when the run fires
-                    // before connectivity is up — the classic morning failure). Ride WorkManager's
-                    // backoff instead of failing immediately, and only surface the "upload failed"
-                    // notification once connectivity has not returned within the retry cap.
-                    logger.info("Backup for $id could not reach the network; retrying with WorkManager backoff")
-                    val retryResult = errorHandler.retryOrGiveUp(
-                        runAttemptCount,
-                        WorkerErrorHandler.MAX_NETWORK_RETRY_COUNT,
+            resolveWorkerResult(result, config, isChargingFallback)
+        }
+    }
+
+    /**
+     * Maps the [RunResult] of a finished run onto the worker's own [Result], scheduling a
+     * continuation or a retry where the outcome calls for one. Extracted from [doWork] purely to
+     * keep that method readable — it is the tail of one linear flow, not a reusable step.
+     */
+    private suspend fun resolveWorkerResult(
+        result: RunResult,
+        config: BackupConfigEntity,
+        isChargingFallback: Boolean,
+    ): Result {
+        val id = config.id
+        return when (result) {
+            is RunResult.Success -> {
+                if (result.summary.hitTimeBudget) {
+                    // Made progress but ran out of time — re-enqueue for the next slot. A
+                    // charging-fallback run re-enqueues as a fallback so it keeps its charging
+                    // constraint and dedicated name; all others re-enqueue as one-time work.
+                    logger.info("Run hit time budget with progress; re-enqueueing for config $id")
+                    BackupContinuationScheduler.scheduleContinuation(
+                        scheduler = scheduler,
+                        configId = id,
+                        networkPolicy = config.networkPolicy,
+                        requiresCharging = config.requiresCharging,
+                        isChargingFallback = isChargingFallback,
                     )
-                    // retryOrGiveUp returns Result.failure() once the cap is reached; the equality
-                    // check avoids touching the library-restricted Result.Failure type directly.
-                    if (retryResult == Result.failure()) {
-                        notificationManager.postProblemNotificationIfNeeded(
-                            configId = id,
-                            configName = config.displayName,
-                            runId = result.runId,
-                        )
-                        notificationManager.postCompletionNotificationIfEnabled(
-                            configId = id,
-                            configName = config.displayName,
-                            outcome = BackupRunOutcome.FAILURE,
-                            filesUploaded = result.summary.filesUploaded,
-                        )
-                    }
-                    retryResult
-                }
-                is RunResult.SkippedConcurrentRun -> {
-                    // Manual + periodic overlap: another run of this config is executing right
-                    // now. Retry with backoff instead of waiting — the in-flight run will have
-                    // finished by then, and this worker gets a fresh deadline. Capped so a hung
-                    // in-flight run cannot keep this worker retrying forever.
-                    logger.info("Backup for $id is already running; retrying later")
-                    errorHandler.retryOrGiveUp(runAttemptCount)
+                    Result.success() // not retry() — we don't want backoff accumulation
+                } else {
+                    notificationManager.clearResolvedThrottles(id)
+                    Result.success()
                 }
             }
+            is RunResult.AuthLost -> {
+                // Auth loss needs user re-consent, so give up after a low cap instead of
+                // hammering the auth stack for 20 backed-off attempts (BUG-9). A problem
+                // notification is already posted, so the user knows action is required.
+                logger.warning("Backup run for $id lost auth; retrying with WorkManager backoff")
+                errorHandler.retryOrGiveUp(runAttemptCount, WorkerErrorHandler.MAX_AUTH_RETRY_COUNT)
+            }
+            is RunResult.FatalError -> {
+                logger.error("Backup run for $id failed fatally", result.error)
+                Result.failure()
+            }
+            is RunResult.NetworkUnavailable -> handleNetworkUnavailable(result, config)
+            is RunResult.SkippedConcurrentRun -> {
+                // Manual + periodic overlap: another run of this config is executing right
+                // now. Retry with backoff instead of waiting — the in-flight run will have
+                // finished by then, and this worker gets a fresh deadline. Capped so a hung
+                // in-flight run cannot keep this worker retrying forever.
+                logger.info("Backup for $id is already running; retrying later")
+                errorHandler.retryOrGiveUp(runAttemptCount)
+            }
         }
+    }
+
+    /**
+     * The device had no usable network (typically DNS failing when the run fires before
+     * connectivity is up — the classic morning failure). Rides WorkManager's backoff instead of
+     * failing immediately, and surfaces the "upload failed" notifications only on the attempt that
+     * actually gives up, i.e. once connectivity has not returned within
+     * [WorkerErrorHandler.MAX_NETWORK_RETRY_COUNT] attempts.
+     */
+    private suspend fun handleNetworkUnavailable(
+        result: RunResult.NetworkUnavailable,
+        config: BackupConfigEntity,
+    ): Result {
+        val id = config.id
+        logger.info("Backup for $id could not reach the network; retrying with WorkManager backoff")
+        // Mirrors retryOrGiveUp's own cap check rather than comparing the returned Result values,
+        // which would rely on the library type's equals semantics to recover a decision we already
+        // have the inputs for.
+        val givingUp = runAttemptCount >= WorkerErrorHandler.MAX_NETWORK_RETRY_COUNT
+        if (givingUp) {
+            notificationManager.postProblemNotificationIfNeeded(
+                configId = id,
+                configName = config.displayName,
+                runId = result.runId,
+            )
+            notificationManager.postCompletionNotificationIfEnabled(
+                configId = id,
+                configName = config.displayName,
+                outcome = BackupRunOutcome.FAILURE,
+                filesUploaded = result.summary.filesUploaded,
+            )
+        }
+        return errorHandler.retryOrGiveUp(runAttemptCount, WorkerErrorHandler.MAX_NETWORK_RETRY_COUNT)
     }
 
     /**

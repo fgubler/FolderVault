@@ -3,10 +3,13 @@ package ch.abwesend.foldervault.view.viewmodel
 import androidx.lifecycle.SavedStateHandle
 import ch.abwesend.foldervault.domain.crypto.Fvc1Header
 import ch.abwesend.foldervault.domain.restore.IRestoreEngine
+import ch.abwesend.foldervault.domain.restore.IRestoreRunCoordinator
 import ch.abwesend.foldervault.domain.restore.RestoreCollisionPolicy
 import ch.abwesend.foldervault.domain.restore.RestoreMode
 import ch.abwesend.foldervault.domain.restore.RestoreProgress
+import ch.abwesend.foldervault.domain.restore.RestoreRequest
 import ch.abwesend.foldervault.domain.restore.RestoreResult
+import ch.abwesend.foldervault.domain.restore.RestoreRunState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -35,6 +38,11 @@ data class RestoreUiState(
     val sourceFileName: String? = null,
     val suggestedOutputName: String? = null,
     val singleFilePassword: String = "",
+    /**
+     * Whether the running folder restore is hosted in the foreground service. When it is not, the
+     * progress dialog warns the user to keep the app open — leaving it can have the run killed.
+     */
+    val restoreHostedInForegroundService: Boolean = false,
 )
 
 /**
@@ -47,6 +55,7 @@ data class RestoreUiState(
  */
 class RestoreViewModel(
     private val engine: IRestoreEngine,
+    private val coordinator: IRestoreRunCoordinator,
     private val savedStateHandle: SavedStateHandle,
 ) : BaseViewModel() {
 
@@ -54,6 +63,40 @@ class RestoreViewModel(
     val uiState: StateFlow<RestoreUiState> = _uiState.asStateFlow()
 
     private var restoreJob: Job? = null
+
+    init {
+        observeFolderRestore()
+    }
+
+    /**
+     * Mirrors the coordinator's run state into the UI state. The folder restore is owned by
+     * [IRestoreRunCoordinator] rather than by this ViewModel because a service-hosted run outlives
+     * the screen — re-entering the restore screen while one is in flight has to pick the progress
+     * back up rather than start over.
+     */
+    private fun observeFolderRestore() {
+        safeLaunch {
+            coordinator.state.collect { runState ->
+                _uiState.update { current ->
+                    // Only the folder flow is coordinator-hosted. Without this guard a folder run
+                    // still going in the service would drive the single-file screen's state — and
+                    // its result would land on top of the single-file one.
+                    when {
+                        current.mode != RestoreMode.WHOLE_FOLDER -> current
+                        runState is RestoreRunState.Running -> current.copy(
+                            state = RestoreState.Running,
+                            progress = runState.progress,
+                            restoreHostedInForegroundService = runState.hostedInForegroundService,
+                        )
+                        runState is RestoreRunState.Finished -> current.copy(
+                            state = RestoreState.Done(runState.result),
+                        )
+                        else -> current
+                    }
+                }
+            }
+        }
+    }
 
     /** Rebuilds the saved-state-backed part of the UI state after process death. */
     private fun restoredUiState(): RestoreUiState {
@@ -85,6 +128,7 @@ class RestoreViewModel(
         if (mode != _uiState.value.mode) {
             restoreJob?.cancel()
             restoreJob = null
+            coordinator.acknowledgeResult()
             savedStateHandle[KEY_MODE] = mode.name
             persistSingleFileSelection(uri = null, name = null)
             _uiState.value = RestoreUiState(mode = mode)
@@ -157,38 +201,25 @@ class RestoreViewModel(
         _uiState.update { it.copy(collisionPolicy = policy) }
     }
 
+    /**
+     * Starts the whole-folder restore. Choosing (and, if needed, replacing) the host is the
+     * coordinator's job, deliberately not this ViewModel's: a run tied to the screen's lifetime
+     * would be lost the moment the user navigates away, which is the very problem the foreground
+     * service exists to solve.
+     */
     fun startRestore(password: String) {
         val snapshot = _uiState.value
         val src = snapshot.sourceUri
         val out = snapshot.outputUri
-        if (src != null && out != null && restoreJob?.isActive != true) {
-            restoreJob = safeLaunch {
-                _uiState.update { it.copy(state = RestoreState.Running, progress = null) }
-                try {
-                    val result = engine.decryptAll(
-                        sourceUri = src,
-                        outputUri = out,
-                        password = password,
-                        collisionPolicy = _uiState.value.collisionPolicy,
-                        onProgress = { progress -> _uiState.update { it.copy(progress = progress) } },
-                    )
-                    _uiState.update { it.copy(state = RestoreState.Done(result)) }
-                } finally {
-                    _uiState.update { current ->
-                        if (current.state is RestoreState.Running) {
-                            current.copy(
-                                state = if (current.outputUri != null) {
-                                    RestoreState.ReadyToStart
-                                } else {
-                                    RestoreState.SourceReady
-                                },
-                            )
-                        } else {
-                            current
-                        }
-                    }
-                }
-            }
+        if (src != null && out != null) {
+            coordinator.start(
+                RestoreRequest(
+                    sourceUri = src,
+                    outputUri = out,
+                    password = password,
+                    collisionPolicy = snapshot.collisionPolicy,
+                ),
+            )
         }
     }
 
@@ -237,14 +268,25 @@ class RestoreViewModel(
         }
     }
 
+    /**
+     * Stops a running restore. The folder run stops *cooperatively* — cancelling its coroutine
+     * would make the engine's result be discarded, so the user would never learn how many files
+     * were already restored. The single-file run has no partial result worth reporting and is
+     * cancelled outright.
+     */
     fun cancel() {
-        restoreJob?.cancel()
-        restoreJob = null
+        if (_uiState.value.mode == RestoreMode.WHOLE_FOLDER) {
+            coordinator.requestStop()
+        } else {
+            restoreJob?.cancel()
+            restoreJob = null
+        }
     }
 
     fun reset() {
         restoreJob?.cancel()
         restoreJob = null
+        coordinator.acknowledgeResult()
         persistSingleFileSelection(uri = null, name = null)
         // Keep the selected mode so "Start over" clears the selection without flipping flows.
         _uiState.value = RestoreUiState(mode = _uiState.value.mode)

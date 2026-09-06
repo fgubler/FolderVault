@@ -17,4 +17,10 @@ enum class RestoreFailureReason(@StringRes val messageResId: Int) {
     INVALID_ENCRYPTED_FILE(R.string.restore_failure_invalid_encrypted_file),
     DECRYPTION_FAILED(R.string.restore_failure_decryption),
     COPY_FAILED(R.string.restore_failure_copy),
+
+    /**
+     * The host executing the run went away mid-restore — the foreground service was destroyed, or
+     * the process is shutting down. Distinct from a user stop, which reports partial counts.
+     */
+    RUN_INTERRUPTED(R.string.restore_failure_interrupted),
 }

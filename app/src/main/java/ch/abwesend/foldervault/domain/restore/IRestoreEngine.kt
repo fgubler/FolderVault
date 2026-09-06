@@ -3,11 +3,24 @@ package ch.abwesend.foldervault.domain.restore
 interface IRestoreEngine {
     suspend fun scanSourceFolder(sourceUri: String): RestoreScanResult
 
+    /**
+     * Restores every file of the backup tree [sourceUri] into [outputUri].
+     *
+     * Stopping is cooperative through [runControl] — never by cancelling the coroutine: the engine
+     * polls it at each file boundary and returns [RestoreResult.Cancelled] with the counts of what
+     * it already restored. Cancelling instead would make `withContext` discard that value and
+     * throw, leaving the user with no idea how far the run got.
+     *
+     * The password is verified against a few of the smallest encrypted files *before* anything is
+     * written, so a wrong password returns [RestoreResult.InvalidPassword] with nothing modified.
+     */
+    @Suppress("LongParameterList")
     suspend fun decryptAll(
         sourceUri: String,
         outputUri: String,
         password: String,
         collisionPolicy: RestoreCollisionPolicy,
+        runControl: RestoreRunControl,
         onProgress: (RestoreProgress) -> Unit,
     ): RestoreResult
 

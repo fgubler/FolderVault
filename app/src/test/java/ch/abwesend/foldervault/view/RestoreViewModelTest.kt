@@ -1,14 +1,18 @@
 package ch.abwesend.foldervault.view
 
 import androidx.lifecycle.SavedStateHandle
+import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.logging.ILogger
 import ch.abwesend.foldervault.domain.logging.LoggerProvider
+import ch.abwesend.foldervault.domain.restore.IForegroundRestoreLauncher
 import ch.abwesend.foldervault.domain.restore.IRestoreEngine
 import ch.abwesend.foldervault.domain.restore.RestoreCollisionPolicy
 import ch.abwesend.foldervault.domain.restore.RestoreMode
 import ch.abwesend.foldervault.domain.restore.RestoreProgress
 import ch.abwesend.foldervault.domain.restore.RestoreResult
+import ch.abwesend.foldervault.domain.restore.RestoreRunControl
 import ch.abwesend.foldervault.domain.restore.RestoreScanResult
+import ch.abwesend.foldervault.infrastructure.restore.RestoreRunCoordinator
 import ch.abwesend.foldervault.view.viewmodel.RestoreState
 import ch.abwesend.foldervault.view.viewmodel.RestoreViewModel
 import io.kotest.core.spec.IsolationMode
@@ -17,6 +21,7 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import io.mockk.mockk
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -38,20 +43,30 @@ private class FakeRestoreEngine(
     var singleFilePassword: String? = null
     var singleFileCallCount = 0
     var decryptAllCallCount = 0
+    var decryptAllPassword: String? = null
 
     override suspend fun scanSourceFolder(sourceUri: String): RestoreScanResult =
         RestoreScanResult(cryptFileCount = 0, otherFileCount = 0)
 
+    @Suppress("LongParameterList")
     override suspend fun decryptAll(
         sourceUri: String,
         outputUri: String,
         password: String,
         collisionPolicy: RestoreCollisionPolicy,
+        runControl: RestoreRunControl,
         onProgress: (RestoreProgress) -> Unit,
     ): RestoreResult {
         decryptAllCallCount++
+        decryptAllPassword = password
         gate?.await()
-        return RestoreResult.Success(0, 0, 0, 0)
+        // Honors the cooperative stop the way the real engine does, so a `cancel()` in a test
+        // produces the same Cancelled result instead of a silently discarded run.
+        return if (runControl.shouldStop()) {
+            RestoreResult.Cancelled(0, 0, 0, 0)
+        } else {
+            RestoreResult.Success(0, 0, 0, 0)
+        }
     }
 
     override suspend fun decryptSingleFile(
@@ -67,6 +82,51 @@ private class FakeRestoreEngine(
         return singleFileResult
     }
 }
+
+/**
+ * Records whether the foreground restore service was asked for, and replays [dispatched] — `false`
+ * models the OS refusing the start, which must leave the run to the ViewModel itself.
+ */
+private class FakeForegroundRestoreLauncher(private val dispatched: Boolean = false) : IForegroundRestoreLauncher {
+    var startCount = 0
+
+    override fun start(): Boolean {
+        startCount++
+        return dispatched
+    }
+}
+
+/** Builds the coordinator the way production does, with the seams a test can steer. */
+private fun testCoordinator(
+    engine: IRestoreEngine,
+    launcher: IForegroundRestoreLauncher = FakeForegroundRestoreLauncher(),
+    dispatcher: CoroutineDispatcher = UnconfinedTestDispatcher(),
+): RestoreRunCoordinator = RestoreRunCoordinator(engine, launcher, testDispatchers(dispatcher))
+
+private fun testDispatchers(dispatcher: CoroutineDispatcher): IDispatchers = object : IDispatchers {
+    override val default = dispatcher
+    override val io = dispatcher
+    override val main = dispatcher
+    override val mainImmediate = dispatcher
+}
+
+/**
+ * Builds a ViewModel over a real [RestoreRunCoordinator] — it is pure logic over the engine and
+ * launcher seams, so faking it would only re-implement the host handover this suite exercises.
+ * The launcher defaults to "the service could not be dispatched", which makes the coordinator take
+ * the run immediately instead of waiting out the service-handover grace period.
+ */
+private fun restoreViewModel(
+    engine: IRestoreEngine,
+    launcher: IForegroundRestoreLauncher = FakeForegroundRestoreLauncher(),
+    dispatcher: CoroutineDispatcher = UnconfinedTestDispatcher(),
+    coordinator: RestoreRunCoordinator = testCoordinator(engine, launcher, dispatcher),
+    handle: SavedStateHandle = SavedStateHandle(),
+): RestoreViewModel = RestoreViewModel(
+    engine = engine,
+    coordinator = coordinator,
+    savedStateHandle = handle,
+)
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class RestoreViewModelTest : StringSpec({
@@ -84,7 +144,7 @@ class RestoreViewModelTest : StringSpec({
     }
 
     "setMode switches mode and clears any prior selection" {
-        val viewModel = RestoreViewModel(FakeRestoreEngine(), SavedStateHandle())
+        val viewModel = restoreViewModel(FakeRestoreEngine())
         viewModel.setSourceFile("content://src", "report.pdf.crypt")
 
         viewModel.setMode(RestoreMode.SINGLE_FILE)
@@ -97,7 +157,7 @@ class RestoreViewModelTest : StringSpec({
     }
 
     "setSourceFile records the file, suggests a decrypted name, and marks it ready" {
-        val viewModel = RestoreViewModel(FakeRestoreEngine(), SavedStateHandle())
+        val viewModel = restoreViewModel(FakeRestoreEngine())
 
         viewModel.setSourceFile("content://src", "sub/report.pdf.crypt")
 
@@ -109,7 +169,7 @@ class RestoreViewModelTest : StringSpec({
     }
 
     "setSourceFile keeps a plain (non-crypt) name as the suggestion" {
-        val viewModel = RestoreViewModel(FakeRestoreEngine(), SavedStateHandle())
+        val viewModel = restoreViewModel(FakeRestoreEngine())
 
         viewModel.setSourceFile("content://src", "notes.txt")
 
@@ -118,7 +178,7 @@ class RestoreViewModelTest : StringSpec({
 
     "startSingleFileRestore delegates the picked source, output and password to the engine" {
         val engine = FakeRestoreEngine()
-        val viewModel = RestoreViewModel(engine, SavedStateHandle())
+        val viewModel = restoreViewModel(engine)
         viewModel.setSourceFile("content://src", "report.pdf.crypt")
         viewModel.setSingleFilePassword("secret")
 
@@ -130,7 +190,7 @@ class RestoreViewModelTest : StringSpec({
     }
 
     "startSingleFileRestore lands on Done(Success) on a successful decrypt" {
-        val viewModel = RestoreViewModel(FakeRestoreEngine(RestoreResult.Success(1, 0, 0, 0)), SavedStateHandle())
+        val viewModel = restoreViewModel(FakeRestoreEngine(RestoreResult.Success(1, 0, 0, 0)))
         viewModel.setSourceFile("content://src", "report.pdf.crypt")
         viewModel.setSingleFilePassword("secret")
 
@@ -142,7 +202,7 @@ class RestoreViewModelTest : StringSpec({
     }
 
     "startSingleFileRestore surfaces InvalidPassword as the result" {
-        val viewModel = RestoreViewModel(FakeRestoreEngine(RestoreResult.InvalidPassword), SavedStateHandle())
+        val viewModel = restoreViewModel(FakeRestoreEngine(RestoreResult.InvalidPassword))
         viewModel.setSourceFile("content://src", "report.pdf.crypt")
         viewModel.setSingleFilePassword("wrong")
 
@@ -156,7 +216,7 @@ class RestoreViewModelTest : StringSpec({
     "startSingleFileRestore ignores a second start while a restore is running (review S2)" {
         val gate = CompletableDeferred<Unit>()
         val engine = FakeRestoreEngine(gate = gate)
-        val viewModel = RestoreViewModel(engine, SavedStateHandle())
+        val viewModel = restoreViewModel(engine)
         viewModel.setSourceFile("content://src", "report.pdf.crypt")
         viewModel.setSingleFilePassword("secret")
 
@@ -171,7 +231,7 @@ class RestoreViewModelTest : StringSpec({
     "startRestore ignores a second start while a restore is running (review S2)" {
         val gate = CompletableDeferred<Unit>()
         val engine = FakeRestoreEngine(gate = gate)
-        val viewModel = RestoreViewModel(engine, SavedStateHandle())
+        val viewModel = restoreViewModel(engine)
         viewModel.setSourceFolder("content://src")
         viewModel.setOutputFolder("content://out")
 
@@ -182,8 +242,89 @@ class RestoreViewModelTest : StringSpec({
         engine.decryptAllCallCount shouldBe 1
     }
 
+    "startRestore prefers the foreground service so leaving the app cannot kill the run" {
+        val launcher = FakeForegroundRestoreLauncher(dispatched = true)
+        val engine = FakeRestoreEngine()
+        val viewModel = restoreViewModel(engine, launcher = launcher)
+        viewModel.setSourceFolder("content://src")
+        viewModel.setOutputFolder("content://out")
+
+        viewModel.startRestore("secret")
+
+        launcher.startCount shouldBe 1
+    }
+
+    "startRestore runs the folder restore itself when the service could not be started" {
+        // The fallback path: the run still happens, just inside the app — which is what the
+        // progress dialog's "keep the app open" warning is for.
+        val engine = FakeRestoreEngine()
+        val viewModel = restoreViewModel(engine, launcher = FakeForegroundRestoreLauncher(dispatched = false))
+        viewModel.setSourceFolder("content://src")
+        viewModel.setOutputFolder("content://out")
+
+        viewModel.startRestore("secret")
+
+        engine.decryptAllCallCount shouldBe 1
+        engine.decryptAllPassword shouldBe "secret"
+        viewModel.uiState.value.restoreHostedInForegroundService shouldBe false
+    }
+
+    "a run the foreground service took over is not also run by the in-app fallback" {
+        // Only one host may execute a staged run; the coordinator's claim is what enforces it.
+        // The launcher reports a dispatched service, so the fallback waits out its grace period
+        // (which this scheduler never advances) instead of racing the service.
+        val engine = FakeRestoreEngine()
+        val coordinator = testCoordinator(engine, FakeForegroundRestoreLauncher(dispatched = true))
+        val viewModel = restoreViewModel(engine, coordinator = coordinator)
+        viewModel.setSourceFolder("content://src")
+        viewModel.setOutputFolder("content://out")
+
+        viewModel.startRestore("secret")
+        // Stand in for the service: claim the staged run before the handover grace period ends.
+        coordinator.tryClaim() shouldBe true
+        coordinator.markHostedInForegroundService()
+
+        engine.decryptAllCallCount shouldBe 0
+        viewModel.uiState.value.restoreHostedInForegroundService shouldBe true
+    }
+
+    "cancelling a folder restore reports what was already restored instead of vanishing" {
+        // The regression: the engine's Cancelled result used to be discarded by the cancelled
+        // coroutine, so stopping a restore left the user with no result at all.
+        val gate = CompletableDeferred<Unit>()
+        val engine = FakeRestoreEngine(gate = gate)
+        val viewModel = restoreViewModel(engine)
+        viewModel.setSourceFolder("content://src")
+        viewModel.setOutputFolder("content://out")
+
+        viewModel.startRestore("secret")
+        viewModel.cancel()
+        gate.complete(Unit)
+
+        val state = viewModel.uiState.value.state
+        state.shouldBeInstanceOf<RestoreState.Done>()
+        state.result shouldBe RestoreResult.Cancelled(0, 0, 0, 0)
+    }
+
+    "a folder restore result survives the screen being left and re-entered" {
+        // The point of moving the run out of the ViewModel: a service-hosted restore outlives the
+        // screen, so a ViewModel built later must show its state rather than starting from Idle.
+        val engine = FakeRestoreEngine()
+        val coordinator = testCoordinator(engine)
+        val before = restoreViewModel(engine, coordinator = coordinator)
+        before.setSourceFolder("content://src")
+        before.setOutputFolder("content://out")
+        before.startRestore("secret")
+
+        val after = restoreViewModel(engine, coordinator = coordinator)
+
+        val state = after.uiState.value.state
+        state.shouldBeInstanceOf<RestoreState.Done>()
+        state.result shouldBe RestoreResult.Success(0, 0, 0, 0)
+    }
+
     "a successful single-file restore clears the password from the state (review S3)" {
-        val viewModel = RestoreViewModel(FakeRestoreEngine(RestoreResult.Success(1, 0, 0, 0)), SavedStateHandle())
+        val viewModel = restoreViewModel(FakeRestoreEngine(RestoreResult.Success(1, 0, 0, 0)))
         viewModel.setSourceFile("content://src", "report.pdf.crypt")
         viewModel.setSingleFilePassword("secret")
 
@@ -193,7 +334,7 @@ class RestoreViewModelTest : StringSpec({
     }
 
     "a failed single-file restore keeps the password so the user can correct it" {
-        val viewModel = RestoreViewModel(FakeRestoreEngine(RestoreResult.InvalidPassword), SavedStateHandle())
+        val viewModel = restoreViewModel(FakeRestoreEngine(RestoreResult.InvalidPassword))
         viewModel.setSourceFile("content://src", "report.pdf.crypt")
         viewModel.setSingleFilePassword("almost-right")
 
@@ -203,7 +344,7 @@ class RestoreViewModelTest : StringSpec({
     }
 
     "setSingleFilePassword keeps the password in the ui state" {
-        val viewModel = RestoreViewModel(FakeRestoreEngine(), SavedStateHandle())
+        val viewModel = restoreViewModel(FakeRestoreEngine())
 
         viewModel.setSingleFilePassword("secret")
 
@@ -211,7 +352,7 @@ class RestoreViewModelTest : StringSpec({
     }
 
     "setMode clears the single-file password" {
-        val viewModel = RestoreViewModel(FakeRestoreEngine(), SavedStateHandle())
+        val viewModel = restoreViewModel(FakeRestoreEngine())
         viewModel.setMode(RestoreMode.SINGLE_FILE)
         viewModel.setSingleFilePassword("secret")
 
@@ -221,7 +362,7 @@ class RestoreViewModelTest : StringSpec({
     }
 
     "setMode with the already-selected mode keeps the selection and password (stray tap, review B1)" {
-        val viewModel = RestoreViewModel(FakeRestoreEngine(), SavedStateHandle())
+        val viewModel = restoreViewModel(FakeRestoreEngine())
         viewModel.setMode(RestoreMode.SINGLE_FILE)
         viewModel.setSourceFile("content://src", "report.pdf.crypt")
         viewModel.setSingleFilePassword("secret")
@@ -236,7 +377,7 @@ class RestoreViewModelTest : StringSpec({
     }
 
     "reset clears the single-file password" {
-        val viewModel = RestoreViewModel(FakeRestoreEngine(), SavedStateHandle())
+        val viewModel = restoreViewModel(FakeRestoreEngine())
         viewModel.setMode(RestoreMode.SINGLE_FILE)
         viewModel.setSingleFilePassword("secret")
 
@@ -246,7 +387,7 @@ class RestoreViewModelTest : StringSpec({
     }
 
     "reset keeps the selected mode so Start over does not flip flows" {
-        val viewModel = RestoreViewModel(FakeRestoreEngine(), SavedStateHandle())
+        val viewModel = restoreViewModel(FakeRestoreEngine())
         viewModel.setMode(RestoreMode.SINGLE_FILE)
         viewModel.setSourceFile("content://src", "report.pdf.crypt")
 
@@ -260,7 +401,7 @@ class RestoreViewModelTest : StringSpec({
 
     "startSingleFileRestore without a picked source does nothing" {
         val engine = FakeRestoreEngine()
-        val viewModel = RestoreViewModel(engine, SavedStateHandle())
+        val viewModel = restoreViewModel(engine)
 
         viewModel.startSingleFileRestore("content://out")
 
@@ -274,11 +415,11 @@ class RestoreViewModelTest : StringSpec({
         // fail the GCM tag check — wiping a pre-existing file the user chose to save over, with no
         // user action at all. The selection must survive so the user can re-enter the password.
         val handle = SavedStateHandle()
-        val before = RestoreViewModel(FakeRestoreEngine(), handle)
+        val before = restoreViewModel(FakeRestoreEngine(), handle = handle)
         before.setMode(RestoreMode.SINGLE_FILE)
         before.setSourceFile("content://src", "report.pdf.crypt")
         val engine = FakeRestoreEngine()
-        val afterProcessDeath = RestoreViewModel(engine, handle)
+        val afterProcessDeath = restoreViewModel(engine, handle = handle)
 
         afterProcessDeath.startSingleFileRestore("content://out")
 
@@ -288,13 +429,13 @@ class RestoreViewModelTest : StringSpec({
 
     "the mode and single-file selection survive process death via SavedStateHandle, the password does not" {
         val handle = SavedStateHandle()
-        val before = RestoreViewModel(FakeRestoreEngine(), handle)
+        val before = restoreViewModel(FakeRestoreEngine(), handle = handle)
         before.setMode(RestoreMode.SINGLE_FILE)
         before.setSourceFile("content://src", "report.pdf.crypt")
         before.setSingleFilePassword("secret")
 
         // A new ViewModel over the same handle simulates recreation after process death.
-        val after = RestoreViewModel(FakeRestoreEngine(), handle)
+        val after = restoreViewModel(FakeRestoreEngine(), handle = handle)
 
         val state = after.uiState.value
         state.mode shouldBe RestoreMode.SINGLE_FILE
@@ -307,12 +448,12 @@ class RestoreViewModelTest : StringSpec({
 
     "reset clears the persisted selection so process death cannot resurrect it" {
         val handle = SavedStateHandle()
-        val before = RestoreViewModel(FakeRestoreEngine(), handle)
+        val before = restoreViewModel(FakeRestoreEngine(), handle = handle)
         before.setMode(RestoreMode.SINGLE_FILE)
         before.setSourceFile("content://src", "report.pdf.crypt")
         before.reset()
 
-        val after = RestoreViewModel(FakeRestoreEngine(), handle)
+        val after = restoreViewModel(FakeRestoreEngine(), handle = handle)
 
         val state = after.uiState.value
         state.mode shouldBe RestoreMode.SINGLE_FILE
@@ -322,12 +463,12 @@ class RestoreViewModelTest : StringSpec({
 
     "setMode clears the persisted selection of the previous mode" {
         val handle = SavedStateHandle()
-        val before = RestoreViewModel(FakeRestoreEngine(), handle)
+        val before = restoreViewModel(FakeRestoreEngine(), handle = handle)
         before.setMode(RestoreMode.SINGLE_FILE)
         before.setSourceFile("content://src", "report.pdf.crypt")
         before.setMode(RestoreMode.WHOLE_FOLDER)
 
-        val after = RestoreViewModel(FakeRestoreEngine(), handle)
+        val after = restoreViewModel(FakeRestoreEngine(), handle = handle)
 
         val state = after.uiState.value
         state.mode shouldBe RestoreMode.WHOLE_FOLDER

@@ -76,7 +76,14 @@ fun RestoreScreen(
     )
 
     if (uiState.state is RestoreState.Running) {
-        RestoreProgressDialog(mode = uiState.mode, progress = uiState.progress, onCancel = viewModel::cancel)
+        RestoreProgressDialog(
+            mode = uiState.mode,
+            progress = uiState.progress,
+            // The single-file flow always runs in the ViewModel scope, so it carries the same
+            // exposure as a folder restore the foreground service could not take.
+            warnToKeepAppOpen = !uiState.restoreHostedInForegroundService,
+            onCancel = viewModel::cancel,
+        )
     }
 
     Scaffold(
@@ -530,11 +537,18 @@ private fun RestoreResultSection(mode: RestoreMode, result: RestoreResult, onRes
                 color = MaterialTheme.colorScheme.error,
             )
         }
-        RestoreResult.Cancelled -> Text(
-            stringResource(R.string.restore_cancelled),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        is RestoreResult.Cancelled -> {
+            // A stopped run really did restore what it had already written — reporting only
+            // "cancelled" would leave the user guessing whether anything landed at all.
+            val msg = buildString {
+                append(stringResource(R.string.restore_cancelled, result.decrypted))
+                if (result.copied > 0) append(stringResource(R.string.restore_success_and_copied, result.copied))
+                if (result.skipped > 0) append(stringResource(R.string.restore_success_and_skipped, result.skipped))
+                if (result.failed > 0) append(stringResource(R.string.restore_success_and_failed, result.failed))
+                append(".")
+            }
+            Text(msg, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         is RestoreResult.Failure -> Text(
             stringResource(R.string.restore_failed, stringResource(result.reason.messageResId)),
             style = MaterialTheme.typography.bodyMedium,
@@ -548,7 +562,12 @@ private fun RestoreResultSection(mode: RestoreMode, result: RestoreResult, onRes
 }
 
 @Composable
-private fun RestoreProgressDialog(mode: RestoreMode, progress: RestoreProgress?, onCancel: () -> Unit) {
+private fun RestoreProgressDialog(
+    mode: RestoreMode,
+    progress: RestoreProgress?,
+    warnToKeepAppOpen: Boolean,
+    onCancel: () -> Unit,
+) {
     AlertDialog(
         onDismissRequest = {},
         title = { Text(stringResource(R.string.dialog_restoring_title)) },
@@ -597,6 +616,13 @@ private fun RestoreProgressDialog(mode: RestoreMode, progress: RestoreProgress?,
                             maxLines = 1,
                         )
                     }
+                }
+                if (warnToKeepAppOpen) {
+                    Text(
+                        stringResource(R.string.restore_keep_app_open),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
                 }
             }
         },

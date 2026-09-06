@@ -84,9 +84,16 @@ class Fvc1Cipher : IFvc1Cipher {
         input: InputStream,
         output: OutputStream,
     ): BinaryResult<Unit, DecryptionError> =
+        decryptFile(input, output) { key }
+
+    override fun decryptFile(
+        input: InputStream,
+        output: OutputStream,
+        keyProvider: (Fvc1Header) -> SecretKey,
+    ): BinaryResult<Unit, DecryptionError> =
         runCatchingAsResult {
             val header = Fvc1Header.readFrom(input)
-            decryptBody(key, header, input, output)
+            decryptBody(keyProvider(header), header, input, output)
         }.mapError { classifyDecryptionError(it) }
 
     override fun decryptFileWithPassword(

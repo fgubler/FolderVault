@@ -29,6 +29,24 @@ class RunStatusResolverTest : StringSpec({
         resolveRunStatus(summary) shouldBe BackupRunStatus.FAILED
     }
 
+    "no usable network waits for connectivity instead of failing the run" {
+        // The worker retries this on WorkManager's backoff and stays silent until the cap, so a
+        // FAILED row would contradict that silence from the very first attempt — and a device
+        // offline overnight would fill the run history with failures for a healthy backup.
+        val summary = RunSummary().apply { networkUnavailable = true }
+        resolveRunStatus(summary) shouldBe BackupRunStatus.WAITING_FOR_NETWORK
+    }
+
+    "auth loss outranks a missing network" {
+        // Auth needs the user; no amount of connectivity will fix it, so it must not be hidden
+        // behind a status that reads as "just waiting".
+        val summary = RunSummary().apply {
+            authLost = true
+            networkUnavailable = true
+        }
+        resolveRunStatus(summary) shouldBe BackupRunStatus.FAILED
+    }
+
     "auth loss takes precedence and fails the run" {
         val summary = RunSummary().apply {
             authLost = true

@@ -13,6 +13,7 @@ import ch.abwesend.foldervault.domain.restore.RestoreRunState
 import ch.abwesend.foldervault.domain.result.rethrowCancellation
 import ch.abwesend.foldervault.domain.util.injectAnywhere
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -87,23 +88,56 @@ class RestoreForegroundService : Service() {
             !claimed -> {
                 // Nothing staged, or the screen's fallback already took the run.
                 log.info("No restore to take over — stopping the restore service again")
-                stopSelf()
+                stopIfIdle()
             }
             !enterForeground() -> {
                 coordinator.releaseClaim()
-                stopSelf()
+                stopIfIdle()
             }
             else -> {
                 coordinator.markHostedInForegroundService()
                 observeProgress()
-                runJob = scope.launch {
-                    try {
-                        coordinator.runClaimed()
-                    } finally {
-                        stopSelf()
-                    }
-                }
+                launchRun()
             }
+        }
+    }
+
+    /**
+     * Runs the claimed restore, tearing the service down afterwards — but only if it is still
+     * hosting *this* run.
+     *
+     * The identity check matters because the coordinator releases a finished run (clearing its
+     * staged request and the execute flag) slightly *before* this `finally` executes. A start
+     * landing in that window is accepted, claims the next restore and gets it going on this very
+     * service; an unguarded `stopSelf()` would then take that fresh run down along with the
+     * service. Note that a plain `stopSelf(startId)` would not help: the stop action arrives as its
+     * own, newer start command, which would make the run's start id stale and leave the service
+     * alive instead.
+     *
+     * Started lazily so [runJob] is assigned before the body can reach that check.
+     */
+    private fun launchRun() {
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            try {
+                coordinator.runClaimed()
+            } finally {
+                if (runJob === coroutineContext[Job]) stopService()
+            }
+        }
+        runJob = job
+        job.start()
+    }
+
+    /**
+     * Ends the service unless it is busy with a restore. Used on the paths that decline a start
+     * (nothing staged, or the foreground promotion refused) — those must not take a run that is
+     * already executing here down with them.
+     */
+    private fun stopIfIdle() {
+        if (runJob?.isActive == true) {
+            log.info("Restore service stays alive — it is still running a restore")
+        } else {
+            stopService()
         }
     }
 

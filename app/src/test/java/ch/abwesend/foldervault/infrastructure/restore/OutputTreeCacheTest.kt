@@ -46,9 +46,38 @@ class OutputTreeCacheTest : StringSpec({
         val cache = OutputTreeCache(root)
         val created = cache.createChild(root, "application/octet-stream", "report.pdf")!!
 
-        cache.forgetChild(root, created)
+        cache.forgetChild(root, cache.nameOf(created))
 
         cache.findChild(root, "report.pdf") shouldBe null
+    }
+
+    // The name has to be captured while the document still exists: DocumentFile.getName() is a
+    // fresh provider query, so a deleted document answers null and an un-index attempted
+    // afterwards silently removes nothing — which is exactly what used to happen in production
+    // while the fake, then still answering with its name, reported success.
+    "the name captured before a delete still un-indexes the child afterwards" {
+        val root = FakeDocumentFile("root", directory = true)
+        val cache = OutputTreeCache(root)
+        val created = cache.createChild(root, "application/octet-stream", "report.pdf")!!
+
+        val capturedName = cache.nameOf(created)
+        created.delete()
+        cache.forgetChild(root, capturedName)
+
+        capturedName shouldBe "report.pdf"
+        created.name shouldBe null
+        cache.findChild(root, "report.pdf") shouldBe null
+    }
+
+    "reading the name only after the delete un-indexes nothing, which is why callers must not" {
+        val root = FakeDocumentFile("root", directory = true)
+        val cache = OutputTreeCache(root)
+        val created = cache.createChild(root, "application/octet-stream", "report.pdf")!!
+
+        created.delete()
+        cache.forgetChild(root, cache.nameOf(created))
+
+        cache.findChild(root, "report.pdf") shouldNotBe null
     }
 
     "resolveDirectory creates missing directories and reuses them on the next call" {

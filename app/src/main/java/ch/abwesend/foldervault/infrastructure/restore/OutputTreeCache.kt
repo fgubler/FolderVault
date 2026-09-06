@@ -55,14 +55,27 @@ internal class OutputTreeCache(private val root: DocumentFile) {
         dir.createFile(mimeType, name)?.also { register(dir, it) }
 
     /**
-     * Drops [child] from [dir]'s index after it was deleted, so a later lookup does not hand back
-     * a document that no longer exists. Keyed by the child's own display name, exactly as the
-     * index is filled — a provider may create a document under a different name than the one it
-     * was asked for, and it is that actual name a fresh listing would show.
+     * Drops the child displayed as [name] from [dir]'s index after it was deleted, so a later
+     * lookup does not hand back a document that no longer exists.
+     *
+     * Takes the *name* rather than the `DocumentFile` on purpose. `DocumentFile.getName()` is not
+     * a cached field — it re-queries the provider — so a deleted document reports `null`, and an
+     * earlier version of this method read the name after its caller had already deleted the
+     * document. It therefore removed nothing at all against a real provider, while the in-memory
+     * test fake (which kept answering with its name) said it worked. Callers now capture the name
+     * while the document still exists; use [nameOf] for that.
      */
-    fun forgetChild(dir: DocumentFile, child: DocumentFile) {
-        child.name?.let { listingOf(dir).remove(it) }
+    fun forgetChild(dir: DocumentFile, name: String?) {
+        name?.let { listingOf(dir).remove(it) }
     }
+
+    /**
+     * The display name to hand to [forgetChild] later. Read it *before* deleting the document —
+     * that is the whole point. It is the child's own name rather than the one it was requested
+     * under, because a provider may create a document under a different name, and it is the actual
+     * name that both this index and a fresh listing are keyed by.
+     */
+    fun nameOf(child: DocumentFile): String? = child.name
 
     private fun register(dir: DocumentFile, child: DocumentFile) {
         child.name?.let { listingOf(dir)[it] = child }

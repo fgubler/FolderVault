@@ -81,6 +81,7 @@ class RestoreEngineFolderTest {
     fun setUp() {
         FolderSafProvider.documents.clear()
         FolderSafProvider.childQueryCount = 0
+        FolderSafProvider.fileOpenCount = 0
         FolderSafProvider.idSequence = 0
         Robolectric.setupContentProvider(FolderSafProvider::class.java, AUTHORITY)
         addDirectory(SOURCE_ROOT, parentId = null)
@@ -191,6 +192,39 @@ class RestoreEngineFolderTest {
     }
 
     @Test
+    fun `a stop requested before the run starts is honored during password probing`() = runTest {
+        // Probing decrypts whole files to reach their GCM tags, so on a folder of large files it
+        // is a long, visible "Verifying password…" phase. It used to ignore the stop flag
+        // completely, leaving the Cancel button dead until it was over.
+        addSourceFile("first.txt.crypt", encryptedBlob("first body"))
+        addSourceFile("second.txt.crypt", encryptedBlob("second body"))
+        runControl.requestStop()
+
+        val result = decryptAll()
+
+        // Cancelled, NOT InvalidPassword: a probe set cut short must never be read as a verdict
+        // on the password.
+        assertEquals(RestoreResult.Cancelled(decrypted = 0, copied = 0, skipped = 0, failed = 0), result)
+        assertEquals(0, FolderSafProvider.documents.values.count { it.parentId == OUTPUT_ROOT })
+        // The real point: not a single stream was opened, so the stop was honored *before* the
+        // expensive decrypt-to-nowhere rather than after the whole probe set had run.
+        assertEquals(0, FolderSafProvider.fileOpenCount, "an already-stopped run must probe nothing")
+    }
+
+    @Test
+    fun `a stop during probing is not mistaken for a wrong password`() = runTest {
+        // Same guard from the other side: the password here is genuinely wrong, but the user
+        // stopped the run, and "Wrong password" would be the more alarming — and less true —
+        // of the two things to tell them.
+        addSourceFile("first.txt.crypt", encryptedBlob("first body"))
+        runControl.requestStop()
+
+        val result = decryptAll(password = "wrong-password")
+
+        assertEquals(RestoreResult.Cancelled(decrypted = 0, copied = 0, skipped = 0, failed = 0), result)
+    }
+
+    @Test
     fun `a cancelled run stops at the next file instead of restoring the rest`() = runTest {
         // Nothing in decryptAll's loop suspends — the body is blocking stream I/O — so without an
         // explicit liveness check cancellation could not stop it at all. The run would restore
@@ -258,6 +292,7 @@ class RestoreEngineFolderTest {
         // cost N full listings of the output directory — each an IPC round-trip to the provider.
         repeat(FILE_COUNT) { addSourceFile("file$it.txt.crypt", encryptedBlob("body $it")) }
         FolderSafProvider.childQueryCount = 0
+        FolderSafProvider.fileOpenCount = 0
 
         val result = decryptAll()
 
@@ -411,6 +446,7 @@ private class FolderSafProvider : ContentProvider() {
     }
 
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
+        fileOpenCount++
         val documentId = DocumentsContract.getDocumentId(uri)
         val document = documents[documentId] ?: throw FileNotFoundException("No document for $uri")
         val file = document.file ?: throw FileNotFoundException("No file for $uri")
@@ -468,6 +504,9 @@ private class FolderSafProvider : ContentProvider() {
 
         /** Number of child-listing queries, the metric the directory-listing cache exists to bound. */
         var childQueryCount = 0
+
+        /** Number of document streams opened — how a test sees whether probing ran at all. */
+        var fileOpenCount = 0
 
         var idSequence = 0
 

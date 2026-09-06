@@ -108,7 +108,8 @@ private fun HistoryContent(runs: List<BackupRun>, modifier: Modifier = Modifier)
 private fun RunHistoryItem(run: BackupRun) {
     val borderColor = when (run.status) {
         BackupRunStatus.FAILED -> MaterialTheme.colorScheme.error
-        BackupRunStatus.COMPLETED_WITH_WARNINGS -> MaterialTheme.colorScheme.tertiary
+        BackupRunStatus.COMPLETED_WITH_WARNINGS,
+        BackupRunStatus.WAITING_FOR_NETWORK -> MaterialTheme.colorScheme.tertiary
         BackupRunStatus.RUNNING, BackupRunStatus.INITIAL_SYNC_IN_PROGRESS -> MaterialTheme.colorScheme.primary
         BackupRunStatus.CANCELLED -> MaterialTheme.colorScheme.outline
         else -> MaterialTheme.colorScheme.outlineVariant

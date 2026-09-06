@@ -89,7 +89,7 @@ class RestoreRunCoordinator(
             val dispatched = foregroundLauncher.start()
             scope.launch {
                 if (dispatched) delay(FOREGROUND_HANDOVER_GRACE_MS)
-                if (tryClaim()) runClaimed()
+                if (tryClaimFor(request)) runClaimed()
             }
         }
         return accepted
@@ -113,6 +113,18 @@ class RestoreRunCoordinator(
      * [runClaimed].
      */
     override fun tryClaim(): Boolean = stagedRequest != null && executing.compareAndSet(false, true)
+
+    /**
+     * Claims only if [request] is *still* the staged one, so the timed takeover started by one
+     * `start` can never execute a different run.
+     *
+     * Without the identity check a takeover outlives its own run: a restore that finishes inside
+     * the grace window (an empty or tiny folder does) leaves its coroutine still sleeping, and a
+     * restore the user starts moments later would be claimed by it the instant it wakes —
+     * snatching the run from the foreground service that was just dispatched for it, and making
+     * the UI warn to keep the app open for no reason.
+     */
+    private fun tryClaimFor(request: RestoreRequest): Boolean = stagedRequest === request && tryClaim()
 
     /** Returns a won claim unused, so the other host can take the run instead. */
     override fun releaseClaim() {

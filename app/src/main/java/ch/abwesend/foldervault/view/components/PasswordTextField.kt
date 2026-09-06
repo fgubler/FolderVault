@@ -37,6 +37,7 @@ fun PasswordTextField(
             val icon = if (visible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility
             val descriptionRes = if (visible) R.string.password_cd_hide else R.string.password_cd_show
             IconButton(onClick = { visible = !visible }) {
+
                 Icon(imageVector = icon, contentDescription = stringResource(descriptionRes))
             }
         },

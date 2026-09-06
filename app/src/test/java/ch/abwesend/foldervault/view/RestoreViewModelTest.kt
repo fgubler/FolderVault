@@ -34,8 +34,7 @@ private class FakeRestoreEngine(
     private val gate: CompletableDeferred<Unit>? = null,
 ) : IRestoreEngine {
     var singleFileSourceUri: String? = null
-    var singleFileOutputFolderUri: String? = null
-    var singleFileOutputName: String? = null
+    var singleFileOutputFileUri: String? = null
     var singleFilePassword: String? = null
     var singleFileCallCount = 0
     var decryptAllCallCount = 0
@@ -57,14 +56,12 @@ private class FakeRestoreEngine(
 
     override suspend fun decryptSingleFile(
         sourceFileUri: String,
-        outputFolderUri: String,
-        outputFileName: String,
+        outputFileUri: String,
         password: String,
     ): RestoreResult {
         singleFileCallCount++
         singleFileSourceUri = sourceFileUri
-        singleFileOutputFolderUri = outputFolderUri
-        singleFileOutputName = outputFileName
+        singleFileOutputFileUri = outputFileUri
         singleFilePassword = password
         gate?.await()
         return singleFileResult
@@ -128,8 +125,7 @@ class RestoreViewModelTest : StringSpec({
         viewModel.startSingleFileRestore("content://out")
 
         engine.singleFileSourceUri shouldBe "content://src"
-        engine.singleFileOutputFolderUri shouldBe "content://out"
-        engine.singleFileOutputName shouldBe "report.pdf"
+        engine.singleFileOutputFileUri shouldBe "content://out"
         engine.singleFilePassword shouldBe "secret"
     }
 
@@ -169,7 +165,7 @@ class RestoreViewModelTest : StringSpec({
         gate.complete(Unit)
 
         engine.singleFileCallCount shouldBe 1
-        engine.singleFileOutputFolderUri shouldBe "content://out"
+        engine.singleFileOutputFileUri shouldBe "content://out"
     }
 
     "startRestore ignores a second start while a restore is running (review S2)" {
@@ -270,6 +266,24 @@ class RestoreViewModelTest : StringSpec({
 
         engine.singleFileSourceUri shouldBe null
         viewModel.uiState.value.state shouldBe RestoreState.Idle
+    }
+
+    "startSingleFileRestore declines to run with an empty password instead of destroying the target" {
+        // After process death the picker result arrives at a recreated ViewModel whose (unsaved)
+        // password is gone. Running anyway would truncate the picked output document and only then
+        // fail the GCM tag check — wiping a pre-existing file the user chose to save over, with no
+        // user action at all. The selection must survive so the user can re-enter the password.
+        val handle = SavedStateHandle()
+        val before = RestoreViewModel(FakeRestoreEngine(), handle)
+        before.setMode(RestoreMode.SINGLE_FILE)
+        before.setSourceFile("content://src", "report.pdf.crypt")
+        val engine = FakeRestoreEngine()
+        val afterProcessDeath = RestoreViewModel(engine, handle)
+
+        afterProcessDeath.startSingleFileRestore("content://out")
+
+        engine.singleFileCallCount shouldBe 0
+        afterProcessDeath.uiState.value.state shouldBe RestoreState.SourceReady
     }
 
     "the mode and single-file selection survive process death via SavedStateHandle, the password does not" {

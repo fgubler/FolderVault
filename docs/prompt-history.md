@@ -7,6 +7,67 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-09-06 — Single-file restore saves through the "Save as" file picker
+
+### What was done
+- **Problem**: decrypting one downloaded backup file made the user pick a destination *folder*
+  (`OpenDocumentTree`) and grant persistable read+write access to it, just to write one file. The
+  app then invented a non-colliding name inside that folder.
+- **Fix**: the destination is now picked with `ActivityResultContracts.CreateDocument("*/*")` — a
+  system "Save as" *file* picker prefilled with `suggestedOutputName` (source name minus `.crypt`).
+  No folder access is granted; the temporary write grant on the created document is enough, so no
+  `takePersistableUriPermission` call remains in that flow.
+- `IRestoreEngine.decryptSingleFile(sourceFileUri, outputFolderUri, outputFileName, password)` →
+  `decryptSingleFile(sourceFileUri, outputFileUri, password)`. Name, location and the
+  overwrite confirmation are now the picker's business; the engine only writes what it is handed.
+- `RestoreEngine`: resolves the output via `DocumentFile.fromSingleUri` instead of
+  `fromTreeUri` + create-a-unique-child; `resolveUniqueOutput` deleted (`resolveWithSuffix` stays,
+  it still serves `decryptAll`'s `RENAME_WITH_SUFFIX` policy). `OUTPUT_FOLDER_NOT_ACCESSIBLE` is no
+  longer reachable from this flow (still used by `decryptAll`).
+- `RestoreViewModel.startSingleFileRestore(outputFileUri)` no longer needs `suggestedOutputName` to
+  proceed — that value now only prefills the picker.
+- Strings: `button_decrypt_and_save` → "Decrypt & save as…"; step 3 of
+  `restore_single_explanation_body` rewritten to say the original name is suggested and that
+  picking an existing file replaces its content.
+- Tests: `RestoreEngineSingleFileTest` reworked around a picked output *document* (the fake SAF
+  provider lost its tree/child/`createDocument` plumbing). The de-duplication test was replaced by
+  two new ones — "picking an existing file replaces its content instead of appending to it" (guards
+  the `wt` truncate mode against a longer previous content) and "a failure before the output is
+  written leaves a pre-existing picked file intact". `RestoreViewModelTest`'s fake engine follows
+  the new signature.
+
+### Review follow-ups fixed in the same slice (`review/develop.md` B2 / B3)
+- **B2 — process death during the picker destroyed the target with zero user action.** The password
+  is never persisted, so after process death the arriving picker result auto-started the restore
+  with an *empty* password: a guaranteed GCM-tag failure, but only after `wt` had truncated the
+  output. `startSingleFileRestore` now declines to run on an empty password and leaves the state at
+  `SourceReady` for a retry. Harmless under the old folder flow (always a fresh file); destructive
+  under the file picker, and *not* covered by the accepted trade-off — the user never attempted a
+  decrypt at all.
+- **B3 — `restore_wrong_password` ("Wrong password. No files were modified.") was false here.**
+  True for `decryptAll` (it probes the password before writing anything), false for the single-file
+  flow. `RestoreResultSection` now branches on `RestoreMode` for `InvalidPassword` too and shows the
+  new `restore_single_wrong_password`.
+
+### Decisions carried forward
+- **Overwriting is now possible and accepted.** The user explicitly accepted that a failed decrypt
+  into a picked *existing* file loses that file's data. `cleanUpSingleFileOutput` keeps its guard
+  (delete only when the output stream was actually opened, or when the document is still empty), so
+  a restore that fails *before* touching the output still leaves a pre-existing file alone.
+
+### Verification notes (sandbox)
+- `./gradlew assembleDebug` and `./gradlew test` need `-Pksp.incremental=false` in this sandbox:
+  KSP's memory-mapped incremental caches fail with `NoSuchFileException` on
+  `kspCaches/debug/symbolLookups/*.tab` on the sandbox filesystem.
+- All 96 unit-test failures are `AssertionError: The Robolectric native runtime is not supported on
+  Linux (aarch64)` — every Robolectric class in the project, unrelated to this change. The Kotest
+  suites (incl. `RestoreViewModelTest`, 19 tests) pass. `RestoreEngineSingleFileTest` compiles but
+  cannot execute here; it needs a run outside the sandbox.
+- `./gradlew detekt` reports only the 4 pre-existing issues (`BackupWorker`, `BackupUploader`, plus
+  two stray blank lines in uncommitted edits to `BinaryResult.kt` / `PasswordTextField.kt`).
+
+---
+
 ## 2026-07-16 — Branch review vs master + fixes B1/S1/S2 (truncate mode, unknown-size cancel, shared suffix)
 
 ### What was requested

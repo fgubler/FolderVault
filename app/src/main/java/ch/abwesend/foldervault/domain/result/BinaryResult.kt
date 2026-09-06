@@ -4,3 +4,4 @@ sealed interface BinaryResult<out TValue, out TError> {
     fun getValueOrNull(): TValue?
     fun getErrorOrNull(): TError?
 }
+

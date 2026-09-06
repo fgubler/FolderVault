@@ -39,11 +39,11 @@ data class RestoreUiState(
 
 /**
  * The restore mode and the single-file selection survive process death via [SavedStateHandle]:
- * the "Save as" picker round-trip leaves the app in the background, and if the process is killed
- * there, the picker result still arrives at the recreated activity — without the restored
- * selection it would be a silent no-op that leaves the picker-created empty document orphaned.
- * The password is deliberately NOT saved (see [setSingleFilePassword]); after process death the
- * restore runs with the empty password and surfaces as "wrong password", prompting re-entry.
+ * the "Save as" file-picker round-trip leaves the app in the background, and if the process is
+ * killed there, the picker result still arrives at the recreated activity — without the restored
+ * selection it would be a silent no-op. The password is deliberately NOT saved (see
+ * [setSingleFilePassword]), so after process death the arriving result finds an empty password and
+ * [startSingleFileRestore] declines to run — see there for why running anyway would be destructive.
  */
 class RestoreViewModel(
     private val engine: IRestoreEngine,
@@ -192,18 +192,29 @@ class RestoreViewModel(
         }
     }
 
-    fun startSingleFileRestore(outputFolderUri: String) {
+    /**
+     * Decrypts the picked source into [outputFileUri] — the document the system "Save as" file
+     * picker created (or handed back for an overwrite). The destination name and location are the
+     * picker's business; this only needs the resulting document uri.
+     *
+     * An empty password declines the run instead of attempting it. The "Decrypt & save" button
+     * already requires a non-empty password, so an empty one here can only mean the process was
+     * killed during the picker round-trip and the (unsaved) password is gone. Running anyway would
+     * fail the GCM tag check *after* the output document was truncated — silently destroying the
+     * pre-existing file the user picked, with no user action at all. Leaving the state at
+     * [RestoreState.SourceReady] instead lets the user re-enter the password and retry; the cost is
+     * an orphaned empty document when the picker created a fresh one.
+     */
+    fun startSingleFileRestore(outputFileUri: String) {
         val snapshot = _uiState.value
         val src = snapshot.sourceFileUri
-        val outputName = snapshot.suggestedOutputName
-        if (src != null && outputName != null && restoreJob?.isActive != true) {
+        if (src != null && snapshot.singleFilePassword.isNotEmpty() && restoreJob?.isActive != true) {
             restoreJob = safeLaunch {
                 _uiState.update { it.copy(state = RestoreState.Running, progress = null) }
                 try {
                     val result = engine.decryptSingleFile(
                         sourceFileUri = src,
-                        outputFolderUri = outputFolderUri,
-                        outputFileName = outputName,
+                        outputFileUri = outputFileUri,
                         password = _uiState.value.singleFilePassword,
                     )
                     _uiState.update {

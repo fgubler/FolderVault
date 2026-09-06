@@ -111,6 +111,12 @@ fun RestoreScreen(
     }
 }
 
+/**
+ * Mime type of the "Save as" picker for the single-file restore. A wildcard keeps the picker from
+ * forcing an extension of its own onto the suggested name, which already carries the original one.
+ */
+private const val SAVE_AS_MIME_TYPE = "*/*"
+
 /** Bundles the four system-picker triggers the restore screen needs. */
 private class RestoreLaunchActions(
     val pickSourceFolder: () -> Unit,
@@ -162,17 +168,15 @@ private fun rememberRestoreLaunchActions(
     }
 
     val saveAsLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocumentTree(),
+        ActivityResultContracts.CreateDocument(SAVE_AS_MIME_TYPE),
     ) { uri ->
-        // The single-file output is a destination *folder*: the app then creates a fresh,
-        // non-colliding file inside it, so a restore can never overwrite an existing file. The
-        // password is read from the ViewModel state, which survives the activity recreation a
-        // configuration change during the picker round-trip causes (composable state would not).
+        // A "Save as" *file* picker: the user names the destination file directly, so no folder
+        // access has to be granted. Picking an existing name means the user confirmed overwriting
+        // it. The document is written once within this session, so the temporary CreateDocument
+        // grant is enough — no persistable permission is taken. The password is read from the
+        // ViewModel state, which survives the activity recreation a configuration change during
+        // the picker round-trip causes (composable state would not).
         if (uri != null) {
-            context.contentResolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-            )
             viewModel.startSingleFileRestore(uri.toString())
         }
     }
@@ -181,7 +185,7 @@ private fun rememberRestoreLaunchActions(
         pickSourceFolder = { sourceLauncher.launch(null) },
         pickOutputFolder = { outputLauncher.launch(null) },
         pickSourceFile = { sourceFileLauncher.launch(arrayOf("*/*")) },
-        decryptAndSave = { saveAsLauncher.launch(null) },
+        decryptAndSave = { saveAsLauncher.launch(viewModel.uiState.value.suggestedOutputName.orEmpty()) },
     )
 }
 
@@ -511,11 +515,21 @@ private fun RestoreResultSection(mode: RestoreMode, result: RestoreResult, onRes
             }
             Text(msg, style = MaterialTheme.typography.bodyMedium)
         }
-        RestoreResult.InvalidPassword -> Text(
-            stringResource(R.string.restore_wrong_password),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.error,
-        )
+        RestoreResult.InvalidPassword -> {
+            // "No files were modified" holds for the folder flow (it probes the password before
+            // writing anything) but not for the single-file one: the output document was already
+            // truncated by the time the GCM tag check failed, so a picked existing file is gone.
+            val msgRes = if (mode == RestoreMode.SINGLE_FILE) {
+                R.string.restore_single_wrong_password
+            } else {
+                R.string.restore_wrong_password
+            }
+            Text(
+                stringResource(msgRes),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
         RestoreResult.Cancelled -> Text(
             stringResource(R.string.restore_cancelled),
             style = MaterialTheme.typography.bodyMedium,

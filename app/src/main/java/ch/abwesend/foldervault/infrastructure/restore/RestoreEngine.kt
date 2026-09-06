@@ -14,6 +14,7 @@ import ch.abwesend.foldervault.domain.restore.RestoreCollisionPolicy
 import ch.abwesend.foldervault.domain.restore.RestoreFailureReason
 import ch.abwesend.foldervault.domain.restore.RestoreProgress
 import ch.abwesend.foldervault.domain.restore.RestoreResult
+import ch.abwesend.foldervault.domain.restore.RestoreRunControl
 import ch.abwesend.foldervault.domain.restore.RestoreScanResult
 import ch.abwesend.foldervault.domain.result.BinaryResult
 import ch.abwesend.foldervault.domain.result.ErrorResult
@@ -23,7 +24,6 @@ import ch.abwesend.foldervault.infrastructure.storage.ScopedStorageHelper
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import java.io.InputStream
 import java.io.OutputStream
@@ -118,7 +118,8 @@ class RestoreEngine(
 
     /** Outcome of resolving an output file: a deliberate skip, an unexpected failure, or a target. */
     private sealed interface OutputResolution {
-        data class Resolved(val file: DocumentFile) : OutputResolution
+        /** [directory] is carried along so a failed write can un-index [file] from the tree cache. */
+        data class Resolved(val directory: DocumentFile, val file: DocumentFile) : OutputResolution
         object Skip : OutputResolution
         object Failed : OutputResolution
     }
@@ -138,6 +139,7 @@ class RestoreEngine(
         outputUri: String,
         password: String,
         collisionPolicy: RestoreCollisionPolicy,
+        runControl: RestoreRunControl,
         onProgress: (RestoreProgress) -> Unit,
     ): RestoreResult = withContext(dispatchers.io) {
         val outputRoot = DocumentFile.fromTreeUri(context, Uri.parse(outputUri))
@@ -159,43 +161,73 @@ class RestoreEngine(
         val invalidPassword = !verifyProbePassword(files, password, keyCache)
         if (invalidPassword) return@withContext RestoreResult.InvalidPassword
 
+        // One listing per output directory instead of a full listing per restored file.
+        val outputTree = OutputTreeCache(outputRoot)
+        val counters = RestoreCounters()
+        val total = files.size
+        var stopped = false
+
+        for ((index, entry) in files.withIndex()) {
+            if (runControl.shouldStop()) {
+                stopped = true
+                break
+            }
+            onProgress(RestoreProgress(total, index, counters.failed, entry.documentFile.name ?: ""))
+            restoreEntry(entry, outputTree, collisionPolicy, password, keyCache, counters)
+        }
+
+        if (stopped) {
+            counters.toCancelled()
+        } else {
+            onProgress(RestoreProgress(total, total, counters.failed, ""))
+            counters.toSuccess()
+        }
+    }
+
+    /** Running tally of a folder restore, so the loop body stays free of four `var` reassignments. */
+    private class RestoreCounters {
         var decrypted = 0
         var copied = 0
         var skipped = 0
         var failed = 0
-        val total = files.size
 
-        for ((index, entry) in files.withIndex()) {
-            if (!isActive) return@withContext RestoreResult.Cancelled
-            onProgress(RestoreProgress(total, index, failed, entry.documentFile.name ?: ""))
+        fun toSuccess(): RestoreResult.Success = RestoreResult.Success(decrypted, copied, skipped, failed)
+        fun toCancelled(): RestoreResult.Cancelled = RestoreResult.Cancelled(decrypted, copied, skipped, failed)
+    }
 
-            val isCrypt = entry.relativePath.endsWith(CRYPT_SUFFIX)
-            val outputRelPath = RestorePathResolver.outputRelativePath(entry.relativePath, isCrypt)
+    /** Restores one entry of the folder walk into the output tree, updating [counters]. */
+    @Suppress("LongParameterList")
+    private fun restoreEntry(
+        entry: SourceFileEntry,
+        outputTree: OutputTreeCache,
+        collisionPolicy: RestoreCollisionPolicy,
+        password: String,
+        keyCache: MutableMap<String, SecretKey>,
+        counters: RestoreCounters,
+    ) {
+        val isCrypt = entry.relativePath.endsWith(CRYPT_SUFFIX)
+        val outputRelPath = RestorePathResolver.outputRelativePath(entry.relativePath, isCrypt)
 
-            when (val resolution = resolveOutputFile(outputRoot, outputRelPath, collisionPolicy)) {
-                is OutputResolution.Skip -> skipped++
-                is OutputResolution.Failed -> failed++
-                is OutputResolution.Resolved -> {
-                    val outputFile = resolution.file
-                    val success = if (isCrypt) {
-                        val key = keyFor(entry.documentFile, password, keyCache)
-                        key != null && decryptEntry(entry.documentFile, outputFile, key)
-                    } else {
-                        copyEntry(entry.documentFile, outputFile)
-                    }
+        when (val resolution = resolveOutputFile(outputTree, outputRelPath, collisionPolicy)) {
+            is OutputResolution.Skip -> counters.skipped++
+            is OutputResolution.Failed -> counters.failed++
+            is OutputResolution.Resolved -> {
+                val outputFile = resolution.file
+                val success = if (isCrypt) {
+                    decryptEntry(entry.documentFile, outputFile, password, keyCache)
+                } else {
+                    copyEntry(entry.documentFile, outputFile)
+                }
 
-                    if (success) {
-                        if (isCrypt) decrypted++ else copied++
-                    } else {
-                        deletePartialOutput(outputFile)
-                        failed++
-                    }
+                if (success) {
+                    if (isCrypt) counters.decrypted++ else counters.copied++
+                } else {
+                    deletePartialOutput(outputFile)
+                    outputTree.forgetChild(resolution.directory, outputFile)
+                    counters.failed++
                 }
             }
         }
-
-        onProgress(RestoreProgress(total, total, failed, ""))
-        RestoreResult.Success(decrypted, copied, skipped, failed)
     }
 
     /**
@@ -229,13 +261,13 @@ class RestoreEngine(
     ): RestoreResult {
         var outputWritten = false
         var cleanedUp = false
-        var pickedOutput: DocumentFile? = null
         val markOutputWritten = { outputWritten = true }
+        // Resolved before the `withContext` so that a cancellation arriving before the body ever
+        // runs can still clean the picker-created document up; `fromSingleUri` does no I/O.
+        val output = DocumentFile.fromSingleUri(context, Uri.parse(outputFileUri))
         return try {
             withContext(dispatchers.io) {
                 val source = DocumentFile.fromSingleUri(context, Uri.parse(sourceFileUri))
-                val output = DocumentFile.fromSingleUri(context, Uri.parse(outputFileUri))
-                pickedOutput = output
                 val result = when {
                     source == null -> RestoreResult.Failure(RestoreFailureReason.SOURCE_FILE_NOT_ACCESSIBLE)
                     output == null -> RestoreResult.Failure(RestoreFailureReason.OUTPUT_FILE_NOT_ACCESSIBLE)
@@ -259,9 +291,9 @@ class RestoreEngine(
             // A failure result followed by a cancel at the withContext exit would otherwise clean
             // up twice — the second delete of the already-removed document only logs a warning.
             if (!cleanedUp) {
-                pickedOutput?.let { output ->
+                output?.let {
                     withContext(NonCancellable + dispatchers.io) {
-                        cleanUpSingleFileOutput(output, outputWritten)
+                        cleanUpSingleFileOutput(it, outputWritten)
                     }
                 }
             }
@@ -286,8 +318,12 @@ class RestoreEngine(
         if (header == null) {
             RestoreResult.Failure(RestoreFailureReason.FILE_HEADER_NOT_READABLE)
         } else {
-            val key = cipher.deriveKey(password, header.salt, header.iterations)
-            when (decryptEntryDetailed(source, output, key, onOutputOpened, wrapInput).getErrorOrNull()) {
+            // The header was already parsed for the decrypt-vs-copy decision, but the cipher reads
+            // its own from the stream — so the provider hands the *stream's* header back here.
+            val error = decryptEntryDetailed(source, output, onOutputOpened, wrapInput) { streamHeader ->
+                cipher.deriveKey(password, streamHeader.salt, streamHeader.iterations)
+            }.getErrorOrNull()
+            when (error) {
                 null -> RestoreResult.Success(decrypted = 1, copied = 0, skipped = 0, failed = 0)
                 DecryptionError.INVALID_PASSWORD -> RestoreResult.InvalidPassword
                 DecryptionError.INVALID_FILE -> RestoreResult.Failure(RestoreFailureReason.INVALID_ENCRYPTED_FILE)
@@ -340,15 +376,6 @@ class RestoreEngine(
             { stream -> stream }
         }
 
-    private fun withInputStream(source: DocumentFile, block: (InputStream) -> Boolean): Boolean =
-        try {
-            context.contentResolver.openInputStream(source.uri)?.use(block) ?: false
-        } catch (e: Exception) {
-            e.rethrowCancellation()
-            logger.warning("Failed to open input stream for ${FileNameRedactor.redact(source.name.orEmpty())}", e)
-            false
-        }
-
     private fun withStreams(
         source: DocumentFile,
         output: DocumentFile,
@@ -373,46 +400,75 @@ class RestoreEngine(
         }
 
     /**
-     * Verifies the password against the *smallest* `.crypt` file, deriving its key into [cache]
-     * for later reuse. Probing the smallest file matters because a full GCM decrypt must read to
-     * the tag at the end — picking the first file could mean decrypting a multi-GB video just to
-     * check the password (BUG-6). Returns `true` when there is nothing encrypted to verify.
+     * Verifies [password] against a handful of the folder's encrypted files before anything is
+     * written, so a wrong password fails while the "no files were modified" promise still holds.
+     *
+     * Probes up to [PasswordProbe.MAX_PROBES] files, smallest first — a GCM decrypt has to read to
+     * the tag at the end of the file, so probing the smallest keeps this from decrypting a
+     * multi-GB video just to check a password (BUG-6). Probing *several* rather than the single
+     * smallest is what keeps one damaged file (a zero-byte leftover from an interrupted upload, an
+     * incomplete download) from failing the whole restore as "wrong password": the run is refused
+     * only when every usable probe failed its tag check. See [PasswordProbe.shouldProceed] for the
+     * full decision table. Returns `true` when there is nothing encrypted to verify.
      */
     private fun verifyProbePassword(
         files: List<SourceFileEntry>,
         password: String,
         cache: MutableMap<String, SecretKey>,
     ): Boolean {
-        val probe = files
-            .filter { it.relativePath.endsWith(CRYPT_SUFFIX) }
-            .minByOrNull { it.documentFile.length() }
-        return if (probe == null) {
-            true
-        } else {
-            val key = keyFor(probe.documentFile, password, cache)
-            key != null && verifyPassword(probe, key)
+        val encrypted = files.filter { it.relativePath.endsWith(CRYPT_SUFFIX) }
+        val probes = PasswordProbe.selectCandidates(encrypted) { it.documentFile.length() }
+        val outcomes = mutableListOf<ProbeOutcome>()
+        for (probe in probes) {
+            outcomes.add(probeOutcome(probe, password, cache))
+            // A proven-correct password makes the remaining probes pointless work.
+            if (outcomes.last() == ProbeOutcome.CORRECT_PASSWORD) break
+        }
+        return PasswordProbe.shouldProceed(outcomes)
+    }
+
+    /**
+     * Decrypts one probe to nowhere and classifies what that says about the password. A file whose
+     * header or stream cannot be read is [ProbeOutcome.INCONCLUSIVE] rather than a verdict: it is
+     * a broken file, and only the GCM tag check speaks about the key.
+     */
+    private fun probeOutcome(
+        entry: SourceFileEntry,
+        password: String,
+        cache: MutableMap<String, SecretKey>,
+    ): ProbeOutcome {
+        val result = try {
+            context.contentResolver.openInputStream(entry.documentFile.uri)?.use { input ->
+                cipher.decryptFile(input, NullOutputStream) { header -> cachedKey(header, password, cache) }
+            }
+        } catch (e: Exception) {
+            e.rethrowCancellation()
+            logger.warning(
+                "Failed to open probe ${FileNameRedactor.redact(entry.documentFile.name.orEmpty())}",
+                e,
+            )
+            null
+        }
+        return when (result?.getErrorOrNull()) {
+            null -> if (result == null) ProbeOutcome.INCONCLUSIVE else ProbeOutcome.CORRECT_PASSWORD
+            DecryptionError.INVALID_PASSWORD -> ProbeOutcome.WRONG_PASSWORD
+            else -> ProbeOutcome.INCONCLUSIVE
         }
     }
 
-    private fun verifyPassword(entry: SourceFileEntry, key: SecretKey): Boolean =
-        withInputStream(entry.documentFile) { input ->
-            cipher.decryptFile(key, input, NullOutputStream) is SuccessResult
-        }
-
     /**
-     * Returns the AES key for [file], deriving it from the file's FVC1 header parameters on first
-     * use and caching it by `salt + iterations` so repeated files share one expensive derivation
-     * (BUG-6). Returns `null` if the header cannot be read.
+     * Returns the AES key for a file's FVC1 [header], deriving it on first use and caching it by
+     * `salt + iterations` so every file sharing those parameters reuses one expensive derivation
+     * (BUG-6).
      */
-    private fun keyFor(
-        file: DocumentFile,
+    private fun cachedKey(
+        header: Fvc1Header,
         password: String,
         cache: MutableMap<String, SecretKey>,
-    ): SecretKey? =
-        readHeader(file)?.let { header ->
-            val cacheKey = "${Base64.getEncoder().encodeToString(header.salt)}:${header.iterations}"
-            cache.getOrPut(cacheKey) { cipher.deriveKey(password, header.salt, header.iterations) }
-        }
+    ): SecretKey {
+        val cacheKey = "${Base64.getEncoder().encodeToString(header.salt)}:${header.iterations}"
+        return cache.getOrPut(cacheKey) { cipher.deriveKey(password, header.salt, header.iterations) }
+    }
 
     /**
      * Parses the FVC1 header of [file], returning `null` on any failure. Pass
@@ -445,34 +501,32 @@ class RestoreEngine(
      * was rejected), and [OutputResolution.Resolved].
      */
     private fun resolveOutputFile(
-        outputRoot: DocumentFile,
+        outputTree: OutputTreeCache,
         relPath: String,
         policy: RestoreCollisionPolicy,
     ): OutputResolution {
         val parts = relPath.split("/")
         val fileName = parts.last()
-        val dirParts = parts.dropLast(1)
 
-        var dir = outputRoot
-        for (part in dirParts) {
-            dir = dir.findFile(part)?.takeIf { it.isDirectory }
-                ?: dir.createDirectory(part)
-                ?: return OutputResolution.Failed
-        }
+        val dir = outputTree.resolveDirectory(parts.dropLast(1)) ?: return OutputResolution.Failed
 
-        val existing = dir.findFile(fileName)
+        val existing = outputTree.findChild(dir, fileName)
         return when {
-            existing == null -> createOutput(dir, fileName)
+            existing == null -> createOutput(outputTree, dir, fileName)
             policy == RestoreCollisionPolicy.SKIP -> OutputResolution.Skip
-            policy == RestoreCollisionPolicy.OVERWRITE ->
-                if (existing.delete()) createOutput(dir, fileName) else OutputResolution.Failed
-            else -> resolveWithSuffix(dir, fileName)
+            policy == RestoreCollisionPolicy.OVERWRITE -> if (existing.delete()) {
+                outputTree.forgetChild(dir, existing)
+                createOutput(outputTree, dir, fileName)
+            } else {
+                OutputResolution.Failed
+            }
+            else -> resolveWithSuffix(outputTree, dir, fileName)
         }
     }
 
-    private fun createOutput(dir: DocumentFile, name: String): OutputResolution =
-        dir.createFile(MIME_OCTET_STREAM, name)
-            ?.let { OutputResolution.Resolved(it) }
+    private fun createOutput(outputTree: OutputTreeCache, dir: DocumentFile, name: String): OutputResolution =
+        outputTree.createChild(dir, MIME_OCTET_STREAM, name)
+            ?.let { OutputResolution.Resolved(dir, it) }
             ?: OutputResolution.Failed
 
     /**
@@ -480,18 +534,32 @@ class RestoreEngine(
      * name that does not already exist is found, so a repeated restore does not silently collide
      * with a previously restored copy (BUG-7).
      */
-    private fun resolveWithSuffix(dir: DocumentFile, fileName: String): OutputResolution {
+    private fun resolveWithSuffix(
+        outputTree: OutputTreeCache,
+        dir: DocumentFile,
+        fileName: String,
+    ): OutputResolution {
         var index = 1
         var candidate = RestorePathResolver.indexedRestoreName(fileName, index)
-        while (dir.findFile(candidate) != null) {
+        while (outputTree.findChild(dir, candidate) != null) {
             index++
             candidate = RestorePathResolver.indexedRestoreName(fileName, index)
         }
-        return createOutput(dir, candidate)
+        return createOutput(outputTree, dir, candidate)
     }
 
-    private fun decryptEntry(source: DocumentFile, output: DocumentFile, key: SecretKey): Boolean =
-        decryptEntryDetailed(source, output, key) is SuccessResult
+    /**
+     * Decrypts one entry of a folder restore. The key comes from the file's own header via
+     * [cachedKey], resolved inside the single stream open rather than from a separate
+     * header-reading pass — that pass used to double the SAF stream opens of every restore.
+     */
+    private fun decryptEntry(
+        source: DocumentFile,
+        output: DocumentFile,
+        password: String,
+        cache: MutableMap<String, SecretKey>,
+    ): Boolean =
+        decryptEntryDetailed(source, output) { header -> cachedKey(header, password, cache) } is SuccessResult
 
     /**
      * Decrypts [source] into [output], reporting *why* a failure happened — unlike the Boolean
@@ -504,15 +572,15 @@ class RestoreEngine(
     private fun decryptEntryDetailed(
         source: DocumentFile,
         output: DocumentFile,
-        key: SecretKey,
         onOutputOpened: () -> Unit = {},
         wrapInput: (InputStream) -> InputStream = { it },
+        keyProvider: (Fvc1Header) -> SecretKey,
     ): BinaryResult<Unit, DecryptionError> =
         try {
             context.contentResolver.openInputStream(source.uri)?.use { input ->
                 context.contentResolver.openOutputStream(output.uri, OUTPUT_STREAM_MODE)
                     ?.also { onOutputOpened() }
-                    ?.use { out -> cipher.decryptFile(key, wrapInput(input), out) }
+                    ?.use { out -> cipher.decryptFile(wrapInput(input), out, keyProvider) }
             } ?: ErrorResult(DecryptionError.UNKNOWN)
         } catch (e: Exception) {
             e.rethrowCancellation()

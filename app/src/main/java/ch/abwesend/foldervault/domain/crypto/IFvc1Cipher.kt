@@ -41,6 +41,23 @@ interface IFvc1Cipher {
     fun decryptFile(key: SecretKey, input: InputStream, output: OutputStream): BinaryResult<Unit, DecryptionError>
 
     /**
+     * Same as [decryptFile], but the key is chosen *after* the header has been read, from the
+     * header itself. Lets a caller that must derive per file's salt + iteration count do so from a
+     * single stream open instead of opening the file once to read the header and a second time to
+     * decrypt it — which is what the folder restore used to do for every file (BUG: two SAF stream
+     * opens per file, painfully slow against a cloud DocumentsProvider).
+     *
+     * [keyProvider] is expected to memoize: it is called once per file, but a backup folder
+     * normally shares one salt, and PBKDF2 at 310k iterations must not run per file (BUG-6).
+     * Does NOT close either stream.
+     */
+    fun decryptFile(
+        input: InputStream,
+        output: OutputStream,
+        keyProvider: (Fvc1Header) -> SecretKey,
+    ): BinaryResult<Unit, DecryptionError>
+
+    /**
      * Self-contained decrypt: read FVC1 header, derive key from [password] + header's salt,
      * then decrypt. Used for restore-after-reinstall when no local Room key cache exists.
      * Does NOT close either stream.

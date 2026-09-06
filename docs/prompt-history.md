@@ -7,6 +7,118 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-09-06 — Folder restore: robust password probing, cooperative stop, foreground service, SAF cost
+
+Follow-up to the same day's single-file picker change. The user reported that restoring a whole
+backup folder "fails" but could not reproduce it, so the session started with an audit; four of the
+five findings were then fixed (the fifth, `.bin` name mangling, is recorded as `S4` in
+`review/develop.md` and deliberately left for later).
+
+### 1. One damaged file no longer fails the whole restore
+`verifyProbePassword` probed exactly *one* file — the smallest `.crypt` — and reported
+`InvalidPassword` for the entire folder if its header could not be read or its GCM tag failed. A
+single zero-byte leftover from an interrupted upload, or an incomplete download from Drive, would
+therefore refuse a correct password and restore nothing. **This is the most likely cause of the
+reported failure.**
+
+- New pure `PasswordProbe` (`infrastructure/restore/`): `selectCandidates` takes up to
+  `MAX_PROBES = 5` files smallest-first (a GCM decrypt must read to the tag, so probing the
+  smallest keeps verification off multi-GB files), dropping empty ones — unless *every* candidate
+  reports size 0, which means the provider does not report sizes rather than that the files are
+  empty. `shouldProceed` then decides: any successful decrypt → go; else any tag failure → stop;
+  else (nothing usable) → go, and let the per-file `failed` counter report the damage rather than
+  blaming the password.
+- Android-free by design, so the decision is unit-tested without SAF (`PasswordProbeTest`, 11
+  cases); the end-to-end behaviour is covered by the new `RestoreEngineFolderTest`.
+
+### 2. Cancelling a folder restore now reports what it restored
+`decryptAll` returned `RestoreResult.Cancelled` when `!isActive`, which was **unreachable**:
+`withContext` discards the value a cancelled block returns and throws instead. Stopping a restore
+therefore produced no result at all and `restore_cancelled` was dead text.
+
+- New `RestoreRunControl` (domain), mirroring `BackupRunControl`: the engine polls `shouldStop()`
+  at each file boundary and returns normally. Same convention as the backup pipeline
+  ("cooperative stops, never by cancelling the coroutine").
+- `RestoreResult.Cancelled` became a data class carrying the same counters as `Success` — a run
+  stopped after 3000 of 10000 files really did restore those files.
+
+### 3. The folder restore runs in its own foreground service
+It ran on `viewModelScope`, so leaving the app could have it killed mid-write.
+
+- New `RestoreForegroundService` (dataSync) + `ForegroundRestoreLauncher` +
+  `RestoreNotificationManager` (own channel), and `RestoreRunCoordinator` behind the domain seam
+  `IRestoreRunCoordinator`, which owns the run state so it is no longer tied to the screen.
+- **Separate from `BackupForegroundService` on purpose** (the user asked for this explicitly): that
+  service is built around backup configs — per-config `BackupRunner` lock, `ForegroundRunState`,
+  time budgets, a multi-config queue, WorkManager continuation handover. A restore has none of
+  those and, crucially, no background continuation: it depends on session-scoped picked tree uris
+  and an in-memory password, so no worker could resume it.
+- No runtime permission is involved: a user-initiated start is exempt from the Android 12+
+  background-FGS restriction, so unlike backups there is no exact-alarm trampoline. What *can*
+  refuse it is Android 15's dataSync budget, **shared with the backup service** — hence the
+  fallback.
+- Host handover: `start()` stages the run, dispatches the service, and schedules an unconditional
+  timed takeover. Whoever wins `tryClaim()` runs it; the service claims *before* promoting and
+  hands the claim back if `startForeground` is refused.
+- The fallback runs in an application-scoped coroutine, not `viewModelScope` — see B4 below.
+- The progress dialog shows "please keep the app open" whenever the run is **not** service-hosted,
+  which also covers the single-file flow (always ViewModel-scoped).
+
+### 4. SAF round-trips per restored file cut from O(N²) to O(N)
+- New `OutputTreeCache`: `DocumentFile.findFile` lists *all* children on every call, so a flat
+  backup folder of N files cost N full listings — each an IPC round-trip, and a network call
+  against a cloud provider. The cache lists each directory once and keeps its index current as the
+  restore creates and deletes documents. Keyed by `DocumentFile` identity rather than uri (every
+  directory the restore touches comes from the cache itself), which also keeps it free of `Uri` and
+  therefore unit-testable — `OutputTreeCacheTest` (8 cases) uses a hand-written `FakeDocumentFile`
+  placed in `androidx.documentfile.provider` because `DocumentFile`'s constructor is package-private.
+- New `IFvc1Cipher.decryptFile(input, output, keyProvider)` overload: the key is chosen from the
+  header the cipher already reads, so each file is opened **once** instead of twice (once to read
+  the header for key derivation, once to decrypt). `keyFor` became `cachedKey(header, …)`.
+
+### Review follow-up fixed in the same slice (`review/develop.md` B4)
+The first cut put host selection in the ViewModel. If the service was dispatched but its
+`startForeground` refused, *and* the user navigated away within the grace period, the run ended up
+staged with no host: the coordinator stayed `Running` forever, refusing every later restore and
+keeping the plaintext password alive. Host selection moved into the coordinator, with an
+application-scoped fallback — which additionally stops an in-app restore from dying on mere
+navigation.
+
+### Decisions carried forward
+- **`RestoreRequest` never travels in an `Intent`.** It carries the backup password; the service is
+  started with an empty intent and picks the request up from the coordinator.
+- **A folder restore is coordinator-owned, not ViewModel-owned.** `RestoreViewModel` mirrors
+  `IRestoreRunCoordinator.state` (guarded on `mode == WHOLE_FOLDER` so a folder run cannot drive
+  the single-file screen) and no longer executes the run itself.
+
+### Getting Robolectric to run on the aarch64 sandbox
+Initially reported as "Robolectric cannot run here" — wrong. It needs two workarounds, both in a
+Gradle **init script outside the repo** so the project's build config stays untouched (see
+`CLAUDE.md`): force `org.conscrypt:conscrypt-openjdk-uber:2.7.0` (the 2.5.2 Robolectric 4.14 pins
+ships no aarch64 `.so`; 2.7.0 does) and set `robolectric.graphicsMode`/`sqliteMode` to `LEGACY`
+(Robolectric's own nativeruntime has no aarch64 build). Robolectric failures then drop from 96 to
+44, and the 44 that remain are all SQLite-backed suites — legacy SQLite uses sqlite4java, which has
+no aarch64 build either. Those still need `! ./gradlew test`.
+
+This immediately paid for itself twice: it let `RestoreEngineFolderTest` be written and verified,
+and running `RestoreEngineSingleFileTest` for the first time caught B5 below.
+
+### Review follow-up fixed in the same slice (`review/develop.md` B5)
+`decryptSingleFile` resolved its output `DocumentFile` *inside* `withContext`, so a cancellation
+arriving before that block ran reached the cleanup handler with a null reference and orphaned the
+document the "Save as" picker had just created. Harmless under the old folder-picker flow (the
+engine created the output itself); real under the file picker. Now resolved before the
+`withContext` — `fromSingleUri` does no I/O.
+
+### Verification notes
+- `./gradlew assembleDebug` green; `./gradlew detekt` reports only the 4 pre-existing issues.
+- `./gradlew test` (with the init script): **520 tests, 44 failures — all 44 the SQLite/aarch64
+  limit**, none related to this work. All 38 new cases pass: `RestoreEngineFolderTest` 13,
+  `PasswordProbe` 11, `OutputTreeCache` 8, `RestoreViewModel` +6.
+- Gradle needs `-Pksp.incremental=false` in the sandbox (KSP's mmap caches fail there).
+
+---
+
 ## 2026-09-06 — Single-file restore saves through the "Save as" file picker
 
 ### What was done

@@ -13,6 +13,7 @@ import ch.abwesend.foldervault.infrastructure.backup.BackupNotificationManager
 import ch.abwesend.foldervault.infrastructure.logging.CrashlyticsSink
 import ch.abwesend.foldervault.infrastructure.logging.LocalLogSink
 import ch.abwesend.foldervault.infrastructure.logging.PrivateLogger
+import ch.abwesend.foldervault.infrastructure.restore.RestoreNotificationManager
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupConfigDao
 import ch.abwesend.foldervault.infrastructure.room.dao.BackupRunDao
 import kotlinx.coroutines.CoroutineScope
@@ -34,6 +35,7 @@ class FolderVaultApp : Application() {
             modules(appModule)
         }
         get<BackupNotificationManager>().createNotificationChannels()
+        get<RestoreNotificationManager>().createNotificationChannel()
         applyInitialTelemetrySettings()
         sweepStaleRunningBackupRuns()
         reRegisterPeriodicBackups()

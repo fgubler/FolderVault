@@ -67,6 +67,16 @@
             android:foregroundServiceType="dataSync" />
 
         <!--
+            Hosts a whole-folder restore so leaving the app cannot kill it half-way through
+            writing decrypted files. Started only from the visible restore screen, so no
+            exact-alarm trampoline is needed (unlike the backup service's background starts).
+        -->
+        <service
+            android:name=".infrastructure.restore.RestoreForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!--
             Fires from the one-shot exact alarm (FgsLaunchScheduler) and starts the foreground
             service from its launch-exempt callback. Not exported: only our own PendingIntent
             triggers it.

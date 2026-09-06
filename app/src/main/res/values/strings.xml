@@ -359,7 +359,7 @@
     <string name="restore_success_and_skipped">, skipped %1$d</string>
     <string name="restore_success_and_failed">, %1$d failed</string>
     <string name="restore_wrong_password">Wrong password. No files were modified.</string>
-    <string name="restore_cancelled">Restore was cancelled.</string>
+    <string name="restore_cancelled">Restore was stopped after restoring %1$d encrypted file(s)</string>
     <string name="restore_failed">Restore failed: %1$s</string>
 
     <!-- Restore failure reasons (inserted into restore_failed) -->
@@ -371,15 +371,24 @@
     <string name="restore_failure_invalid_encrypted_file">The file is not a valid encrypted backup file</string>
     <string name="restore_failure_decryption">Failed to read or decrypt the file</string>
     <string name="restore_failure_copy">Failed to copy the file</string>
+    <string name="restore_failure_interrupted">The restore was interrupted before it finished</string>
     <string name="button_restore_start_over">Start over (clear selection)</string>
     <string name="dialog_restoring_title">Restoring…</string>
     <string name="restore_verifying_password">Verifying password…</string>
+    <string name="restore_keep_app_open">Please keep the app open until the restore has finished — leaving it may interrupt the restore.</string>
     <string name="restore_decrypting_progress">Decrypting %1$d / %2$d files</string>
     <string name="restore_failed_count">%1$d failed</string>
 
     <!-- Restore mode toggle -->
     <string name="restore_mode_whole_folder">Whole folder</string>
     <string name="restore_mode_single_file">Single file</string>
+
+    <!-- Restore foreground service -->
+    <string name="notification_channel_restore_name">Restore status</string>
+    <string name="notification_channel_restore_description">Progress updates while a restore is running</string>
+    <string name="restore_notification_title">FolderVault Restore</string>
+    <string name="restore_notification_preparing_text">Preparing the restore…</string>
+    <string name="restore_notification_progress_text">Restoring %1$d / %2$d files</string>
 
     <!-- Restore single file -->
     <string name="restore_single_explanation_body">1. Pick one encrypted file. If the Google Drive app is installed, you can select it directly on Google Drive in the file picker — no download needed.\n2. Enter your backup password.\n3. Choose where to save the decrypted file. Its original name is suggested, but you can change it. If you pick a file that already exists, its content is replaced.</string>

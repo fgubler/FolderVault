@@ -17,7 +17,9 @@ import ch.abwesend.foldervault.domain.database.IDatabaseRecoveryService
 import ch.abwesend.foldervault.domain.logging.ILogExporter
 import ch.abwesend.foldervault.domain.logging.ITelemetryToggle
 import ch.abwesend.foldervault.domain.network.INetworkConnectivityChecker
+import ch.abwesend.foldervault.domain.restore.IForegroundRestoreLauncher
 import ch.abwesend.foldervault.domain.restore.IRestoreEngine
+import ch.abwesend.foldervault.domain.restore.IRestoreRunCoordinator
 import ch.abwesend.foldervault.domain.settings.IAppSettingsRepository
 import ch.abwesend.foldervault.domain.storage.ISafPermissionManager
 import ch.abwesend.foldervault.domain.storage.ReleaseSafPermissionIfUnusedUseCase
@@ -40,7 +42,10 @@ import ch.abwesend.foldervault.infrastructure.logging.FirebaseTelemetryToggle
 import ch.abwesend.foldervault.infrastructure.logging.LocalLogFiles
 import ch.abwesend.foldervault.infrastructure.network.AndroidNetworkConnectivityChecker
 import ch.abwesend.foldervault.infrastructure.network.NetworkStateMonitor
+import ch.abwesend.foldervault.infrastructure.restore.ForegroundRestoreLauncher
 import ch.abwesend.foldervault.infrastructure.restore.RestoreEngine
+import ch.abwesend.foldervault.infrastructure.restore.RestoreNotificationManager
+import ch.abwesend.foldervault.infrastructure.restore.RestoreRunCoordinator
 import ch.abwesend.foldervault.infrastructure.room.DatabaseRecoveryService
 import ch.abwesend.foldervault.infrastructure.room.FolderVaultDatabase
 import ch.abwesend.foldervault.infrastructure.room.RoomDatabaseFileAccess
@@ -83,6 +88,9 @@ val appModule = module {
     single<IBackupMessageRepository> { BackupMessageRepository(get()) }
     single<IBackupRunRepository> { BackupRunRepository(get()) }
     single<IRestoreEngine> { RestoreEngine(androidContext(), get(), get()) }
+    single { RestoreNotificationManager(androidContext()) }
+    single<IForegroundRestoreLauncher> { ForegroundRestoreLauncher(androidContext()) }
+    single<IRestoreRunCoordinator> { RestoreRunCoordinator(get(), get(), get()) }
 
     // Settings
     single<IAppSettingsRepository> { AppSettingsRepository(androidContext()) }
@@ -123,7 +131,9 @@ val appModule = module {
 
     // ViewModels
     viewModel { DatabaseGuardViewModel(get(), get(), get()) }
-    viewModel { RestoreViewModel(engine = get(), savedStateHandle = get()) }
+    viewModel {
+        RestoreViewModel(engine = get(), coordinator = get(), savedStateHandle = get())
+    }
     viewModel { HomeViewModel(get(), get()) }
     viewModel { OnboardingViewModel(get()) }
     viewModel { SettingsViewModel(get(), get(), get(), get(), get(), get()) }

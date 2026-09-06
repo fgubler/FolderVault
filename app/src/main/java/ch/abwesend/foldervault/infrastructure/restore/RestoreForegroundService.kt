@@ -9,6 +9,7 @@ import androidx.core.app.ServiceCompat
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.restore.IRestoreRunCoordinator
+import ch.abwesend.foldervault.domain.restore.RestoreProgress
 import ch.abwesend.foldervault.domain.restore.RestoreRunState
 import ch.abwesend.foldervault.domain.result.rethrowCancellation
 import ch.abwesend.foldervault.domain.util.injectAnywhere
@@ -54,6 +55,15 @@ class RestoreForegroundService : Service() {
 
     private var runJob: Job? = null
 
+    /**
+     * Latest progress mirrored into the ongoing notification, so a *second* start command that
+     * arrives while a restore is running re-posts that run's progress instead of resetting the
+     * notification to "preparing" (the promotion on such a start is the platform's requirement —
+     * see [startRun]). Written from [observeProgress]'s coroutine, read on the main thread.
+     */
+    @Volatile
+    private var latestProgress: RestoreProgress? = null
+
     companion object {
         const val ACTION_STOP = "ch.abwesend.foldervault.action.STOP_RESTORE"
         private const val STOP_REQUEST_CODE = 2101
@@ -81,12 +91,20 @@ class RestoreForegroundService : Service() {
      * back, so the screen's fallback picks the run up instead of it being lost. Continuing here
      * without foreground status is not an option — a background service is killable at any moment,
      * which is the very thing this service exists to prevent.
+     *
+     * The path that finds nothing to claim still promotes first, and only then stops: the service
+     * is always started through `startForegroundService`, which obliges the app to call
+     * `startForeground` on EVERY start command — including one this service turns out to have
+     * nothing to do for. Tearing it down with that obligation outstanding is what raises
+     * `Context.startForegroundService() did not then call Service.startForeground()` against the
+     * whole app. `BackupForegroundService.startRun` promotes unconditionally for the same reason.
      */
     private fun startRun() {
         val claimed = coordinator.tryClaim()
         when {
             !claimed -> {
                 // Nothing staged, or the screen's fallback already took the run.
+                enterForeground()
                 log.info("No restore to take over — stopping the restore service again")
                 stopIfIdle()
             }
@@ -152,7 +170,7 @@ class RestoreForegroundService : Service() {
         ServiceCompat.startForeground(
             this,
             RestoreNotificationManager.PROGRESS_NOTIFICATION_ID,
-            notificationManager.buildProgressNotification(progress = null, stopIntent = stopPendingIntent()),
+            notificationManager.buildProgressNotification(latestProgress, stopIntent = stopPendingIntent()),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
         )
         true
@@ -172,6 +190,7 @@ class RestoreForegroundService : Service() {
                 .takeWhile { it is RestoreRunState.Running }
                 .collect { state ->
                     val progress = (state as? RestoreRunState.Running)?.progress
+                    latestProgress = progress
                     notificationManager.updateProgressNotification(progress, stopPendingIntent())
                 }
         }

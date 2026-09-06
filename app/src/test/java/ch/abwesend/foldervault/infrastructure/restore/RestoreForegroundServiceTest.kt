@@ -15,6 +15,7 @@ import ch.abwesend.foldervault.domain.restore.RestoreResult
 import ch.abwesend.foldervault.domain.restore.RestoreRunState
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -47,6 +48,10 @@ import kotlin.test.assertTrue
  *   killed the app with `ForegroundServiceDidNotStopInTimeException`.
  * - S11: a start that cannot claim must not tear the service down while it is running a restore —
  *   the no-argument `stopSelf()` stops the service regardless of outstanding start commands.
+ * - B9: a start that has nothing to claim must still call `startForeground` before stopping. Every
+ *   start comes through `startForegroundService`, and stopping with that obligation outstanding
+ *   crashes the app with `Context.startForegroundService() did not then call
+ *   Service.startForeground()`.
  *
  * plus the pre-existing contract: claim before promoting, hand the claim back when the promotion
  * is refused, and stop again when there is nothing staged.
@@ -92,6 +97,12 @@ class RestoreForegroundServiceTest {
     @Test
     fun `a staged restore is claimed, promoted to the foreground and executed`() {
         coordinator.stage()
+        // Held open so the assertions see a service that is still hosting its run. Without this the
+        // fake's runClaimed returns the moment it has counted the latch down, launchRun's finally
+        // calls stopForeground(STOP_FOREGROUND_REMOVE), and Robolectric's ShadowService nulls
+        // lastForegroundNotification — a race against the run's dispatcher that this test lost
+        // whenever the machine was busy (green alone, red in the full suite). Released in tearDown.
+        coordinator.holdRunOpen()
         val service = startedService()
 
         assertTrue(coordinator.runStarted.await(10, TimeUnit.SECONDS), "the restore should have started")
@@ -112,6 +123,18 @@ class RestoreForegroundServiceTest {
 
         assertFalse(coordinator.claimed, "there was nothing to claim")
         assertTrue(shadowOf(service).isStoppedBySelf, "an idle restore service must not linger")
+    }
+
+    @Test
+    fun `a start with nothing to claim still promotes before stopping itself`() {
+        // Every start arrives via startForegroundService, which obliges the app to call
+        // startForeground even for a start it has nothing to do for: stopping with that obligation
+        // outstanding crashes the whole app with "did not then call Service.startForeground()".
+        // Asserted through the notification build rather than the shadow's lastForegroundNotification,
+        // which stopForeground(STOP_FOREGROUND_REMOVE) has already cleared by the time we look.
+        startedService()
+
+        verify(exactly = 1) { notificationManager.buildProgressNotification(any(), any()) }
     }
 
     @Test

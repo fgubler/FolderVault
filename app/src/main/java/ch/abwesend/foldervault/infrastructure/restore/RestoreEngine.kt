@@ -154,6 +154,18 @@ class RestoreEngine(
         runControl: RestoreRunControl,
         onProgress: (RestoreProgress) -> Unit,
     ): RestoreResult = withContext(dispatchers.io) {
+        // Restoring a folder into itself destroys data rather than restoring it: a plain
+        // (non-encrypted) entry keeps its relative path, so it resolves to *itself* as its own
+        // output — and under OVERWRITE the collision handling deletes the existing document before
+        // re-creating it, leaving the following copy nothing to read from. The file is simply gone.
+        // Checked before anything is listed or written, like the single-file flow's own guard.
+        // Two *different* uris addressing the same tree are still not caught — SAF offers no way
+        // to tell — but both pickers hand back the same uri for the same folder.
+        if (sourceUri == outputUri) {
+            logger.warning("Refusing a folder restore whose output tree is its own source")
+            return@withContext RestoreResult.Failure(RestoreFailureReason.OUTPUT_FOLDER_SAME_AS_SOURCE)
+        }
+
         val outputRoot = DocumentFile.fromTreeUri(context, Uri.parse(outputUri))
             ?: return@withContext RestoreResult.Failure(RestoreFailureReason.OUTPUT_FOLDER_NOT_ACCESSIBLE)
 

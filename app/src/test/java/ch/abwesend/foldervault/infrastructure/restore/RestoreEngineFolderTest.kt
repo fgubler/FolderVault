@@ -14,6 +14,7 @@ import android.provider.DocumentsContract.Document
 import androidx.test.platform.app.InstrumentationRegistry
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.restore.RestoreCollisionPolicy
+import ch.abwesend.foldervault.domain.restore.RestoreFailureReason
 import ch.abwesend.foldervault.domain.restore.RestoreProgress
 import ch.abwesend.foldervault.domain.restore.RestoreResult
 import ch.abwesend.foldervault.domain.restore.RestoreRunControl
@@ -122,6 +123,32 @@ class RestoreEngineFolderTest {
         val outputDir = childOf(OUTPUT_ROOT, "photos")
         assertNotNull(outputDir, "the nested directory must be recreated")
         assertContentEquals("jpeg bytes".toByteArray(), outputBytes("holiday.jpg", parentId = outputDir.id))
+    }
+
+    @Test
+    fun `restoring a folder into itself is refused before any file is touched`() = runTest {
+        // Review S17: a plain file keeps its relative path, so it resolves to itself as its own
+        // output — and OVERWRITE deletes the existing document before re-creating it, which leaves
+        // the copy nothing to read from. The file would simply be gone.
+        addSourceFile("keep-me.txt", "precious".toByteArray())
+        addSourceFile("report.pdf.crypt", encryptedBlob("report body"))
+
+        val result = engine.decryptAll(
+            sourceUri = sourceTree.toString(),
+            outputUri = sourceTree.toString(),
+            password = PASSWORD,
+            collisionPolicy = RestoreCollisionPolicy.OVERWRITE,
+            runControl = runControl,
+            onProgress = {},
+        )
+
+        assertEquals(RestoreResult.Failure(RestoreFailureReason.OUTPUT_FOLDER_SAME_AS_SOURCE), result)
+        assertContentEquals(
+            "precious".toByteArray(),
+            sourceBytes("keep-me.txt"),
+            "the plain file must still be there, untouched",
+        )
+        assertEquals(0, FolderSafProvider.childQueryCount, "nothing may even be listed")
     }
 
     @Test
@@ -351,6 +378,9 @@ class RestoreEngineFolderTest {
 
     private fun childOf(parentId: String, name: String): FolderDocument? =
         FolderSafProvider.documents.values.firstOrNull { it.parentId == parentId && it.displayName == name }
+
+    /** Reads a document back from the *source* tree, to prove a refused restore left it alone. */
+    private fun sourceBytes(name: String): ByteArray = outputBytes(name, parentId = SOURCE_ROOT)
 
     private fun outputBytes(name: String, parentId: String = OUTPUT_ROOT): ByteArray {
         val document = childOf(parentId, name)

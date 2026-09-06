@@ -25,6 +25,14 @@ enum class RestoreFailureReason(@StringRes val messageResId: Int) {
     OUTPUT_SAME_AS_SOURCE(R.string.restore_failure_same_as_source),
 
     /**
+     * The output folder picked for a whole-folder restore *is* the backup folder. Every plain
+     * (non-encrypted) file in the tree would then resolve to itself as its own output, and with
+     * [RestoreCollisionPolicy.OVERWRITE] the collision handling would delete it before the copy
+     * that was meant to recreate it could read it — destroying the file outright.
+     */
+    OUTPUT_FOLDER_SAME_AS_SOURCE(R.string.restore_failure_folder_same_as_source),
+
+    /**
      * The host executing the run went away mid-restore — the foreground service was destroyed, or
      * the process is shutting down. Distinct from a user stop, which reports partial counts.
      */

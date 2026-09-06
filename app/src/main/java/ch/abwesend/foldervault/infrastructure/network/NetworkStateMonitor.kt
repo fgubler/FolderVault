@@ -55,17 +55,26 @@ class NetworkStateMonitor(private val context: Context) {
     }
 
     /**
-     * Mirrors the criteria of WorkManager's CONNECTED / UNMETERED constraints, *plus* a validation
-     * requirement WorkManager itself does not apply — see the comment on the check below for why a
-     * mid-run observer needs the stricter test than the one-shot
-     * [AndroidNetworkConnectivityChecker] used by the UI.
+     * Mirrors the criteria of WorkManager's CONNECTED / UNMETERED constraints — deliberately
+     * *without* `NET_CAPABILITY_VALIDATED`, even though a network that advertises INTERNET before
+     * it can actually reach it (Wi-Fi right after the device wakes, a captive portal, a failed
+     * revalidation probe) is precisely what makes uploads fail.
+     *
+     * This flow only ever *stops* a run, and a stop schedules a continuation whose WorkManager
+     * constraint is the one below. Requiring validation here would therefore spin for a
+     * [NetworkPolicy.WIFI_ONLY] config: `NetworkUnmeteredController` does not look at validation
+     * (only `NetworkConnectedController` does, on API 26+), so the continuation is immediately
+     * runnable on the very network this check just rejected — stop, re-enqueue, trampoline back
+     * into the foreground service, stop again.
+     *
+     * An unvalidated network is handled where it can be handled properly instead: the Drive calls
+     * fail with `CloudNetworkUnavailableException`, the run ends as `RunResult.NetworkUnavailable`,
+     * and the worker retries it on WorkManager's exponential backoff up to
+     * `WorkerErrorHandler.MAX_NETWORK_RETRY_COUNT` — bounded, backed off, and without burning the
+     * shared dataSync budget in a loop. What stays worth stopping for is a real policy violation:
+     * the network is gone, or a Wi-Fi-only run has fallen back to mobile data.
      */
     private fun NetworkCapabilities.satisfies(policy: NetworkPolicy): Boolean =
         hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-            // VALIDATED, not just INTERNET: a just-associated network (e.g. Wi-Fi right after the
-            // device wakes) advertises INTERNET before it can actually reach the internet, so a run
-            // started on it dies immediately on DNS. VALIDATED means the system confirmed real
-            // connectivity — what an upload needs.
-            hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) &&
             (policy == NetworkPolicy.ANY || hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED))
 }

@@ -101,7 +101,7 @@ class BackupForegroundServiceTest {
         every {
             notificationManager.updateProgressNotification(any(), any(), any(), any(), any(), any())
         } returns progressNotification
-        every { scheduler.scheduleOneTime(any(), any(), any(), any()) } answers {
+        every { scheduler.scheduleOneTime(any(), any(), any(), any(), any()) } answers {
             continuationScheduled.countDown()
         }
         every { scheduler.cancelOneTime(any()) } just runs
@@ -149,6 +149,36 @@ class BackupForegroundServiceTest {
                 NetworkPolicy.WIFI_ONLY,
                 requiresCharging = false,
                 asContinuation = false,
+            )
+        }
+    }
+
+    @Test
+    fun `a run that could not reach the network is handed back to WorkManager as an inline retry`() {
+        // Review B10: waiting for connectivity is WorkManager's job. Without forceInline the retry
+        // trampolines straight back into this service (opted in + long window), finds the network
+        // still gone and re-enqueues — a loop whose fresh WorkRequests also reset runAttemptCount,
+        // so WorkerErrorHandler.MAX_NETWORK_RETRY_COUNT never bounds it.
+        coEvery { runner.runBackup(configId, any()) } coAnswers {
+            runStarted.countDown()
+            RunResult.NetworkUnavailable(summary = RunSummary(), runId = "run-1")
+        }
+
+        val service = Robolectric.buildService(BackupForegroundService::class.java).create().get()
+        service.onStartCommand(startIntent(), 0, 1)
+
+        assertTrue(runStarted.await(10, TimeUnit.SECONDS), "the backup run should have started")
+        assertTrue(
+            continuationScheduled.await(10, TimeUnit.SECONDS),
+            "a run without network must be re-scheduled rather than silently dropped",
+        )
+        verify(exactly = 1) {
+            scheduler.scheduleOneTime(
+                configId,
+                NetworkPolicy.WIFI_ONLY,
+                requiresCharging = false,
+                asContinuation = false,
+                forceInline = true,
             )
         }
     }

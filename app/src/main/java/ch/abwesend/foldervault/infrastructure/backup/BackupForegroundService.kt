@@ -603,7 +603,14 @@ class BackupForegroundService : Service() {
                 log.error("Foreground backup for ${config.id} failed fatally", result.error)
             is RunResult.NetworkUnavailable -> {
                 log.info("Foreground backup for ${config.id} could not reach the network — scheduling a retry")
-                scheduler.scheduleOneTime(config.id, networkPolicy, requiresCharging)
+                // forceInline, for the same reason as the budget-exhaustion degrade in startRun:
+                // waiting for connectivity is WorkManager's job, and only a worker can do that
+                // waiting properly. A plain one-time run would trampoline straight back here
+                // (opted-in + long-window), find the network still gone, re-enqueue — and loop,
+                // with a fresh WorkRequest resetting runAttemptCount each time so
+                // WorkerErrorHandler.MAX_NETWORK_RETRY_COUNT never bounds it. Inline, the worker
+                // rides Result.retry()'s exponential backoff and gives up at that cap.
+                scheduler.scheduleOneTime(config.id, networkPolicy, requiresCharging, forceInline = true)
             }
             is RunResult.SkippedConcurrentRun ->
                 log.info("Foreground backup for ${config.id} skipped — another run is already executing")

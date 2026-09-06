@@ -72,7 +72,11 @@ Crashlytics confinement: ONLY `infrastructure/logging/CrashlyticsSink.kt` may im
   The decision is pure (`ExecutionStrategySelector.scheduledMode`; API < 31 needs no grant). The
   service's `startForeground` is guarded: on `ForegroundServiceStartNotAllowedException` (shared
   dataSync budget exhausted) it degrades via `scheduleOneTime(forceInline = true)` — `forceInline`
-  stops the degraded run from trampolining straight back and looping. The service's
+  stops the degraded run from trampolining straight back and looping. **Every re-enqueue from
+  inside the foreground service needs that flag** for the same reason: a `RunResult` the service
+  cannot resolve itself (budget exhausted, `NetworkUnavailable`) must go back to WorkManager as an
+  *inline* run, or it trampolines right back, fails the same way and loops — and each fresh
+  `WorkRequest` resets `runAttemptCount`, so the worker's retry caps never bound it. The service's
   "foreground-UI-only start" invariant is relaxed *only* for this alarm origin. Feature is OFF by
   default and degrades cleanly (unpermitted / un-opted installs are unaffected). See
   `docs/prompt-history.md` 2026-07-15 for the full design.
@@ -85,13 +89,27 @@ Crashlytics confinement: ONLY `infrastructure/logging/CrashlyticsSink.kt` may im
   stages the run, dispatches the service, and schedules an *unconditional timed* takeover in an
   **application-scoped** coroutine (never `viewModelScope`, or navigating away would strand or lose
   the run). Whoever wins `tryClaim()` executes it; the service claims before promoting and hands
-  the claim back on refusal. The run state lives in `IRestoreRunCoordinator`, not in
-  `RestoreViewModel`. `RestoreRequest` carries the password and therefore never travels in an
+  the claim back on refusal. Both services must call `startForeground` on **every** start command,
+  including one they decline (nothing staged, no config id): they are started via
+  `startForegroundService`, and stopping with that obligation outstanding crashes the app with
+  `Context.startForegroundService() did not then call Service.startForeground()`. The run state
+  lives in `IRestoreRunCoordinator`, not in `RestoreViewModel`. `RestoreRequest` carries the password and therefore never travels in an
   `Intent`. A run that is not service-hosted makes the progress dialog say "keep the app open".
 - **Restore stops cooperatively** via `RestoreRunControl.shouldStop()`, polled at each file
   boundary — never by cancelling the coroutine, which would make `withContext` discard the
   engine's `RestoreResult.Cancelled` (with its partial counts) and throw instead. Same rule as
   `BackupRunControl`.
+- **`NetworkStateMonitor` deliberately does NOT require `NET_CAPABILITY_VALIDATED`** (nor does
+  `AndroidNetworkConnectivityChecker`): its flow only ever *stops* a run, and a stop schedules a
+  continuation whose WorkManager constraint is the weaker one — `NetworkUnmeteredController` does
+  not look at validation — so requiring it would stop, re-enqueue and immediately run again on the
+  very network just rejected. An unreachable network is handled where it can be handled properly
+  instead: `CloudNetworkUnavailableException` → `RunResult.NetworkUnavailable` → WorkManager
+  backoff, capped by `WorkerErrorHandler.MAX_NETWORK_RETRY_COUNT`.
+- **A whole-folder restore refuses to run into its own source tree** (`OUTPUT_FOLDER_SAME_AS_SOURCE`),
+  as does the single-file flow (`OUTPUT_SAME_AS_SOURCE`): a plain file keeps its relative path, so
+  it resolves to itself as its own output, and `OVERWRITE` deletes it before the copy that should
+  recreate it can read it.
 - **Never call `DocumentFile.findFile` in a loop**: it lists *all* children per call, so N lookups
   cost N full SAF listings (an IPC round-trip each, a network call on a cloud provider). Use
   `OutputTreeCache`, which lists a directory once and keeps its index current.

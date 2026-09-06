@@ -50,10 +50,14 @@ class BackupWorker(
 
         /**
          * Input-data flag forcing this run to execute inline in the worker, never trampolining to
-         * the foreground service. Set only by the budget-exhaustion degrade paths (the service /
-         * alarm receiver could not enter the foreground): without it, the degraded run would
-         * trampoline straight back to the service, fail to start again, and loop until the dataSync
-         * time budget resets.
+         * the foreground service. Set by the paths a trampoline would put in a loop:
+         * - the budget-exhaustion degrade (the service / alarm receiver could not enter the
+         *   foreground): without it, the degraded run would trampoline straight back to the
+         *   service, fail to start again, and loop until the dataSync time budget resets;
+         * - a foreground run that ended as [RunResult.NetworkUnavailable]: waiting for connectivity
+         *   is WorkManager's job, and only an inline run rides `Result.retry()`'s backoff and the
+         *   [WorkerErrorHandler.MAX_NETWORK_RETRY_COUNT] cap — a trampolined one would come back
+         *   as a fresh request with `runAttemptCount` reset to 0 every time.
          */
         const val KEY_FORCE_INLINE = "forceInline"
 

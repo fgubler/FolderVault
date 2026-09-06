@@ -23,6 +23,9 @@ class RestoreNotificationManager(private val context: Context) {
     companion object {
         const val CHANNEL_ID = "foldervault_restore_status"
         const val PROGRESS_NOTIFICATION_ID = 1101
+
+        /** `setProgress` scale for a byte-based run, whose progress is reported as a percentage. */
+        private const val PERCENT_MAX = 100
     }
 
     fun createNotificationChannel() {
@@ -38,24 +41,52 @@ class RestoreNotificationManager(private val context: Context) {
 
     /**
      * Builds the ongoing (silent, LOW-importance) notification the restore service runs under.
-     * [progress] is `null` while the source tree is still being scanned and the password verified,
-     * which on a large backup is a minute or more of no per-file progress. [stopIntent] targets
-     * the service itself, so this class stays independent of the service class.
+     *
+     * [progress] is `null` while the run has nothing to report yet — for a folder, while the source
+     * tree is scanned and the password probed, which on a large backup is a minute or more. Both
+     * progress shapes are rendered, and neither names a file: this notification can sit on a
+     * lockscreen, and the folder variant has always shown counts only. [stopIntent] targets the
+     * service itself, so this class stays independent of the service class.
      */
     fun buildProgressNotification(progress: RestoreProgress?, stopIntent: PendingIntent): Notification {
-        val text = if (progress == null || progress.total == 0) {
-            context.getString(R.string.restore_notification_preparing_text)
-        } else {
-            context.getString(R.string.restore_notification_progress_text, progress.processed, progress.total)
-        }
-        return NotificationCompat.Builder(context, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(context.getString(R.string.restore_notification_title))
-            .setContentText(text)
+            .setContentText(contentTextFor(progress))
             .setOngoing(true)
             .setSilent(true)
             .addAction(0, context.getString(R.string.backup_notification_stop_action), stopIntent)
-            .build()
+        applyProgressBar(builder, progress)
+        return builder.build()
+    }
+
+    private fun contentTextFor(progress: RestoreProgress?): String = when {
+        progress == null -> context.getString(R.string.restore_notification_preparing_text)
+        progress is RestoreProgress.Files && progress.total > 0 -> context.getString(
+            R.string.restore_notification_progress_text,
+            progress.processed,
+            progress.total,
+        )
+        progress is RestoreProgress.Bytes ->
+            progress.percent
+                ?.let { context.getString(R.string.restore_notification_single_file_progress, it) }
+                ?: context.getString(R.string.restore_single_decrypting)
+        else -> context.getString(R.string.restore_notification_preparing_text)
+    }
+
+    /**
+     * An ongoing restore is exactly the case a notification progress bar exists for. A run whose
+     * extent is not known yet — no progress at all, or a source whose provider does not report a
+     * size — gets the indeterminate bar rather than a bar stuck at zero.
+     */
+    private fun applyProgressBar(builder: NotificationCompat.Builder, progress: RestoreProgress?) {
+        when {
+            progress is RestoreProgress.Files && progress.total > 0 ->
+                builder.setProgress(progress.total, progress.processed, false)
+            progress is RestoreProgress.Bytes && progress.percent != null ->
+                builder.setProgress(PERCENT_MAX, progress.percent ?: 0, false)
+            else -> builder.setProgress(0, 0, true)
+        }
     }
 
     /**

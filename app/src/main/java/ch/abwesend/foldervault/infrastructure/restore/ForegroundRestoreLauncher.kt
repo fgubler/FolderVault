@@ -8,15 +8,16 @@ import ch.abwesend.foldervault.domain.restore.IForegroundRestoreLauncher
 import kotlin.coroutines.cancellation.CancellationException
 
 /**
- * Starts [RestoreForegroundService]. The only call site is the restore screen's "Start restore"
- * button, so the foreground-service start is normally allowed; a refusal (most plausibly the
- * dataSync time budget shared with the backup service) is reported back rather than thrown, so
- * the caller can run the restore itself and warn the user to keep the app open.
+ * Starts [RestoreForegroundService]. Every call site is a button on the visible restore screen —
+ * "Start restore" for a folder, "Decrypt & save" for a single file — so the foreground-service
+ * start is normally allowed; a refusal (most plausibly the dataSync time budget shared with the
+ * backup service) is reported back rather than thrown, so the caller can run the restore itself
+ * and warn the user to keep the app open.
  *
  * Note that a successful `startForegroundService` only means the service was *dispatched* — the
  * service's own `startForeground` can still be refused, which it handles by leaving the staged run
- * for the caller. The two paths are made safe by `RestoreRunCoordinator.runStaged` letting only
- * one host win.
+ * for the caller. The two paths are made safe by `RestoreRunCoordinator`'s claim handshake
+ * (`tryClaim` / `releaseClaim` / `runClaimed`), which lets only one host win.
  */
 class ForegroundRestoreLauncher(private val context: Context) : IForegroundRestoreLauncher {
     private val log get() = logger

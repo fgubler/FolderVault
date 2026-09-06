@@ -80,21 +80,38 @@ Crashlytics confinement: ONLY `infrastructure/logging/CrashlyticsSink.kt` may im
   "foreground-UI-only start" invariant is relaxed *only* for this alarm origin. Feature is OFF by
   default and degrades cleanly (unpermitted / un-opted installs are unaffected). See
   `docs/prompt-history.md` 2026-07-15 for the full design.
-- **Restore run host**: a whole-folder restore runs in its own `RestoreForegroundService` (dataSync,
-  started only from the visible restore screen — a user-initiated start needs no exact-alarm
-  trampoline). It is deliberately *separate* from `BackupForegroundService`: a restore has no
-  config, no network policy and no WorkManager continuation (it depends on session-scoped picked
-  tree uris and an in-memory password, so no worker could resume it). Both services share Android
-  15's dataSync budget, so `startForeground` can be refused — `RestoreRunCoordinator` therefore
-  stages the run, dispatches the service, and schedules an *unconditional timed* takeover in an
-  **application-scoped** coroutine (never `viewModelScope`, or navigating away would strand or lose
-  the run). Whoever wins `tryClaim()` executes it; the service claims before promoting and hands
-  the claim back on refusal. Both services must call `startForeground` on **every** start command,
-  including one they decline (nothing staged, no config id): they are started via
-  `startForegroundService`, and stopping with that obligation outstanding crashes the app with
-  `Context.startForegroundService() did not then call Service.startForeground()`. The run state
-  lives in `IRestoreRunCoordinator`, not in `RestoreViewModel`. `RestoreRequest` carries the password and therefore never travels in an
-  `Intent`. A run that is not service-hosted makes the progress dialog say "keep the app open".
+- **Restore run host**: **both** restore flows — whole-folder and single-file — run in
+  `RestoreForegroundService` (dataSync, started only from the visible restore screen, so a
+  user-initiated start needs no exact-alarm trampoline). A single picked file gets the same
+  protection because it can be just as large; while that flow ran on `viewModelScope`, navigating
+  away cancelled it and deleted whatever had been decrypted. The service is deliberately *separate*
+  from `BackupForegroundService`: a restore has no config, no network policy and no WorkManager
+  continuation (it depends on session-scoped picked uris and an in-memory password, so no worker
+  could resume it). Both services share Android 15's dataSync budget, so `startForeground` can be
+  refused — `RestoreRunCoordinator` therefore stages the run, dispatches the service, and schedules
+  an *unconditional timed* takeover in an **application-scoped** coroutine (never `viewModelScope`,
+  or navigating away would strand or lose the run). Whoever wins `tryClaim()` executes it; the
+  service claims before promoting and hands the claim back on refusal. Both services must call
+  `startForeground` on **every** start command, including one they decline (nothing staged, no
+  config id): they are started via `startForegroundService`, and stopping with that obligation
+  outstanding crashes the app with `Context.startForegroundService() did not then call
+  Service.startForeground()`. The run state lives in `IRestoreRunCoordinator`, not in
+  `RestoreViewModel`. `RestoreRequest` (a sealed `WholeFolder` / `SingleFile`) carries the password
+  and therefore never travels in an `Intent`; its `mode` is what lets a screen ignore the *other*
+  flow's run instead of showing its progress and dropping its result. A run that is not
+  service-hosted makes the progress dialog say "keep the app open".
+- **The restore progress dialog must not trap the user**: it is modal, so it *consumes* the back
+  gesture; with an empty `onDismissRequest` the user was pinned to the restore screen for the whole
+  run, which defeats the foreground service. `RestoreProgressDialog` takes an `onLeaveScreen`
+  driving both `onDismissRequest` and a confirm button. Safe for both flows now that the coordinator
+  owns both runs — it was not, and must not become so again for a run scoped to a ViewModel.
+- **Restore progress is two shapes**: `RestoreProgress.Files` (folder: one unit per file) and
+  `RestoreProgress.Bytes` (single file: one unit per byte of the *source*, `totalBytes = null` when
+  the provider reports no size). Reporting a single file as "0 / 1 files" would sit at 0 for the
+  whole run. A single-file run polls the stop signal and emits progress from inside the source
+  stream (`SingleFileChunking`: stop check every few MiB, progress bounded to ~200 updates per
+  file) — it has no file boundary to poll, and an unbounded emission rate would post thousands of
+  notification updates.
 - **Restore stops cooperatively** via `RestoreRunControl.shouldStop()`, polled at each file
   boundary — never by cancelling the coroutine, which would make `withContext` discard the
   engine's `RestoreResult.Cancelled` (with its partial counts) and throw instead. Same rule as

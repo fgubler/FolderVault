@@ -31,24 +31,56 @@ import java.util.Base64
 import javax.crypto.SecretKey
 
 /**
- * Cooperative-cancellation chunking for the single-file restore flow: a source file larger than
- * [thresholdBytes] is consumed in chunks of [chunkSizeBytes] with a cancellation check between
- * chunks, so the number of chunks grows with the file size and a cancel never has to wait for
- * more than one chunk of decrypt/copy work. Files up to the threshold run as a single piece.
- * Overridable so tests can exercise the chunked path with small fixtures.
+ * How often a single-file restore comes up for air.
+ *
+ * A folder restore polls the stop signal at each file boundary; a single file has none, so the
+ * poll rides the source stream instead. [stopCheckBytes] bounds how long a stop — a user tap, the
+ * OS dataSync time limit, a dead host — waits before the run reacts; it is deliberately small,
+ * because the check is a volatile read plus `ensureActive()` and the *whole* file is otherwise one
+ * uninterruptible blocking read loop.
+ *
+ * Progress is emitted more coarsely: [progressSteps] updates over a file of known size, and every
+ * [stopCheckBytes] when the provider does not report one. Without that bound a multi-gigabyte file
+ * would post tens of thousands of notification updates.
+ *
+ * Overridable so tests can exercise both with small fixtures.
  */
-data class CancellationChunking(val thresholdBytes: Long, val chunkSizeBytes: Long) {
+data class SingleFileChunking(val stopCheckBytes: Long, val progressSteps: Int) {
+
+    /**
+     * Bytes between two progress emissions for a source of [sizeBytes]. Never finer than
+     * [stopCheckBytes] — a progress update cannot be cheaper to produce than the stop check that
+     * shares its counter — and every [stopCheckBytes] when the size is unknown.
+     */
+    fun progressIntervalFor(sizeBytes: Long?): Long =
+        if (sizeBytes == null || sizeBytes <= 0L) {
+            stopCheckBytes
+        } else {
+            maxOf(stopCheckBytes, sizeBytes / progressSteps)
+        }
+
     companion object {
         private const val MEBI_BYTE = 1024L * 1024L
-        val DEFAULT = CancellationChunking(thresholdBytes = 100 * MEBI_BYTE, chunkSizeBytes = 50 * MEBI_BYTE)
+        val DEFAULT = SingleFileChunking(stopCheckBytes = 4 * MEBI_BYTE, progressSteps = 200)
     }
 }
+
+/**
+ * Unwinds a single-file restore that the user (or the OS time limit) stopped mid-stream.
+ *
+ * Thrown from inside the read loop because there is no other way out of the cipher's blocking
+ * copy — but it never reaches a caller: [RestoreEngine.decryptSingleFile] asks [RestoreRunControl]
+ * what actually happened and reports [RestoreResult.Cancelled]. Deliberately *not* a
+ * `CancellationException`: the coroutine is alive and well, and treating a cooperative stop as
+ * cancellation is exactly the mistake `RestoreRunControl`'s KDoc exists to prevent.
+ */
+private class RestoreStoppedException : java.io.IOException("Restore stopped")
 
 class RestoreEngine(
     context: Context,
     private val cipher: IFvc1Cipher,
     private val dispatchers: IDispatchers,
-    private val cancellationChunking: CancellationChunking = CancellationChunking.DEFAULT,
+    private val singleFileChunking: SingleFileChunking = SingleFileChunking.DEFAULT,
 ) : IRestoreEngine {
 
     private val context = context.applicationContext
@@ -72,23 +104,24 @@ class RestoreEngine(
     }
 
     /**
-     * Pass-through [InputStream] that invokes [checkCancelled] each time another [chunkSizeBytes]
-     * consumed bytes complete a chunk, making a long single-file decrypt/copy cooperatively
-     * cancellable. [checkCancelled] aborts by throwing (a `CancellationException` from
-     * `ensureActive`), which propagates out of the crypto/copy loop through the regular
-     * cancellation-rethrow path.
+     * Pass-through [InputStream] that counts the bytes it hands on and calls [onChunk] with the
+     * running total every [chunkSizeBytes], making a long single-file decrypt/copy both
+     * interruptible and observable. Everything the callback wants to do — poll the stop signal,
+     * check the coroutine is alive, publish progress — happens there; aborting is done by throwing
+     * out of it, which unwinds the crypto/copy loop.
      */
-    private class ChunkedCancellationInputStream(
+    private class ChunkedProgressInputStream(
         private val delegate: InputStream,
         private val chunkSizeBytes: Long,
-        private val checkCancelled: () -> Unit,
+        private val onChunk: (bytesRead: Long) -> Unit,
     ) : InputStream() {
-        private var bytesSinceLastCheck = 0L
+        private var totalBytesRead = 0L
+        private var bytesSinceLastChunk = 0L
 
         override fun read(): Int {
             val byte = delegate.read()
             if (byte != -1) {
-                countAndCheck(consumed = 1)
+                countAndReport(consumed = 1)
             }
             return byte
         }
@@ -96,7 +129,7 @@ class RestoreEngine(
         override fun read(destination: ByteArray, offset: Int, length: Int): Int {
             val count = delegate.read(destination, offset, length)
             if (count > 0) {
-                countAndCheck(consumed = count.toLong())
+                countAndReport(consumed = count.toLong())
             }
             return count
         }
@@ -105,11 +138,12 @@ class RestoreEngine(
 
         override fun close() = delegate.close()
 
-        private fun countAndCheck(consumed: Long) {
-            bytesSinceLastCheck += consumed
-            if (bytesSinceLastCheck >= chunkSizeBytes) {
-                bytesSinceLastCheck = 0
-                checkCancelled()
+        private fun countAndReport(consumed: Long) {
+            totalBytesRead += consumed
+            bytesSinceLastChunk += consumed
+            if (bytesSinceLastChunk >= chunkSizeBytes) {
+                bytesSinceLastChunk = 0
+                onChunk(totalBytesRead)
             }
         }
     }
@@ -208,14 +242,14 @@ class RestoreEngine(
             // restore as interrupted. The cooperative `shouldStop` above stays the *normal* way
             // to end a run early (it can report partial counts); this is the hard backstop.
             ensureActive()
-            onProgress(RestoreProgress(total, index, counters.failed, entry.documentFile.name ?: ""))
+            onProgress(RestoreProgress.Files(total, index, counters.failed, entry.documentFile.name ?: ""))
             restoreEntry(entry, outputTree, collisionPolicy, password, keyCache, counters)
         }
 
         if (stopped) {
             counters.toCancelled()
         } else {
-            onProgress(RestoreProgress(total, total, counters.failed, ""))
+            onProgress(RestoreProgress.Files(total, total, counters.failed, ""))
             counters.toSuccess()
         }
     }
@@ -285,19 +319,30 @@ class RestoreEngine(
      * Unreadable headers, corrupt files and stream failures surface as [RestoreResult.Failure]
      * instead.
      *
-     * On every non-success outcome — failures *and* cancellation — the output document is deleted
-     * again via [cleanUpSingleFileOutput]. Cancellation is honored cooperatively: a source above
-     * [CancellationChunking.thresholdBytes] — or of unknown size — is consumed through
-     * [ChunkedCancellationInputStream], which re-checks the coroutine's liveness after every chunk,
-     * so a cancel aborts within one chunk of work instead of after the whole file. Smaller files
-     * still run to completion first, which is why the explicit catch stays: `withContext` then
-     * discards the (possibly fully decrypted) result and throws, and without the cleanup the
-     * plaintext would silently remain at the picked location even though the user asked to abort.
+     * On every non-success outcome — failures, a cooperative stop *and* coroutine cancellation —
+     * the output document is deleted again via [cleanUpSingleFileOutput]. Unlike a folder restore
+     * there is nothing partial worth keeping: half a plaintext file is indistinguishable from a
+     * whole one, so a stopped run reports [RestoreResult.Cancelled] with zero counts.
+     *
+     * Stopping is cooperative through [runControl], the project-wide rule for restores. A single
+     * file has no file boundary to poll, so the source is read through a
+     * [ChunkedProgressInputStream] that, every [SingleFileChunking.stopCheckBytes], polls the stop
+     * signal, confirms the host coroutine is still alive, and publishes
+     * [RestoreProgress.Bytes] to [onProgress] at the coarser
+     * [SingleFileChunking.progressIntervalFor] rate. A stop unwinds the blocking crypto/copy loop
+     * by throwing (there is no other way out of it), which the layers below see as an ordinary
+     * stream failure — so the run control, not the thrown type, is what decides the reported
+     * outcome. The `CancellationException` catch stays for the *other* kind of ending: a host that
+     * died rather than asked, where `withContext` discards the (possibly fully decrypted) result
+     * and throws, and without the cleanup the plaintext would silently remain at the picked
+     * location.
      */
     override suspend fun decryptSingleFile(
         sourceFileUri: String,
         outputFileUri: String,
         password: String,
+        runControl: RestoreRunControl,
+        onProgress: (RestoreProgress) -> Unit,
     ): RestoreResult {
         // The "Save as" picker can hand back the *source* document itself — same folder, the
         // source's own name typed back in and the overwrite confirmed. Restoring into it would
@@ -321,28 +366,29 @@ class RestoreEngine(
         return try {
             withContext(dispatchers.io) {
                 val source = DocumentFile.fromSingleUri(context, Uri.parse(sourceFileUri))
-                val result = when {
+                val attempted = when {
                     source == null -> RestoreResult.Failure(RestoreFailureReason.SOURCE_FILE_NOT_ACCESSIBLE)
                     output == null -> RestoreResult.Failure(RestoreFailureReason.OUTPUT_FILE_NOT_ACCESSIBLE)
+                    // A stop that arrived while the run was still staged: nothing has been opened,
+                    // but the picker already created the output document, so fall through to the
+                    // cleanup below rather than returning here.
+                    runControl.shouldStop() ->
+                        RestoreResult.Cancelled(decrypted = 0, copied = 0, skipped = 0, failed = 0)
                     else -> {
-                        val wrapInput = singleFileCancellationWrapper(source.length()) { ensureActive() }
-                        when (val probe = probeSourceHeader(source)) {
-                            // Reported before either stream is opened, so an unreadable source
-                            // cannot masquerade as a copy/decrypt failure — and cannot cost the
-                            // user a picked overwrite target either, since nothing was truncated.
-                            is HeaderProbe.Unreadable ->
-                                RestoreResult.Failure(RestoreFailureReason.SOURCE_FILE_NOT_ACCESSIBLE)
-                            is HeaderProbe.Parsed ->
-                                decryptSingle(source, output, password, probe.header, markOutputWritten, wrapInput)
-                            is HeaderProbe.NotEncrypted -> if (source.name.orEmpty().endsWith(CRYPT_SUFFIX)) {
-                                // Suffixed but unreadable header: surface it as a clear decryption
-                                // failure rather than copying encrypted bytes out verbatim.
-                                decryptSingle(source, output, password, null, markOutputWritten, wrapInput)
-                            } else {
-                                copySingle(source, output, markOutputWritten, wrapInput)
-                            }
-                        }
+                        val totalBytes = source.length().takeIf { it > 0L }
+                        onProgress(RestoreProgress.Bytes(processedBytes = 0, totalBytes = totalBytes))
+                        val wrapInput = singleFileStreamWrapper(totalBytes, runControl, onProgress) { ensureActive() }
+                        restoreSinglePickedFile(source, output, password, markOutputWritten, wrapInput)
                     }
+                }
+                // The run control is the authority on what happened: a cooperative stop unwinds the
+                // crypto/copy loop by throwing, which those layers can only report as an ordinary
+                // stream failure. Asking here turns that back into the honest outcome. A run that
+                // *finished* before the stop landed keeps its success — the file is whole.
+                val result = if (attempted !is RestoreResult.Success && runControl.shouldStop()) {
+                    RestoreResult.Cancelled(decrypted = 0, copied = 0, skipped = 0, failed = 0)
+                } else {
+                    attempted
                 }
                 if (result !is RestoreResult.Success && output != null) {
                     cleanUpSingleFileOutput(output, outputWritten)
@@ -422,22 +468,68 @@ class RestoreEngine(
     }
 
     /**
-     * Returns the input-stream wrapper implementing the chunked cooperative cancellation of the
-     * single-file flow (see [CancellationChunking]): sources above the threshold are read through
-     * a [ChunkedCancellationInputStream] that calls [checkCancelled] between chunks; smaller
-     * sources pass through unwrapped and stay uninterruptible for their (short) duration. A
-     * source whose provider reports no size (`length() == 0`) is wrapped too: unknown is not
-     * "small", and the wrapper costs only a counter per read.
+     * Runs the picked source through the probe-then-decrypt-or-copy decision. Extracted from
+     * [decryptSingleFile] so that method stays about the *run* (stop, cleanup, cancellation) and
+     * this one about the *file*.
      */
-    private fun singleFileCancellationWrapper(
-        sourceSizeBytes: Long,
-        checkCancelled: () -> Unit,
-    ): (InputStream) -> InputStream =
-        if (sourceSizeBytes <= 0L || sourceSizeBytes > cancellationChunking.thresholdBytes) {
-            { stream -> ChunkedCancellationInputStream(stream, cancellationChunking.chunkSizeBytes, checkCancelled) }
+    @Suppress("LongParameterList")
+    private fun restoreSinglePickedFile(
+        source: DocumentFile,
+        output: DocumentFile,
+        password: String,
+        onOutputOpened: () -> Unit,
+        wrapInput: (InputStream) -> InputStream,
+    ): RestoreResult = when (val probe = probeSourceHeader(source)) {
+        // Reported before either stream is opened, so an unreadable source cannot masquerade as a
+        // copy/decrypt failure — and cannot cost the user a picked overwrite target either, since
+        // nothing was truncated.
+        is HeaderProbe.Unreadable -> RestoreResult.Failure(RestoreFailureReason.SOURCE_FILE_NOT_ACCESSIBLE)
+        is HeaderProbe.Parsed ->
+            decryptSingle(source, output, password, probe.header, onOutputOpened, wrapInput)
+        is HeaderProbe.NotEncrypted -> if (source.name.orEmpty().endsWith(CRYPT_SUFFIX)) {
+            // Suffixed but unreadable header: surface it as a clear decryption failure rather than
+            // copying encrypted bytes out verbatim.
+            decryptSingle(source, output, password, null, onOutputOpened, wrapInput)
         } else {
-            { stream -> stream }
+            copySingle(source, output, onOutputOpened, wrapInput)
         }
+    }
+
+    /**
+     * Returns the input-stream wrapper that makes a single-file restore interruptible and
+     * observable (see [SingleFileChunking]).
+     *
+     * Every source is wrapped, whatever its size. An earlier version only wrapped files above a
+     * 100 MiB threshold, which left everything below it uninterruptible *and* progress-less — and
+     * "below the threshold" is a guess based on a size the provider may not even report. The
+     * wrapper costs one counter increment per read, which is nothing next to the AES-GCM and the
+     * SAF round-trips it rides along with.
+     *
+     * Per chunk the callback does three things, in this order: honour a cooperative stop
+     * ([RestoreRunControl]) by unwinding the read loop, confirm the host coroutine is still alive
+     * ([checkAlive], the hard backstop for a host that died rather than asked), and publish
+     * progress — the last one throttled to [SingleFileChunking.progressIntervalFor] so a
+     * multi-gigabyte file does not post tens of thousands of updates.
+     */
+    private fun singleFileStreamWrapper(
+        totalBytes: Long?,
+        runControl: RestoreRunControl,
+        onProgress: (RestoreProgress) -> Unit,
+        checkAlive: () -> Unit,
+    ): (InputStream) -> InputStream {
+        val progressInterval = singleFileChunking.progressIntervalFor(totalBytes)
+        var lastReportedBytes = 0L
+        return { stream ->
+            ChunkedProgressInputStream(stream, singleFileChunking.stopCheckBytes) { bytesRead ->
+                if (runControl.shouldStop()) throw RestoreStoppedException()
+                checkAlive()
+                if (bytesRead - lastReportedBytes >= progressInterval) {
+                    lastReportedBytes = bytesRead
+                    onProgress(RestoreProgress.Bytes(processedBytes = bytesRead, totalBytes = totalBytes))
+                }
+            }
+        }
+    }
 
     private fun withStreams(
         source: DocumentFile,

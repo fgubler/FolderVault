@@ -7,6 +7,98 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-09-06 — The single-file restore moves into the foreground service
+
+Follow-up the user asked for after review round 5, from a question raised there: a picked file can
+be a multi-gigabyte video, so why was only the *folder* restore protected by a foreground service?
+
+It should not have been. The single-file run lived on `viewModelScope`, so navigating away from the
+restore screen popped the nav entry, cleared the ViewModel, cancelled the job — and
+`cleanUpSingleFileOutput` then deleted however much had been decrypted. Backgrounding the app left
+the process killable with nothing holding it up. The only thing making a long single-file decrypt
+survivable at all was the blocking progress dialog, which was a side effect rather than a design —
+and round 5's S18 fix had just narrowed it.
+
+Most of the machinery was already generic, so the change is mainly a widening.
+
+### Domain
+
+- **`RestoreRequest` is now sealed**: `WholeFolder` / `SingleFile`, each carrying its own uris and
+  the password. It still never travels in an `Intent`.
+- **`RestoreRunState.Running` / `Finished` carry the `RestoreMode`** that staged the run. This is
+  the load-bearing part: one coordinator now hosts both flows, so a screen must show only *its*
+  mode's run. Without the guard a folder restore going in the service would drive the single-file
+  screen's progress and drop its result there. `RestoreViewModel.withRunState` matches on it.
+- **`RestoreProgress` is now sealed**: `Files` (one unit per file) and `Bytes` (one unit per byte of
+  the source, `totalBytes = null` when the provider reports no size). Squeezing a single file into
+  the file-count shape would have reported "0 / 1 files" for the entire run.
+
+### Stopping inside one file
+
+A folder restore polls `RestoreRunControl` at each file boundary. A single file has none, so the
+poll rides the source stream: `ChunkedProgressInputStream` (was `ChunkedCancellationInputStream`)
+counts bytes and, every `SingleFileChunking.stopCheckBytes`, polls the stop signal, confirms the
+host coroutine is alive, and publishes progress at the coarser `progressIntervalFor` rate.
+
+Two decisions worth recording:
+
+- **Every source is wrapped now**, whatever its size. The old 100 MiB threshold left everything
+  below it uninterruptible *and* progress-less, on the strength of a size the provider may not even
+  report. The wrapper costs one counter increment per read, against AES-GCM and SAF round-trips.
+- **A stop throws, but the thrown type is not the verdict.** There is no way to return normally from
+  inside the cipher's blocking copy loop, so the callback throws `RestoreStoppedException` —
+  deliberately *not* a `CancellationException`, since the coroutine is alive and well and conflating
+  the two is the exact mistake `RestoreRunControl` exists to prevent. The layers below can only
+  report that as an ordinary stream failure, so `decryptSingleFile` asks the run control what
+  actually happened and reports `Cancelled`. A run that *finished* before the stop landed keeps its
+  success — the file is whole.
+
+`Cancelled` carries zero counts for a single file, and that is correct rather than a gap: half a
+plaintext file is indistinguishable from a whole one, so the output document is deleted. The result
+screen says so explicitly instead of rendering the folder message as "restored 0 files".
+
+### What the foreground service buys, and what it does not
+
+It protects against app-lifecycle death — navigating away, backgrounding, the process being reaped.
+It does **not** protect against Android 15's dataSync time limit: a folder restore that hits the
+wall stops at a file boundary with real files on disk, while a single-file one has to throw its
+whole decrypt away. There is no continuation either — session-scoped picked uris plus an in-memory
+password mean no worker could resume it. Not a blocker (six hours against local I/O and AES-GCM is
+an enormous file), but it is a real asymmetry and the KDoc says so.
+
+### Elsewhere
+
+- The service, its launcher and the manifest needed no logic change — only their KDoc, which said
+  "whole-folder". The claim handshake, the timed takeover and `onTimeout` are flow-agnostic.
+- The notification renders both shapes and gained a real progress bar (determinate where the extent
+  is known, indeterminate otherwise). It still never names a file: it can sit on a lockscreen, and
+  the folder variant has always shown counts only.
+- S18's asymmetry is retired: `onLeaveScreen` is no longer nullable, because both runs may now be
+  left behind.
+- `RestoreViewModel` lost its `restoreJob` entirely — `cancel()` is `coordinator.requestStop()` for
+  both flows. `reset()` joins `setMode` in *pulling* the run state, so no blank rebuild can hide a
+  run in flight (the same shape as round 5's N13).
+- **Also fixed, unasked, in a method being rewritten anyway:** round 5's N17 —
+  `RestoreRunCoordinator.runClaimed`'s early return now hands the claim back. Leaving it set meant
+  `tryClaim` could never succeed again and the coordinator wedged at `Running` for the life of the
+  process, with no way out.
+
+### Verification
+
+`./gradlew assembleDebug` and `./gradlew detekt` clean. `./gradlew test` → **560 tests (14 new),
+45 failures, all of them the SQLite-on-aarch64 sandbox limit** — classified per test from the JUnit
+XML. Please re-run `! ./gradlew test` outside the sandbox.
+
+New coverage: `RestoreNotificationManagerTest` (5, both progress shapes plus the no-file-name rule),
+5 engine cases (stop mid-file, stop before the run starts, a stop that loses the race to completion,
+byte progress, unknown source size), and 4 ViewModel cases (service preferred, run survives the
+screen, cooperative stop, and a folder run never driving the single-file screen).
+
+One sandbox note: `compileDebugKotlin` intermittently fails with `Daemon compilation failed: null`
+plus a cascade of bogus "Unresolved reference" errors on *import* lines of untouched files. Re-running
+the same command succeeds. It is the daemon, not the code — do not go chasing the phantom errors.
+
+
 ## 2026-09-06 — Review round 5: the progress dialog's escape hatch, and re-attaching the screen to a run in flight
 
 Fifth review pass over `develop` vs `master` at `cbeff27` (`review/develop.md`), then the two fixes

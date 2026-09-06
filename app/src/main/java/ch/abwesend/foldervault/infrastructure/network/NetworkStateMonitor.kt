@@ -57,5 +57,10 @@ class NetworkStateMonitor(private val context: Context) {
     /** Mirrors the criteria of WorkManager's CONNECTED / UNMETERED constraints. */
     private fun NetworkCapabilities.satisfies(policy: NetworkPolicy): Boolean =
         hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            // VALIDATED, not just INTERNET: a just-associated network (e.g. Wi-Fi right after the
+            // device wakes) advertises INTERNET before it can actually reach the internet, so a run
+            // started on it dies immediately on DNS. VALIDATED means the system confirmed real
+            // connectivity — what an upload needs.
+            hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) &&
             (policy == NetworkPolicy.ANY || hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED))
 }

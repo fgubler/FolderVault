@@ -77,6 +77,9 @@ class BackupNotificationManager(
                 if (result.summary.hitTimeBudget) null else BackupRunOutcome.SUCCESS
             is RunResult.AuthLost -> null
             is RunResult.FatalError -> BackupRunOutcome.FAILURE
+            // No usable network: the worker retries on WorkManager's backoff and surfaces the
+            // failure notification itself only once the retry cap is reached, so stay silent here.
+            is RunResult.NetworkUnavailable -> null
             is RunResult.SkippedConcurrentRun -> null // nothing ran, nothing to announce
         }
 

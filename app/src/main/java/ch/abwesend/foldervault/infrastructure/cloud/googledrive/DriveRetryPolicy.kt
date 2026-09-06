@@ -8,9 +8,9 @@ import kotlinx.coroutines.delay
 import kotlin.random.Random
 
 internal object DriveRetryPolicy {
-    const val MAX_RETRIES = 3
+    const val MAX_RETRIES = 5
     private const val BASE_DELAY_MS = 1_000L
-    private const val MAX_DELAY_MS = 32_000L
+    private const val MAX_DELAY_MS = 60_000L
     private const val JITTER_MAX_MS = 1_000L
 
     /**

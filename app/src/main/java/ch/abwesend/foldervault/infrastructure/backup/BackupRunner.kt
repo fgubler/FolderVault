@@ -7,6 +7,7 @@ import ch.abwesend.foldervault.domain.backup.IBackupScheduler
 import ch.abwesend.foldervault.domain.backup.ManifestEntry
 import ch.abwesend.foldervault.domain.cloud.CloudAuthException
 import ch.abwesend.foldervault.domain.cloud.CloudAuthResult
+import ch.abwesend.foldervault.domain.cloud.CloudNetworkUnavailableException
 import ch.abwesend.foldervault.domain.cloud.ICloudAuthorizer
 import ch.abwesend.foldervault.domain.cloud.ICloudStorageProvider
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
@@ -71,6 +72,15 @@ sealed class RunResult {
      * ticking.
      */
     data object SkippedConcurrentRun : RunResult()
+
+    /**
+     * The run could not reach the network (typically DNS resolution failing when a scheduled run
+     * fires before connectivity is actually up — the classic "morning" failure). A run row was
+     * created, so [runId] / [summary] are carried for the give-up notification, but this is not a
+     * [Completed] result: the worker retries it on WorkManager's backoff and only surfaces the
+     * "upload failed" notification once connectivity genuinely does not return within the cap.
+     */
+    data class NetworkUnavailable(val summary: RunSummary, val runId: String) : RunResult()
 }
 
 /**
@@ -83,6 +93,7 @@ sealed class RunResult {
  */
 internal fun resolveRunStatus(summary: RunSummary): BackupRunStatus = when {
     summary.authLost -> BackupRunStatus.FAILED
+    summary.networkUnavailable -> BackupRunStatus.FAILED
     summary.sourceFolderInaccessible -> BackupRunStatus.FAILED
     summary.hitTimeBudget -> BackupRunStatus.INITIAL_SYNC_IN_PROGRESS
     summary.quotaExceeded && summary.filesUploaded == 0 -> BackupRunStatus.FAILED
@@ -295,9 +306,9 @@ class BackupRunner internal constructor(
             // cloud connection is still usable. Skipped on an inaccessible source: that run
             // failed before discovering anything, so it must not mutate the cloud or rewrite the
             // manifest from a stale, unverified index.
-            if (!summary.authLost && !summary.sourceFolderInaccessible) {
+            if (!summary.authLost && !summary.sourceFolderInaccessible && !summary.networkUnavailable) {
                 retention.reapPendingDeletions(config.id)
-                writeManifest(configId, cloudProvider)
+                writeManifest(configId, cloudProvider, summary)
             }
         } catch (e: CancellationException) {
             // Worker cancellation (timeout, constraints lost, user action) is expected — honor
@@ -349,7 +360,7 @@ class BackupRunner internal constructor(
 
         val status = resolveRunStatus(summary)
         val completedNormally = !summary.authLost && !summary.quotaExceeded &&
-            !summary.hitTimeBudget && !summary.sourceFolderInaccessible
+            !summary.hitTimeBudget && !summary.sourceFolderInaccessible && !summary.networkUnavailable
         if (summary.sourceFolderInaccessible) {
             emitRunMessage(config.id, runId, MessageSeverity.ERROR, MessageType.FOLDER_UNREADABLE)
         }
@@ -366,6 +377,9 @@ class BackupRunner internal constructor(
 
         return when {
             summary.authLost -> RunResult.AuthLost(summary, runId)
+            // No usable network (e.g. DNS failing on a just-woken device): retryable, and the
+            // worker defers the failure notification until connectivity truly does not return.
+            summary.networkUnavailable -> RunResult.NetworkUnavailable(summary, runId)
             // An inaccessible source folder is a fatal condition for this run: report FAILURE (so
             // the completion notification and worker result both reflect failure, and WorkManager
             // does not retry a condition only the user can fix) rather than a misleading Success.
@@ -459,7 +473,11 @@ class BackupRunner internal constructor(
         )
     }
 
-    private suspend fun writeManifest(configId: String, cloudProvider: ICloudStorageProvider) {
+    private suspend fun writeManifest(
+        configId: String,
+        cloudProvider: ICloudStorageProvider,
+        summary: RunSummary,
+    ) {
         val config = backupConfigDao.getByIdOnce(configId) ?: return
         val currentVersions = uploadedFileIndexDao.getCurrentVersionList(configId)
         val entries = buildManifestEntries(currentVersions)
@@ -477,7 +495,12 @@ class BackupRunner internal constructor(
             config.cloudAccountIdentifier,
         )
         if (writeResult !is SuccessResult) {
-            log.warning("Failed to write cloud manifest for config $configId")
+            if (writeResult is ErrorResult && writeResult.error is CloudNetworkUnavailableException) {
+                summary.networkUnavailable = true
+                log.info("No usable network while writing cloud manifest for config $configId — will retry the run")
+            } else {
+                log.warning("Failed to write cloud manifest for config $configId")
+            }
         }
     }
 

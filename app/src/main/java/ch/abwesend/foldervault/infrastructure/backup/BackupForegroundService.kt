@@ -601,6 +601,10 @@ class BackupForegroundService : Service() {
                 log.warning("Foreground backup for ${config.id} lost auth — user re-consent required")
             is RunResult.FatalError ->
                 log.error("Foreground backup for ${config.id} failed fatally", result.error)
+            is RunResult.NetworkUnavailable -> {
+                log.info("Foreground backup for ${config.id} could not reach the network — scheduling a retry")
+                scheduler.scheduleOneTime(config.id, networkPolicy, requiresCharging)
+            }
             is RunResult.SkippedConcurrentRun ->
                 log.info("Foreground backup for ${config.id} skipped — another run is already executing")
         }

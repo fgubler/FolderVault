@@ -94,24 +94,10 @@ class BackupUploader(
         backupSalt: ByteArray?,
         summary: RunSummary,
     ) {
-        val folderPath = task.relativePath.substringBeforeLast('/', "")
         val fileName = task.relativePath.substringAfterLast('/')
         val remoteName = RemoteNameBuilder.buildName(fileName, task.mode, config.encryptionEnabled)
 
-        val folderResult = folderCache.ensurePath(config.cloudSubFolderId, folderPath)
-        if (folderResult is ErrorResult) {
-            if (folderResult.error is CloudNetworkUnavailableException) {
-                markNetworkUnavailable(task, summary)
-                return
-            }
-            log.warning(
-                "Could not ensure remote folder for ${FileNameRedactor.redactPath(task.relativePath)}: " +
-                    "${folderResult.error}"
-            )
-            summary.filesFailed++
-            return
-        }
-        val parentFolderId = (folderResult as SuccessResult).value
+        val parentFolderId = resolveParentFolder(config, task, folderCache, summary) ?: return
 
         // Only encrypted backups need a staged temp copy: encryption rewrites the bytes and the
         // ciphertext must be re-readable on each upload retry. Unencrypted backups stream the source
@@ -163,22 +149,68 @@ class BackupUploader(
                 summary = summary,
             ) ?: return // auth-lost or quota — summary flags set; caller will skip subsequent tasks
 
-            if (uploadResult is ErrorResult) {
-                if (uploadResult.error is CloudNetworkUnavailableException) {
+            handleUploadResult(config, task, remoteName, runId, uploadResult, summary)
+        } finally {
+            staging?.file?.delete()
+        }
+    }
+
+    /**
+     * Resolves the remote parent folder for [task]'s relative path, creating it if needed.
+     *
+     * Returns `null` when the caller must abandon this task, having already recorded the right
+     * kind of failure: a missing network flags the whole run as retryable (nothing is wrong with
+     * the file), anything else counts this one file as failed.
+     */
+    private suspend fun resolveParentFolder(
+        config: BackupConfigEntity,
+        task: UploadTask,
+        folderCache: FolderPathCache,
+        summary: RunSummary,
+    ): String? {
+        val folderPath = task.relativePath.substringBeforeLast('/', "")
+        return when (val folderResult = folderCache.ensurePath(config.cloudSubFolderId, folderPath)) {
+            is SuccessResult -> folderResult.value
+            is ErrorResult -> {
+                if (folderResult.error is CloudNetworkUnavailableException) {
                     markNetworkUnavailable(task, summary)
-                    return
+                } else {
+                    log.warning(
+                        "Could not ensure remote folder for ${FileNameRedactor.redactPath(task.relativePath)}: " +
+                            "${folderResult.error}"
+                    )
+                    summary.filesFailed++
                 }
+                null
+            }
+        }
+    }
+
+    /**
+     * Records the outcome of one finished upload attempt: a success commits the index entry, a
+     * missing network flags the run as retryable without blaming the file, and any other error
+     * counts the file as failed and surfaces an UPLOAD_FAILED message.
+     */
+    @Suppress("LongParameterList")
+    private suspend fun handleUploadResult(
+        config: BackupConfigEntity,
+        task: UploadTask,
+        remoteName: String,
+        runId: String,
+        uploadResult: BinaryResult<CloudFile, Exception>,
+        summary: RunSummary,
+    ) {
+        when (uploadResult) {
+            is SuccessResult -> commitSuccess(config, task, uploadResult.value, remoteName, summary)
+            is ErrorResult -> if (uploadResult.error is CloudNetworkUnavailableException) {
+                markNetworkUnavailable(task, summary)
+            } else {
                 log.warning(
                     "Upload failed for ${FileNameRedactor.redactPath(task.relativePath)}: ${uploadResult.error}"
                 )
                 summary.filesFailed++
                 emitMessage(config, runId, MessageSeverity.WARNING, MessageType.UPLOAD_FAILED)
-                return
             }
-            val cloudFile = (uploadResult as SuccessResult).value
-            commitSuccess(config, task, cloudFile, remoteName, summary)
-        } finally {
-            staging?.file?.delete()
         }
     }
 

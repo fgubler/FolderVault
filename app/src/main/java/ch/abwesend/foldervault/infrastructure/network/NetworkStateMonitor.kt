@@ -54,7 +54,12 @@ class NetworkStateMonitor(private val context: Context) {
         return capabilities?.satisfies(policy) ?: false
     }
 
-    /** Mirrors the criteria of WorkManager's CONNECTED / UNMETERED constraints. */
+    /**
+     * Mirrors the criteria of WorkManager's CONNECTED / UNMETERED constraints, *plus* a validation
+     * requirement WorkManager itself does not apply — see the comment on the check below for why a
+     * mid-run observer needs the stricter test than the one-shot
+     * [AndroidNetworkConnectivityChecker] used by the UI.
+     */
     private fun NetworkCapabilities.satisfies(policy: NetworkPolicy): Boolean =
         hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
             // VALIDATED, not just INTERNET: a just-associated network (e.g. Wi-Fi right after the

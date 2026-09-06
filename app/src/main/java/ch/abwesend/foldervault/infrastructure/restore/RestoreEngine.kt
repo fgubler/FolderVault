@@ -172,6 +172,14 @@ class RestoreEngine(
                 stopped = true
                 break
             }
+            // Nothing in this loop suspends — the whole body is blocking stream I/O — so without
+            // an explicit liveness check cancellation could not stop it at all: a host that went
+            // away (the foreground service destroyed, the OS time limit drained) would leave the
+            // run writing decrypted files into the output tree for as long as the process lived,
+            // and `withContext` would then discard the finished result and report the completed
+            // restore as interrupted. The cooperative `shouldStop` above stays the *normal* way
+            // to end a run early (it can report partial counts); this is the hard backstop.
+            ensureActive()
             onProgress(RestoreProgress(total, index, counters.failed, entry.documentFile.name ?: ""))
             restoreEntry(entry, outputTree, collisionPolicy, password, keyCache, counters)
         }

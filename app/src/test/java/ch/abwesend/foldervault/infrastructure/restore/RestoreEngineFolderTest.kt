@@ -18,7 +18,10 @@ import ch.abwesend.foldervault.domain.restore.RestoreProgress
 import ch.abwesend.foldervault.domain.restore.RestoreResult
 import ch.abwesend.foldervault.domain.restore.RestoreRunControl
 import ch.abwesend.foldervault.infrastructure.crypto.Fvc1Cipher
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.Before
@@ -184,6 +187,32 @@ class RestoreEngineFolderTest {
         val result = decryptAll(onProgress = { runControl.requestStop() })
 
         assertEquals(RestoreResult.Cancelled(decrypted = 1, copied = 0, skipped = 0, failed = 0), result)
+        assertEquals(1, FolderSafProvider.documents.values.count { it.parentId == OUTPUT_ROOT })
+    }
+
+    @Test
+    fun `a cancelled run stops at the next file instead of restoring the rest`() = runTest {
+        // Nothing in decryptAll's loop suspends — the body is blocking stream I/O — so without an
+        // explicit liveness check cancellation could not stop it at all. The run would restore
+        // every remaining file (unprotected, after its foreground host was already gone) and only
+        // then have its result discarded by withContext, so a *completed* restore was reported as
+        // interrupted. Cooperative stopping stays the normal path; this is the hard backstop.
+        addSourceFile("first.txt.crypt", encryptedBlob("first body"))
+        addSourceFile("second.txt.crypt", encryptedBlob("second body"))
+        addSourceFile("third.txt.crypt", encryptedBlob("third body"))
+
+        var cancellation: CancellationException? = null
+        try {
+            coroutineScope {
+                // Cancels from the first file's progress callback, i.e. after that iteration's
+                // liveness check — so exactly one file is restored before the loop aborts.
+                decryptAll(onProgress = { this@coroutineScope.cancel() })
+            }
+        } catch (e: CancellationException) {
+            cancellation = e
+        }
+
+        assertNotNull(cancellation)
         assertEquals(1, FolderSafProvider.documents.values.count { it.parentId == OUTPUT_ROOT })
     }
 

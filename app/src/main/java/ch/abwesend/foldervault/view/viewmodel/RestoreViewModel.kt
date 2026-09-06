@@ -2,6 +2,7 @@ package ch.abwesend.foldervault.view.viewmodel
 
 import androidx.lifecycle.SavedStateHandle
 import ch.abwesend.foldervault.domain.crypto.Fvc1Header
+import ch.abwesend.foldervault.domain.logging.logger
 import ch.abwesend.foldervault.domain.restore.IRestoreEngine
 import ch.abwesend.foldervault.domain.restore.IRestoreRunCoordinator
 import ch.abwesend.foldervault.domain.restore.RestoreCollisionPolicy
@@ -77,25 +78,33 @@ class RestoreViewModel(
     private fun observeFolderRestore() {
         safeLaunch {
             coordinator.state.collect { runState ->
-                _uiState.update { current ->
-                    // Only the folder flow is coordinator-hosted. Without this guard a folder run
-                    // still going in the service would drive the single-file screen's state — and
-                    // its result would land on top of the single-file one.
-                    when {
-                        current.mode != RestoreMode.WHOLE_FOLDER -> current
-                        runState is RestoreRunState.Running -> current.copy(
-                            state = RestoreState.Running,
-                            progress = runState.progress,
-                            restoreHostedInForegroundService = runState.hostedInForegroundService,
-                        )
-                        runState is RestoreRunState.Finished -> current.copy(
-                            state = RestoreState.Done(runState.result),
-                        )
-                        else -> current
-                    }
-                }
+                _uiState.update { current -> current.withRunState(runState) }
             }
         }
+    }
+
+    /**
+     * Projects [runState] onto this UI state. Only the folder flow is coordinator-hosted: without
+     * that guard a folder run still going in the service would drive the single-file screen's
+     * state — and its result would land on top of the single-file one.
+     *
+     * Applied on every coordinator emission, but deliberately also *pulled* wherever the UI state
+     * is rebuilt from scratch ([setMode]) or turns out to be out of sync ([startRestore]). A
+     * `StateFlow` re-emits only on change, and a folder run spends its opening minutes — the source
+     * walk and the password probing — without publishing any progress at all. A screen rebuilt in
+     * that window would otherwise show an empty, fully enabled form while a restore is in flight,
+     * and the running restore's progress and counters would arrive later as though they described
+     * whatever selection had been made in the meantime.
+     */
+    private fun RestoreUiState.withRunState(runState: RestoreRunState): RestoreUiState = when {
+        mode != RestoreMode.WHOLE_FOLDER -> this
+        runState is RestoreRunState.Running -> copy(
+            state = RestoreState.Running,
+            progress = runState.progress,
+            restoreHostedInForegroundService = runState.hostedInForegroundService,
+        )
+        runState is RestoreRunState.Finished -> copy(state = RestoreState.Done(runState.result))
+        else -> this
     }
 
     /** Rebuilds the saved-state-backed part of the UI state after process death. */
@@ -131,7 +140,10 @@ class RestoreViewModel(
             coordinator.acknowledgeResult()
             savedStateHandle[KEY_MODE] = mode.name
             persistSingleFileSelection(uri = null, name = null)
-            _uiState.value = RestoreUiState(mode = mode)
+            // Pulled rather than started blank: switching back to the folder mode while a run is
+            // still in flight has to re-attach the screen to that run, and the coordinator will not
+            // re-emit for a mode change of ours.
+            _uiState.value = RestoreUiState(mode = mode).withRunState(coordinator.state.value)
         }
     }
 
@@ -206,13 +218,18 @@ class RestoreViewModel(
      * coordinator's job, deliberately not this ViewModel's: a run tied to the screen's lifetime
      * would be lost the moment the user navigates away, which is the very problem the foreground
      * service exists to solve.
+     *
+     * A refusal — the coordinator already has a run staged or running — re-syncs the screen to that
+     * run instead of being discarded. Swallowing it left the user in front of a form whose button
+     * did nothing, and then handed them the *other* run's progress and counters as if they belonged
+     * to the source and output folders they had just picked.
      */
     fun startRestore(password: String) {
         val snapshot = _uiState.value
         val src = snapshot.sourceUri
         val out = snapshot.outputUri
         if (src != null && out != null) {
-            coordinator.start(
+            val accepted = coordinator.start(
                 RestoreRequest(
                     sourceUri = src,
                     outputUri = out,
@@ -220,6 +237,10 @@ class RestoreViewModel(
                     collisionPolicy = snapshot.collisionPolicy,
                 ),
             )
+            if (!accepted) {
+                logger.warning("A restore is already in flight — showing that run instead of starting a new one")
+                _uiState.update { it.withRunState(coordinator.state.value) }
+            }
         }
     }
 

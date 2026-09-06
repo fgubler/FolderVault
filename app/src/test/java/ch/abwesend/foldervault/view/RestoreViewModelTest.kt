@@ -323,6 +323,45 @@ class RestoreViewModelTest : StringSpec({
         state.result shouldBe RestoreResult.Success(0, 0, 0, 0)
     }
 
+    "switching away from the folder mode and back re-attaches to the run in flight (review N13)" {
+        // A StateFlow re-emits only on change, and a folder run publishes no progress at all while
+        // it walks the source tree and probes the password — minutes, on a large backup. Without
+        // pulling the coordinator's state on the way back, the screen showed an empty, fully
+        // enabled form while the restore was running.
+        val gate = CompletableDeferred<Unit>()
+        val engine = FakeRestoreEngine(gate = gate)
+        val viewModel = restoreViewModel(engine)
+        viewModel.setSourceFolder("content://src")
+        viewModel.setOutputFolder("content://out")
+        viewModel.startRestore("secret")
+
+        viewModel.setMode(RestoreMode.SINGLE_FILE)
+        viewModel.setMode(RestoreMode.WHOLE_FOLDER)
+
+        viewModel.uiState.value.state shouldBe RestoreState.Running
+        gate.complete(Unit)
+    }
+
+    "a second start while one is running starts no second run and keeps showing the first (review N13)" {
+        // `coordinator.start` refuses while a run is staged or running, and `startRestore` now
+        // re-syncs the screen to that run instead of discarding the `false`. Since the `setMode`
+        // fix above closed the only UI path that could reach the refusal with an out-of-sync
+        // screen, what is left to pin here is the invariant itself: a refused start never starts a
+        // second engine run, and never leaves the screen off the run that is actually in flight.
+        val gate = CompletableDeferred<Unit>()
+        val engine = FakeRestoreEngine(gate = gate)
+        val viewModel = restoreViewModel(engine)
+        viewModel.setSourceFolder("content://src")
+        viewModel.setOutputFolder("content://out")
+        viewModel.startRestore("secret")
+
+        viewModel.startRestore("secret")
+
+        viewModel.uiState.value.state shouldBe RestoreState.Running
+        engine.decryptAllCallCount shouldBe 1
+        gate.complete(Unit)
+    }
+
     "a successful single-file restore clears the password from the state (review S3)" {
         val viewModel = restoreViewModel(FakeRestoreEngine(RestoreResult.Success(1, 0, 0, 0)))
         viewModel.setSourceFile("content://src", "report.pdf.crypt")

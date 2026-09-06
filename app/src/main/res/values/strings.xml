@@ -91,6 +91,7 @@
     <string name="status_up_to_date">Up to date</string>
     <string name="status_completed_with_warnings">Completed with warnings</string>
     <string name="status_failed">Failed</string>
+    <string name="status_waiting_for_network">Waiting for a network connection</string>
     <string name="status_cancelled">Cancelled</string>
 
     <!-- MessageSeverity display names -->
@@ -371,6 +372,7 @@
     <string name="restore_failure_invalid_encrypted_file">The file is not a valid encrypted backup file</string>
     <string name="restore_failure_decryption">Failed to read or decrypt the file</string>
     <string name="restore_failure_copy">Failed to copy the file</string>
+    <string name="restore_failure_same_as_source">The destination is the encrypted file itself. Please choose a different name or folder, so the backup file is not overwritten.</string>
     <string name="restore_failure_interrupted">The restore was interrupted before it finished</string>
     <string name="button_restore_start_over">Start over (clear selection)</string>
     <string name="dialog_restoring_title">Restoring…</string>

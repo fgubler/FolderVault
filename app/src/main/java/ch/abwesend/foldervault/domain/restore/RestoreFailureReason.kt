@@ -19,6 +19,12 @@ enum class RestoreFailureReason(@StringRes val messageResId: Int) {
     COPY_FAILED(R.string.restore_failure_copy),
 
     /**
+     * The "Save as" picker returned the source document itself. Writing into it would truncate
+     * the encrypted backup that is being read — an unrecoverable loss — so the restore refuses.
+     */
+    OUTPUT_SAME_AS_SOURCE(R.string.restore_failure_same_as_source),
+
+    /**
      * The host executing the run went away mid-restore — the foreground service was destroyed, or
      * the process is shutting down. Distinct from a user stop, which reports partial counts.
      */

@@ -125,6 +125,48 @@ class RestoreEngineSingleFileTest {
     }
 
     @Test
+    fun `restoring a file onto itself is refused before the source can be truncated`() = runTest {
+        // The "Save as" picker can return the source document itself. Opening it with mode "wt"
+        // would truncate the only copy of the encrypted backup while it is still being read —
+        // unrecoverable, so the run must refuse before touching either stream.
+        val source = addSource("report.pdf.crypt", encryptedBlob(PASSWORD))
+        val sourceContent = sourceBytes(source)
+
+        val result = engine.decryptSingleFile(source.toString(), source.toString(), PASSWORD)
+
+        assertEquals(RestoreResult.Failure(RestoreFailureReason.OUTPUT_SAME_AS_SOURCE), result)
+        assertContentEquals(sourceContent, sourceBytes(source), "the backup file must be untouched")
+    }
+
+    @Test
+    fun `a source that cannot be opened says so instead of blaming the copy`() = runTest {
+        // fromSingleUri never returns null above API 19, so the null check that was meant to catch
+        // this was unreachable: a revoked grant or an offline provider used to fail later, at
+        // stream-open time, and surfaced as "Failed to copy the file".
+        val source = addUnreadableSource("report.pdf")
+        val output = addOutput()
+
+        val result = engine.decryptSingleFile(source.toString(), output.toString(), PASSWORD)
+
+        assertEquals(RestoreResult.Failure(RestoreFailureReason.SOURCE_FILE_NOT_ACCESSIBLE), result)
+    }
+
+    @Test
+    fun `an unreadable source leaves a pre-existing overwrite target intact`() = runTest {
+        // The reason the classification happens before anything is opened: the picked output may
+        // be an existing file the user chose to save over, and it must not be truncated for a
+        // restore that never even got to read its source.
+        val source = addUnreadableSource("report.pdf.crypt")
+        val existing = "precious pre-existing content".toByteArray()
+        val output = addOutput(existing)
+
+        val result = engine.decryptSingleFile(source.toString(), output.toString(), PASSWORD)
+
+        assertEquals(RestoreResult.Failure(RestoreFailureReason.SOURCE_FILE_NOT_ACCESSIBLE), result)
+        assertContentEquals(existing, outputBytes())
+    }
+
+    @Test
     fun `a plain file without the crypt suffix is copied verbatim`() = runTest {
         val plainBytes = "just some plain text".toByteArray()
         val source = addSource("notes.txt", plainBytes)
@@ -315,6 +357,17 @@ class RestoreEngineSingleFileTest {
     }
 
     /**
+     * A source document the provider knows about but refuses to open — what a revoked SAF grant or
+     * an offline cloud provider looks like. Registered without a backing file, which makes the fake
+     * provider's `openFile` throw `FileNotFoundException`, exactly as the real one does.
+     */
+    private fun addUnreadableSource(displayName: String): Uri {
+        val id = "src-${FakeSafProvider.idSequence++}"
+        FakeSafProvider.documents[id] = TestDocument(id, displayName = displayName, file = null)
+        return DocumentsContract.buildDocumentUri(AUTHORITY, id)
+    }
+
+    /**
      * Registers the destination document the "Save as" picker returns, backed by a real temp file.
      * Empty by default (what the picker creates for a fresh name); pass [content] to model the
      * document of an existing file the user confirmed overwriting.
@@ -327,6 +380,14 @@ class RestoreEngineSingleFileTest {
     }
 
     private fun outputExists(): Boolean = FakeSafProvider.documents[OUTPUT_ID]?.file?.exists() == true
+
+    /** Current bytes of a source document, to prove a refused restore left it alone. */
+    private fun sourceBytes(uri: Uri): ByteArray {
+        val documentId = DocumentsContract.getDocumentId(uri)
+        val document = FakeSafProvider.documents[documentId]
+        assertNotNull(document, "expected the source document to still exist")
+        return document.file!!.readBytes()
+    }
 
     private fun outputBytes(): ByteArray {
         val document = FakeSafProvider.documents[OUTPUT_ID]

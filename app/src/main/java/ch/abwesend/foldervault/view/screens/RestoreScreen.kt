@@ -124,6 +124,9 @@ fun RestoreScreen(
  */
 private const val SAVE_AS_MIME_TYPE = "*/*"
 
+/** The source picker accepts any file: a backup may hold encrypted and plain files alike. */
+private const val SOURCE_FILE_MIME_TYPE = "*/*"
+
 /** Bundles the four system-picker triggers the restore screen needs. */
 private class RestoreLaunchActions(
     val pickSourceFolder: () -> Unit,
@@ -188,12 +191,19 @@ private fun rememberRestoreLaunchActions(
         }
     }
 
-    return RestoreLaunchActions(
-        pickSourceFolder = { sourceLauncher.launch(null) },
-        pickOutputFolder = { outputLauncher.launch(null) },
-        pickSourceFile = { sourceFileLauncher.launch(arrayOf("*/*")) },
-        decryptAndSave = { saveAsLauncher.launch(viewModel.uiState.value.suggestedOutputName.orEmpty()) },
-    )
+    // Remembered so the four lambdas keep their identity across recompositions — without this they
+    // were rebuilt on every `uiState` change, making the callbacks handed to `RestoreContent` a new
+    // object every time and defeating its skippability (and contradicting the `remember` prefix in
+    // this function's own name). Safe to hold on to: `decryptAndSave` reads the suggested name from
+    // the ViewModel lazily, when it is invoked, so nothing stale is captured here.
+    return remember(viewModel, sourceLauncher, outputLauncher, sourceFileLauncher, saveAsLauncher) {
+        RestoreLaunchActions(
+            pickSourceFolder = { sourceLauncher.launch(null) },
+            pickOutputFolder = { outputLauncher.launch(null) },
+            pickSourceFile = { sourceFileLauncher.launch(arrayOf(SOURCE_FILE_MIME_TYPE)) },
+            decryptAndSave = { saveAsLauncher.launch(viewModel.uiState.value.suggestedOutputName.orEmpty()) },
+        )
+    }
 }
 
 @Suppress("LongParameterList")

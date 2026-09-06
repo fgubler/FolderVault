@@ -93,7 +93,7 @@ sealed class RunResult {
  */
 internal fun resolveRunStatus(summary: RunSummary): BackupRunStatus = when {
     summary.authLost -> BackupRunStatus.FAILED
-    summary.networkUnavailable -> BackupRunStatus.FAILED
+    summary.networkUnavailable -> BackupRunStatus.WAITING_FOR_NETWORK
     summary.sourceFolderInaccessible -> BackupRunStatus.FAILED
     summary.hitTimeBudget -> BackupRunStatus.INITIAL_SYNC_IN_PROGRESS
     summary.quotaExceeded && summary.filesUploaded == 0 -> BackupRunStatus.FAILED
@@ -296,8 +296,13 @@ class BackupRunner internal constructor(
                 runId, stagingDir, folderCache, derivedKey, backupSalt, summary, control,
             )
             val retention = RetentionManager(uploadedFileIndexDao, cloudProvider)
+            // `networkUnavailable` included for the same reason as the guard below: with no usable
+            // connection every cloud delete retention issues is doomed, and each failure marks its
+            // index row pending deletion while the reaper that would clear those markers is itself
+            // skipped — a lot of retry budget spent inside the foreground service to achieve
+            // nothing. Retention is not time-critical; the next connected run applies it.
             val cleanRun = !summary.authLost && !summary.quotaExceeded &&
-                !summary.hitTimeBudget && !summary.sourceFolderInaccessible
+                !summary.hitTimeBudget && !summary.sourceFolderInaccessible && !summary.networkUnavailable
             if (cleanRun) {
                 retention.applyRetention(config)
             }

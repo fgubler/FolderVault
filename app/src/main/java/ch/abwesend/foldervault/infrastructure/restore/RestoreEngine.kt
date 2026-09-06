@@ -116,6 +116,18 @@ class RestoreEngine(
 
     private data class SourceFileEntry(val relativePath: String, val documentFile: DocumentFile)
 
+    /** Outcome of reading a picked source's FVC1 header — see [probeSourceHeader]. */
+    private sealed interface HeaderProbe {
+        /** The file is FVC1-encrypted and its header parsed. */
+        data class Parsed(val header: Fvc1Header) : HeaderProbe
+
+        /** The file opened fine but carries no valid FVC1 header: a plain file, or a damaged one. */
+        object NotEncrypted : HeaderProbe
+
+        /** The file could not be opened at all — a revoked grant, a provider that is gone. */
+        object Unreadable : HeaderProbe
+    }
+
     /** Outcome of resolving an output file: a deliberate skip, an unexpected failure, or a target. */
     private sealed interface OutputResolution {
         /** [directory] is carried along so a failed write can un-index [file] from the tree cache. */
@@ -158,8 +170,12 @@ class RestoreEngine(
         // normally has a single salt, but merged backups may mix several (BUG-6).
         val keyCache = mutableMapOf<String, SecretKey>()
 
-        val invalidPassword = !verifyProbePassword(files, password, keyCache)
-        if (invalidPassword) return@withContext RestoreResult.InvalidPassword
+        val mayProceed = verifyProbePassword(files, password, keyCache, runControl) { ensureActive() }
+        // Order matters: a stop that landed *during* probing leaves the outcomes incomplete, and
+        // an incomplete set can read as "every usable probe failed" — reporting a wrong password
+        // for a run the user simply cancelled. So the stop is answered first.
+        if (runControl.shouldStop()) return@withContext RestoreResult.Cancelled(0, 0, 0, 0)
+        if (!mayProceed) return@withContext RestoreResult.InvalidPassword
 
         // One listing per output directory instead of a full listing per restored file.
         val outputTree = OutputTreeCache(outputRoot)
@@ -230,8 +246,10 @@ class RestoreEngine(
                 if (success) {
                     if (isCrypt) counters.decrypted++ else counters.copied++
                 } else {
+                    // Name read before the delete — afterwards the provider reports none.
+                    val outputName = outputTree.nameOf(outputFile)
                     deletePartialOutput(outputFile)
-                    outputTree.forgetChild(resolution.directory, outputFile)
+                    outputTree.forgetChild(resolution.directory, outputName)
                     counters.failed++
                 }
             }
@@ -242,12 +260,14 @@ class RestoreEngine(
      * Restores one picked file into the destination document [outputFileUri] — the document the
      * system "Save as" file picker created (or handed back for an overwrite). Reuses the same
      * crypto path as [decryptAll]'s loop body for a single item. Whether to decrypt or copy is
-     * decided in two stages: first the FVC1 header is parsed — a file whose header parses is
-     * decrypted regardless of its name, since a user-picked SAF provider may report a display name
-     * without the `.crypt` suffix (or none at all). Only when the header does not parse (for any
-     * reason) does the `.crypt` filename suffix decide: a suffixed file is still treated as
-     * encrypted, so its unreadable header surfaces as a clear failure instead of copying encrypted
-     * bytes verbatim; anything else is copied. Only a GCM tag failure is reported as
+     * decided in two stages: first the FVC1 header is read ([probeSourceHeader]) — a file whose
+     * header parses is decrypted regardless of its name, since a user-picked SAF provider may
+     * report a display name without the `.crypt` suffix (or none at all). Only when the file opens
+     * but carries no valid header does the `.crypt` filename suffix decide: a suffixed file is
+     * still treated as encrypted, so its unreadable header surfaces as a clear failure instead of
+     * copying encrypted bytes verbatim; anything else is copied. A source that cannot be *opened*
+     * at all is a third case, reported as [RestoreFailureReason.SOURCE_FILE_NOT_ACCESSIBLE] before
+     * either stream is touched. Only a GCM tag failure is reported as
      * [RestoreResult.InvalidPassword] — on a lone file that is overwhelmingly a wrong password,
      * and we cannot tell it apart from tampering without the rest of the backup to probe against.
      * Unreadable headers, corrupt files and stream failures surface as [RestoreResult.Failure]
@@ -267,6 +287,19 @@ class RestoreEngine(
         outputFileUri: String,
         password: String,
     ): RestoreResult {
+        // The "Save as" picker can hand back the *source* document itself — same folder, the
+        // source's own name typed back in and the overwrite confirmed. Restoring into it would
+        // open the source for reading and then truncate that very document with mode "wt",
+        // destroying the only copy of the encrypted backup, which no password can undo. Checked
+        // before anything is resolved or opened, and returned straight away so the usual output
+        // cleanup cannot delete the source either. Two *different* uris addressing the same
+        // document are still not caught — SAF offers no way to tell — but this is the case a user
+        // can actually stumble into.
+        if (sourceFileUri == outputFileUri) {
+            logger.warning("Refusing a single-file restore whose output is its own source")
+            return RestoreResult.Failure(RestoreFailureReason.OUTPUT_SAME_AS_SOURCE)
+        }
+
         var outputWritten = false
         var cleanedUp = false
         val markOutputWritten = { outputWritten = true }
@@ -281,11 +314,21 @@ class RestoreEngine(
                     output == null -> RestoreResult.Failure(RestoreFailureReason.OUTPUT_FILE_NOT_ACCESSIBLE)
                     else -> {
                         val wrapInput = singleFileCancellationWrapper(source.length()) { ensureActive() }
-                        val header = readHeader(source, warnOnFailure = false)
-                        if (header != null || source.name.orEmpty().endsWith(CRYPT_SUFFIX)) {
-                            decryptSingle(source, output, password, header, markOutputWritten, wrapInput)
-                        } else {
-                            copySingle(source, output, markOutputWritten, wrapInput)
+                        when (val probe = probeSourceHeader(source)) {
+                            // Reported before either stream is opened, so an unreadable source
+                            // cannot masquerade as a copy/decrypt failure — and cannot cost the
+                            // user a picked overwrite target either, since nothing was truncated.
+                            is HeaderProbe.Unreadable ->
+                                RestoreResult.Failure(RestoreFailureReason.SOURCE_FILE_NOT_ACCESSIBLE)
+                            is HeaderProbe.Parsed ->
+                                decryptSingle(source, output, password, probe.header, markOutputWritten, wrapInput)
+                            is HeaderProbe.NotEncrypted -> if (source.name.orEmpty().endsWith(CRYPT_SUFFIX)) {
+                                // Suffixed but unreadable header: surface it as a clear decryption
+                                // failure rather than copying encrypted bytes out verbatim.
+                                decryptSingle(source, output, password, null, markOutputWritten, wrapInput)
+                            } else {
+                                copySingle(source, output, markOutputWritten, wrapInput)
+                            }
                         }
                     }
                 }
@@ -418,19 +461,32 @@ class RestoreEngine(
      * incomplete download) from failing the whole restore as "wrong password": the run is refused
      * only when every usable probe failed its tag check. See [PasswordProbe.shouldProceed] for the
      * full decision table. Returns `true` when there is nothing encrypted to verify.
+     *
+     * Stopping is honored between probes, via [runControl] for a user stop and [checkCancelled]
+     * for a dead host — this phase is not free: every probe decrypts a whole file to reach its GCM
+     * tag, and the first one also pays a ~0.5–2 s PBKDF2 derivation, so on a folder of large files
+     * it is the minute-plus the UI labels "Verifying password…". Without these checks the Cancel
+     * button did nothing at all until it was over. The caller distinguishes "stopped" from
+     * "wrong password" by asking [runControl] again, since a half-finished probe set must never be
+     * read as a verdict.
      */
     private fun verifyProbePassword(
         files: List<SourceFileEntry>,
         password: String,
         cache: MutableMap<String, SecretKey>,
+        runControl: RestoreRunControl,
+        checkCancelled: () -> Unit,
     ): Boolean {
         val encrypted = files.filter { it.relativePath.endsWith(CRYPT_SUFFIX) }
         val probes = PasswordProbe.selectCandidates(encrypted) { it.documentFile.length() }
         val outcomes = mutableListOf<ProbeOutcome>()
         for (probe in probes) {
+            // A proven-correct password makes the remaining probes pointless work, and a stop
+            // request makes all of them pointless.
+            val done = outcomes.lastOrNull() == ProbeOutcome.CORRECT_PASSWORD || runControl.shouldStop()
+            if (done) break
+            checkCancelled()
             outcomes.add(probeOutcome(probe, password, cache))
-            // A proven-correct password makes the remaining probes pointless work.
-            if (outcomes.last() == ProbeOutcome.CORRECT_PASSWORD) break
         }
         return PasswordProbe.shouldProceed(outcomes)
     }
@@ -479,27 +535,44 @@ class RestoreEngine(
     }
 
     /**
-     * Parses the FVC1 header of [file], returning `null` on any failure. Pass
-     * `warnOnFailure = false` where a non-parsing file is an expected outcome (the single-file
-     * decrypt-vs-copy probe) rather than a broken backup entry.
+     * Reads the source's FVC1 header and classifies what happened, so the single-file flow can
+     * tell a file it *cannot open* apart from one that simply is not encrypted.
+     *
+     * The distinction matters because the two deserve different messages and different moments.
+     * `DocumentFile.fromSingleUri` never returns null above API 19, so the null check that was
+     * meant to catch an inaccessible source was unreachable; a genuinely unopenable source — a
+     * grant the user revoked, a cloud provider that is offline — instead failed later, at
+     * stream-open time inside the copy or decrypt, and was reported as "Failed to copy the file"
+     * or "Failed to read or decrypt the file". Classifying here reports "Cannot access the
+     * selected file" instead, and does it *before* the output document is opened and truncated.
+     *
+     * Only a failure to *open* counts as [HeaderProbe.Unreadable]. A stream that opens but holds
+     * no valid header is [HeaderProbe.NotEncrypted] — that is an ordinary plain file (or a damaged
+     * one), and the caller's `.crypt` suffix check decides which.
      */
-    private fun readHeader(file: DocumentFile, warnOnFailure: Boolean = true): Fvc1Header? =
-        try {
-            context.contentResolver.openInputStream(file.uri)?.use { Fvc1Header.readFrom(it) }
+    private fun probeSourceHeader(file: DocumentFile): HeaderProbe {
+        val stream = try {
+            context.contentResolver.openInputStream(file.uri)
         } catch (e: Exception) {
             e.rethrowCancellation()
-            if (warnOnFailure) {
-                logger.warning("Failed to read FVC1 header for ${FileNameRedactor.redact(file.name.orEmpty())}", e)
-            } else {
+            logger.warning("Cannot open ${FileNameRedactor.redact(file.name.orEmpty())} for reading", e)
+            null
+        }
+        return stream?.use { input ->
+            try {
+                HeaderProbe.Parsed(Fvc1Header.readFrom(input))
+            } catch (e: Exception) {
+                e.rethrowCancellation()
                 // The exception message is uncontrolled and may embed the content URI (file name
                 // included), so it goes through redactPathsIn before reaching the breadcrumb sinks.
                 logger.info(
                     "No parseable FVC1 header in ${FileNameRedactor.redact(file.name.orEmpty())}: " +
                         FileNameRedactor.redactPathsIn(e.message.orEmpty()),
                 )
+                HeaderProbe.NotEncrypted
             }
-            null
-        }
+        } ?: HeaderProbe.Unreadable
+    }
 
     /**
      * Resolves the concrete output [DocumentFile] for a source entry, applying [policy] on
@@ -522,11 +595,15 @@ class RestoreEngine(
         return when {
             existing == null -> createOutput(outputTree, dir, fileName)
             policy == RestoreCollisionPolicy.SKIP -> OutputResolution.Skip
-            policy == RestoreCollisionPolicy.OVERWRITE -> if (existing.delete()) {
-                outputTree.forgetChild(dir, existing)
-                createOutput(outputTree, dir, fileName)
-            } else {
-                OutputResolution.Failed
+            policy == RestoreCollisionPolicy.OVERWRITE -> {
+                // Name read before the delete — afterwards the provider reports none.
+                val existingName = outputTree.nameOf(existing)
+                if (existing.delete()) {
+                    outputTree.forgetChild(dir, existingName)
+                    createOutput(outputTree, dir, fileName)
+                } else {
+                    OutputResolution.Failed
+                }
             }
             else -> resolveWithSuffix(outputTree, dir, fileName)
         }

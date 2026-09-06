@@ -20,22 +20,40 @@ class FakeDocumentFile(
     var listCallCount = 0
     var deleted = false
 
+    /** The parent this document was created under, so [delete] can detach it like a real one. */
+    private var parent: FakeDocumentFile? = null
+
     override fun createFile(mimeType: String, displayName: String): DocumentFile? =
-        FakeDocumentFile(displayName).also { children.add(it) }
+        FakeDocumentFile(displayName).also { adopt(it) }
 
     override fun createDirectory(displayName: String): DocumentFile? =
-        FakeDocumentFile(displayName, directory = true).also { children.add(it) }
+        FakeDocumentFile(displayName, directory = true).also { adopt(it) }
+
+    private fun adopt(child: FakeDocumentFile) {
+        child.parent = this
+        children.add(child)
+    }
 
     override fun listFiles(): Array<DocumentFile> {
         listCallCount++
         return children.toTypedArray()
     }
 
-    override fun getName(): String = displayName
+    /**
+     * `null` once deleted, like the real `TreeDocumentFile`: `getName()` is not a cached field but
+     * a fresh query against the provider, which has nothing to answer for a document that is gone.
+     * The fake used to keep returning the name, which hid a bug where `OutputTreeCache.forgetChild`
+     * read the name *after* its caller had deleted the document and so un-indexed nothing.
+     */
+    override fun getName(): String? = if (deleted) null else displayName
+
     override fun isDirectory(): Boolean = directory
     override fun isFile(): Boolean = !directory
+
+    /** Detaches from the parent as a real delete does, so a later listing no longer shows it. */
     override fun delete(): Boolean {
         deleted = true
+        parent?.children?.remove(this)
         return true
     }
 

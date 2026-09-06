@@ -378,6 +378,8 @@
     <string name="button_restore_start_over">Start over (clear selection)</string>
     <string name="dialog_restoring_title">Restoring…</string>
     <string name="restore_verifying_password">Verifying password…</string>
+    <string name="button_restore_continue_in_background">Continue in background</string>
+    <string name="button_restore_leave_screen">Leave this screen</string>
     <string name="restore_keep_app_open">Please keep the app open until the restore has finished — leaving it may interrupt the restore.</string>
     <string name="restore_decrypting_progress">Decrypting %1$d / %2$d files</string>
     <string name="restore_failed_count">%1$d failed</string>

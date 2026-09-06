@@ -7,6 +7,82 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-09-06 — Review round 5: the progress dialog's escape hatch, and re-attaching the screen to a run in flight
+
+Fifth review pass over `develop` vs `master` at `cbeff27` (`review/develop.md`), then the two fixes
+the user asked for: S18 and N13. Every round-4 fix (B9, B10, B11, S16, S17, N12) was re-checked
+against the committed code first and holds; no Blocking findings are open. The round also recorded
+three new nitpicks that were *not* fixed (N16 uninterruptible source walk, N17 claim flag never
+released on `runClaimed`'s early return, N18 missing notification content intent).
+
+### S18 — a running folder restore trapped the user on the restore screen
+
+`RestoreProgressDialog` was built with `onDismissRequest = {}`. A Compose `AlertDialog` defaults to
+`dismissOnBackPress = true`, so the back gesture reached that empty lambda and was then *consumed* —
+and the top bar's back arrow sits behind the modal. For the whole duration of a folder restore the
+only ways off the screen were Home and force-stopping the app.
+
+That contradicts everything else the feature is built on: `RestoreForegroundService` exists so the
+run survives the user leaving, `IRestoreRunCoordinator`'s KDoc says the run "is not tied to the
+lifetime of the screen that started it", its scope is application-scoped for the same reason, and
+`RestoreViewModelTest` already tested that a result survives the screen being left and re-entered.
+The UI was the one layer that did not let it happen.
+
+The dialog now takes `onLeaveScreen: (() -> Unit)?`, which the screen sets to its own `onBack` for
+`RestoreMode.WHOLE_FOLDER` and to `null` for `SINGLE_FILE`. It drives both `onDismissRequest` and a
+`confirmButton`, so there is a visible affordance as well as a gestural one. **The asymmetry is the
+point:** the folder run is owned by the coordinator and outlives the screen, while the single-file
+run lives on `viewModelScope` and would be cancelled mid-write — so its dialog stays blocking.
+
+The button label follows what leaving actually costs, matching the distinction the existing
+`restore_keep_app_open` warning already draws two lines below it: "Continue in background" when the
+run is service-hosted, "Leave this screen" when the service could not take it and the run only
+survives inside this process.
+
+New `RestoreProgressDialogTest` (3 Robolectric/Compose cases). Two of them were verified red against
+the pre-fix code.
+
+### N13 — a rejected "Start restore" was swallowed, and the other run's result landed on the new selection
+
+Two halves, both fixed.
+
+*The reachable half.* `observeFolderRestore`'s coordinator→UI projection only ever ran on a
+coordinator *emission*, and a `StateFlow` re-emits only on change. A folder run publishes no progress
+at all while it walks the source tree and probes the password — minutes on a large backup. `setMode`
+rebuilt the UI state blank, so switching to `SINGLE_FILE` and back in that window left an empty,
+fully enabled form on screen while a restore was running. Picking different folders and tapping
+"Start restore" was then silently refused by the coordinator, and when the *old* run reached its
+first file boundary the screen went to `Running` and finally to `Done` — presenting that run's
+counters and success message as the outcome of the selection just made. Nothing was written to the
+wrong place, but the report attributed the run to the wrong folders.
+
+The projection is now `RestoreUiState.withRunState(runState)` and is *pulled* as well as pushed:
+`setMode` rebuilds as `RestoreUiState(mode = mode).withRunState(coordinator.state.value)`.
+
+*The backstop half.* `startRestore` discarded `coordinator.start`'s `Boolean`. It now logs the
+refusal and re-syncs from the coordinator, so the screen can never sit in front of a dead button.
+
+Two new cases in `RestoreViewModelTest`. The mode round-trip one was verified red against the
+pre-fix code; the refusal one is an invariant guard rather than a reproduction, since the `setMode`
+fix removes the only UI path that reached the refusal with an out-of-sync screen.
+
+### Verification
+
+`./gradlew assembleDebug` and `./gradlew detekt` clean. `./gradlew test` → **546 tests (5 new),
+45 failures, all of them the known SQLite-on-aarch64 sandbox limit** — classified per test from the
+JUnit XML, not by suite name. Please re-run `! ./gradlew test` outside the sandbox for the 7
+SQLite-backed suites.
+
+Two sandbox notes worth keeping:
+- A `test` invocation that finds a stale `app/build/test-results/testDebugUnitTest/binary` directory
+  dies with `FileAlreadyExistsException` *without running anything*, leaving the previous run's XML
+  in place. `rm -rf app/build/test-results/testDebugUnitTest` first; never read the leftover XML as
+  the current result.
+- `cp` here produced a **zero-filled** copy of a source file (27 KB of NUL bytes), which then
+  destroyed the original when restored from. Use `git checkout --` / `git stash` for scratch
+  backups, not `cp`.
+
+
 ## 2026-09-06 — Review round 4: FGS start obligation, network-retry loop, validation flapping, restore-into-itself
 
 Fourth review pass over `develop` vs `master` (`review/develop.md`), then the fixes the user asked

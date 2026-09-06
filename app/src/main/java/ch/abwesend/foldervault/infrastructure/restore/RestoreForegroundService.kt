@@ -18,6 +18,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -76,6 +77,15 @@ class RestoreForegroundService : Service() {
 
         /** How long [onTimeout] waits for the cooperative stop before tearing the service down. */
         private const val TIMEOUT_DRAIN_MS = 4_000L
+
+        /**
+         * Shortest interval between two re-posts of the ongoing notification — see
+         * [observeProgress]. A folder restore reports progress once per *file*, so without this a
+         * backup of a few thousand small files would post a few thousand notifications, each one a
+         * binder round-trip for a counter that changes faster than it can be read.
+         * `BackupForegroundService` samples its own progress at the same rate, for the same reason.
+         */
+        private const val PROGRESS_UPDATE_INTERVAL_MS = 1_000L
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -189,7 +199,20 @@ class RestoreForegroundService : Service() {
         false
     }
 
-    /** Mirrors the coordinator's progress into the ongoing notification until the run ends. */
+    /**
+     * Mirrors the coordinator's progress into the ongoing notification until the run ends,
+     * rate-limited to one post per [PROGRESS_UPDATE_INTERVAL_MS] by the trailing delay.
+     *
+     * The delay is a *sample*, not a filter: [IRestoreRunCoordinator.state] is a `StateFlow`, so
+     * the values published while this collector sleeps are conflated away and it always wakes on
+     * the latest counts. The first value of a run is posted before the first sleep, so the
+     * notification never lags the start of the restore. Same shape, and the same reason, as
+     * `BackupForegroundService.publishProgress`.
+     *
+     * A run that ends during a sleep simply ends the collection: the collector wakes on the
+     * `Finished` state, [takeWhile] completes the flow, and the notification goes away with the
+     * service instead of being re-posted.
+     */
     private fun observeProgress() {
         scope.launch {
             coordinator.state
@@ -198,6 +221,7 @@ class RestoreForegroundService : Service() {
                     val progress = (state as? RestoreRunState.Running)?.progress
                     latestProgress = progress
                     notificationManager.updateProgressNotification(progress, stopPendingIntent())
+                    delay(PROGRESS_UPDATE_INTERVAL_MS)
                 }
         }
     }

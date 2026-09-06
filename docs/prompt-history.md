@@ -7,6 +7,73 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-09-06 — Review round 6 fixes: the coordinator gets tests, the restore notification gets a rate limit
+
+Round 6 of `/code-review` found no blockers but two Suggestions, both on the host seam the
+single-file-service commit had just widened. The user asked for both to be fixed.
+
+### S19 — `RestoreRunCoordinator` had no tests of its own
+
+`RestoreForegroundServiceTest` and `RestoreViewModelTest` both substitute a fake for the
+coordinator, so the real claim handshake, the timed takeover and the failure mapping were covered by
+nothing — while three findings of this review (a service tearing itself down without promoting, a
+stale takeover stealing the next run, an early return leaving the claim flag set) had been defects
+in exactly that logic, each found by reading rather than by a test.
+
+New `RestoreRunCoordinatorTest`: 17 Kotest cases, plain JVM (the coordinator imports nothing from
+Android), hand-written fakes for `IRestoreEngine` and `IForegroundRestoreLauncher` per the project's
+preference behind a domain seam. A `StandardTestDispatcher` turns the 5 s handover grace window into
+an `advanceTimeBy`, so the whole suite runs in ~0.2 s. What it pins:
+
+- `start` flips to `Running` **synchronously** (asserted with no time advance at all — the UI must
+  react to the tap, not to a dispatch) and refuses a second run without reaching the engine.
+- The host selection: a *refused* `startForegroundService` is taken over in-app at `currentTime == 0`,
+  a *dispatched* one is left the full grace window first, and a service that claims inside that
+  window keeps the run — the takeover cannot execute it a second time.
+- **S12's identity check.** A run that finishes inside the grace window leaves its takeover
+  coroutine sleeping; the test starts a second restore before it wakes and asserts that the service
+  dispatched for *that* run can still claim it. Verified red against a `tryClaimFor` with the
+  identity check removed — and it was the only test that failed, which is what makes it a
+  regression test rather than a coincidence.
+- **N17's release-on-early-return**, as an invariant rather than a reproduction (the handshake keeps
+  a second host out, so the race is not reachable through the UI): a `runClaimed` with nothing
+  staged must leave the coordinator claimable *and* must not invent a result for a run that never
+  existed.
+- The two ways a run can end badly: a cancelled host reports `RUN_INTERRUPTED` **and** re-throws,
+  an unexpected engine throw reports the same failure without escaping.
+- Dispatch to `decryptAll` vs `decryptSingleFile` with the right arguments, progress publishing that
+  keeps the mode and the host flag, `acknowledgeResult`'s two cases, the shared `RestoreRunControl`
+  reaching the running engine — and that its stop flag does not leak into the next run.
+- That a finished run drops its staged request, which is the observable proxy for "the password does
+  not outlive the restore".
+
+### S20 — one notification post per restored file
+
+`observeProgress` re-posted the ongoing notification on every coordinator emission, and a folder
+restore emits once per file: a few thousand small files meant a few thousand `notify()` binder
+round-trips for a counter changing faster than anyone can read it. `BackupForegroundService` had
+already solved this — its progress collector ends each iteration with
+`delay(PROGRESS_UPDATE_INTERVAL_MS)` — so the restore service now does the same, with the same
+constant and the reasoning written down.
+
+The delay is a *sample*, not a filter: `state` is a `StateFlow`, so what is published while the
+collector sleeps is conflated away and it always wakes on the latest counts. The first value is
+posted before the first sleep, so the notification never lags the start of the run; a run that ends
+during a sleep just ends the collection (`takeWhile` sees `Finished`) and the notification goes with
+the service. The single-file flow was never affected — `SingleFileChunking` already bounds it to
+~200 emissions per file.
+
+Covered by a new case in `RestoreForegroundServiceTest`: 200 per-file updates published back to
+back must produce at most two posts (the opening `null` plus one sampled), and the *last* counts
+must still arrive — a rate limit that dropped the final value would be a different bug. Verified red
+with the `delay` removed.
+
+### Not fixed here
+
+The other round-6 findings (N19–N23: a stale comment, the dialog's scrim tap, "Cancel" wording, the
+stale `latestProgress` on a reused service instance, the per-file `DocumentFile.getName()` query)
+are recorded in `review/develop.md` and left open — the ask was S19 and S20.
+
 ## 2026-09-06 — The single-file restore moves into the foreground service
 
 Follow-up the user asked for after review round 5, from a question raised there: a picked file can

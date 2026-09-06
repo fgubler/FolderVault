@@ -11,6 +11,7 @@ import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.restore.IRestoreRunCoordinator
 import ch.abwesend.foldervault.domain.restore.RestoreCollisionPolicy
 import ch.abwesend.foldervault.domain.restore.RestoreMode
+import ch.abwesend.foldervault.domain.restore.RestoreProgress
 import ch.abwesend.foldervault.domain.restore.RestoreRequest
 import ch.abwesend.foldervault.domain.restore.RestoreResult
 import ch.abwesend.foldervault.domain.restore.RestoreRunState
@@ -20,6 +21,7 @@ import io.mockk.verify
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -216,6 +218,34 @@ class RestoreForegroundServiceTest {
         assertTrue(awaitStoppedBySelf(service), "the service stops once its own run is done")
     }
 
+    @Test
+    fun `a burst of per-file progress is sampled into few notification posts`() {
+        // S20: a folder restore reports progress once per file, so an unsampled collector posts a
+        // notification per restored file — thousands of binder round-trips for a counter that
+        // changes faster than anyone can read it. The sample must be a rate limit rather than a
+        // filter, so the latest counts still arrive (the second assertion).
+        coordinator.stage()
+        coordinator.holdRunOpen()
+        val service = startedService()
+        assertTrue(coordinator.runStarted.await(10, TimeUnit.SECONDS))
+
+        repeat(FILE_BURST) { index ->
+            coordinator.publishProgress(RestoreProgress.Files(FILE_BURST, index + 1, 0, "file-$index"))
+        }
+
+        // The opening `progress = null` post plus, at most, one sampled post of the burst: the
+        // whole burst lands well inside a single sampling window.
+        verify(atMost = 2) { notificationManager.updateProgressNotification(any(), any()) }
+        verify(timeout = 5_000) {
+            notificationManager.updateProgressNotification(
+                RestoreProgress.Files(FILE_BURST, FILE_BURST, 0, "file-${FILE_BURST - 1}"),
+                any(),
+            )
+        }
+        coordinator.releaseRun()
+        assertTrue(awaitStoppedBySelf(service))
+    }
+
     private fun startedService(): RestoreForegroundService {
         val service = Robolectric.buildService(RestoreForegroundService::class.java).create().get()
         service.onStartCommand(startIntent(), 0, 1)
@@ -240,6 +270,9 @@ class RestoreForegroundServiceTest {
 
     private companion object {
         private const val SETTLE_POLL_MS = 20L
+
+        /** Files "restored" back-to-back in the sampling test — the shape of a real folder run. */
+        private const val FILE_BURST = 200
     }
 }
 
@@ -275,6 +308,13 @@ private class FakeRestoreRunCoordinator : IRestoreRunCoordinator {
             progress = null,
             hostedInForegroundService = false,
         )
+    }
+
+    /** Publishes progress into the run state the way a real engine callback would. */
+    fun publishProgress(progress: RestoreProgress) {
+        _state.update { current ->
+            if (current is RestoreRunState.Running) current.copy(progress = progress) else current
+        }
     }
 
     /** Makes [runClaimed] block until [releaseRun], simulating a long restore. */

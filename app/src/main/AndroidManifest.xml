@@ -67,9 +67,10 @@
             android:foregroundServiceType="dataSync" />
 
         <!--
-            Hosts a whole-folder restore so leaving the app cannot kill it half-way through
-            writing decrypted files. Started only from the visible restore screen, so no
-            exact-alarm trampoline is needed (unlike the backup service's background starts).
+            Hosts a restore — whole-folder or single-file — so leaving the app cannot kill it
+            half-way through writing decrypted files. Started only from the visible restore
+            screen, so no exact-alarm trampoline is needed (unlike the backup service's
+            background starts).
         -->
         <service
             android:name=".infrastructure.restore.RestoreForegroundService"

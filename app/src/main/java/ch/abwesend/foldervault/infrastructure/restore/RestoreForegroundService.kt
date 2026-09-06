@@ -23,16 +23,22 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * Hosts a whole-folder restore as a dataSync foreground service, so leaving the app cannot have
- * the run killed half-way through writing decrypted files.
+ * Hosts a restore as a dataSync foreground service, so leaving the app cannot have the run killed
+ * half-way through writing decrypted files.
+ *
+ * Hosts *either* flow, and needs to know which only in as much as the notification renders their
+ * progress differently: a whole-folder restore and a single picked file are the same kind of run
+ * from here — claim it, promote, execute, stand down. A single file earns the same protection
+ * because it can be just as large (a video, a disk image), and while that flow ran on
+ * `viewModelScope` merely navigating away cancelled it and deleted whatever had been decrypted.
  *
  * Deliberately *not* a second run kind inside `BackupForegroundService`. That service is built
  * around backup configs — a per-config `BackupRunner` lock, `ForegroundRunState` keyed by config
  * id, `BackupRunControl` time budgets, a multi-config queue and WorkManager continuation handover.
  * A restore has none of those, and crucially no background continuation: it depends on
- * session-scoped picked tree uris and a password held only in memory, so a worker could never
- * resume it. Sharing the class would mean branching on run kind in the app's most safety-critical
- * service for no shared logic.
+ * session-scoped picked uris and a password held only in memory, so a worker could never resume
+ * it. Sharing the class would mean branching on run kind in the app's most safety-critical service
+ * for no shared logic.
  *
  * What the two services *do* share is Android 15's cumulative dataSync time budget, so a
  * `startForeground` here can legitimately be refused when backups have used it up. The start is
@@ -203,12 +209,14 @@ class RestoreForegroundService : Service() {
      * this and the service must stop itself within seconds — otherwise the app is killed with
      * `ForegroundServiceDidNotStopInTimeException`.
      *
-     * Stopping goes through the cooperative [IRestoreRunCoordinator.requestStop] so the run ends
-     * at the next file boundary and still reports its partial counts as
-     * [ch.abwesend.foldervault.domain.restore.RestoreResult.Cancelled]. A run that cannot drain in
-     * [TIMEOUT_DRAIN_MS] is abandoned — the service must go regardless, and unlike a backup there
-     * is no continuation to schedule: a restore depends on session-scoped picked tree uris and an
-     * in-memory password, so no worker could resume it. The user restarts it from the screen.
+     * Stopping goes through the cooperative [IRestoreRunCoordinator.requestStop] so the run ends at
+     * its next stop check and reports a
+     * [ch.abwesend.foldervault.domain.restore.RestoreResult.Cancelled] — with the partial counts
+     * for a folder, with nothing for a single file, whose half-written output is deleted. A run
+     * that cannot drain in [TIMEOUT_DRAIN_MS] is abandoned — the service must go regardless, and
+     * unlike a backup there is no continuation to schedule: a restore depends on session-scoped
+     * picked uris and an in-memory password, so no worker could resume it. The user restarts it
+     * from the screen.
      *
      * Must be the two-argument overload: the dataSync time-limit path calls only
      * `onTimeout(startId, fgsType)`; the one-argument [Service.onTimeout] is invoked solely for

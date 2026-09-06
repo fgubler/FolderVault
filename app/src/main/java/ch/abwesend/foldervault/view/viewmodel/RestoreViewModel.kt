@@ -11,7 +11,6 @@ import ch.abwesend.foldervault.domain.restore.RestoreProgress
 import ch.abwesend.foldervault.domain.restore.RestoreRequest
 import ch.abwesend.foldervault.domain.restore.RestoreResult
 import ch.abwesend.foldervault.domain.restore.RestoreRunState
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -63,19 +62,17 @@ class RestoreViewModel(
     private val _uiState = MutableStateFlow(restoredUiState())
     val uiState: StateFlow<RestoreUiState> = _uiState.asStateFlow()
 
-    private var restoreJob: Job? = null
-
     init {
-        observeFolderRestore()
+        observeRestoreRun()
     }
 
     /**
-     * Mirrors the coordinator's run state into the UI state. The folder restore is owned by
+     * Mirrors the coordinator's run state into the UI state. Both restores are owned by
      * [IRestoreRunCoordinator] rather than by this ViewModel because a service-hosted run outlives
      * the screen — re-entering the restore screen while one is in flight has to pick the progress
      * back up rather than start over.
      */
-    private fun observeFolderRestore() {
+    private fun observeRestoreRun() {
         safeLaunch {
             coordinator.state.collect { runState ->
                 _uiState.update { current -> current.withRunState(runState) }
@@ -84,12 +81,13 @@ class RestoreViewModel(
     }
 
     /**
-     * Projects [runState] onto this UI state. Only the folder flow is coordinator-hosted: without
-     * that guard a folder run still going in the service would drive the single-file screen's
-     * state — and its result would land on top of the single-file one.
+     * Projects [runState] onto this UI state, but only when the run belongs to the mode the screen
+     * is currently showing. Both flows are coordinator-hosted now, so the guard is a mode *match*
+     * rather than "folder only": without it a folder run still going in the service would drive the
+     * single-file screen's progress, and its result would land on top of the single-file one.
      *
      * Applied on every coordinator emission, but deliberately also *pulled* wherever the UI state
-     * is rebuilt from scratch ([setMode]) or turns out to be out of sync ([startRestore]). A
+     * is rebuilt from scratch ([setMode]) or a start turns out to have been refused ([stage]). A
      * `StateFlow` re-emits only on change, and a folder run spends its opening minutes — the source
      * walk and the password probing — without publishing any progress at all. A screen rebuilt in
      * that window would otherwise show an empty, fully enabled form while a restore is in flight,
@@ -97,13 +95,18 @@ class RestoreViewModel(
      * whatever selection had been made in the meantime.
      */
     private fun RestoreUiState.withRunState(runState: RestoreRunState): RestoreUiState = when {
-        mode != RestoreMode.WHOLE_FOLDER -> this
-        runState is RestoreRunState.Running -> copy(
+        runState is RestoreRunState.Running && runState.mode == mode -> copy(
             state = RestoreState.Running,
             progress = runState.progress,
             restoreHostedInForegroundService = runState.hostedInForegroundService,
         )
-        runState is RestoreRunState.Finished -> copy(state = RestoreState.Done(runState.result))
+        runState is RestoreRunState.Finished && runState.mode == mode -> copy(
+            state = RestoreState.Done(runState.result),
+            // On success the password has served its purpose — drop it so it does not outlive the
+            // restore. A failed attempt keeps it, so the user can correct a typo instead of
+            // retyping from scratch. (Only the single-file flow keeps a password in this state.)
+            singleFilePassword = if (runState.result is RestoreResult.Success) "" else singleFilePassword,
+        )
         else -> this
     }
 
@@ -135,8 +138,6 @@ class RestoreViewModel(
      */
     fun setMode(mode: RestoreMode) {
         if (mode != _uiState.value.mode) {
-            restoreJob?.cancel()
-            restoreJob = null
             coordinator.acknowledgeResult()
             savedStateHandle[KEY_MODE] = mode.name
             persistSingleFileSelection(uri = null, name = null)
@@ -229,18 +230,14 @@ class RestoreViewModel(
         val src = snapshot.sourceUri
         val out = snapshot.outputUri
         if (src != null && out != null) {
-            val accepted = coordinator.start(
-                RestoreRequest(
+            stage(
+                RestoreRequest.WholeFolder(
                     sourceUri = src,
                     outputUri = out,
                     password = password,
                     collisionPolicy = snapshot.collisionPolicy,
                 ),
             )
-            if (!accepted) {
-                logger.warning("A restore is already in flight — showing that run instead of starting a new one")
-                _uiState.update { it.withRunState(coordinator.state.value) }
-            }
         }
     }
 
@@ -248,6 +245,10 @@ class RestoreViewModel(
      * Decrypts the picked source into [outputFileUri] — the document the system "Save as" file
      * picker created (or handed back for an overwrite). The destination name and location are the
      * picker's business; this only needs the resulting document uri.
+     *
+     * Hosted by the coordinator like the folder flow, and for the same reason: a picked file can be
+     * a multi-gigabyte video, and while this ran on `viewModelScope` simply navigating away
+     * cancelled it and deleted whatever had been decrypted so far.
      *
      * An empty password declines the run instead of attempting it. The "Decrypt & save" button
      * already requires a non-empty password, so an empty one here can only mean the process was
@@ -260,57 +261,46 @@ class RestoreViewModel(
     fun startSingleFileRestore(outputFileUri: String) {
         val snapshot = _uiState.value
         val src = snapshot.sourceFileUri
-        if (src != null && snapshot.singleFilePassword.isNotEmpty() && restoreJob?.isActive != true) {
-            restoreJob = safeLaunch {
-                _uiState.update { it.copy(state = RestoreState.Running, progress = null) }
-                try {
-                    val result = engine.decryptSingleFile(
-                        sourceFileUri = src,
-                        outputFileUri = outputFileUri,
-                        password = _uiState.value.singleFilePassword,
-                    )
-                    _uiState.update {
-                        // On success the password has served its purpose — drop it from the state
-                        // so it does not outlive the restore. A failed attempt keeps it so the
-                        // user can correct a typo instead of retyping from scratch.
-                        val password = if (result is RestoreResult.Success) "" else it.singleFilePassword
-                        it.copy(state = RestoreState.Done(result), singleFilePassword = password)
-                    }
-                } finally {
-                    _uiState.update { current ->
-                        if (current.state is RestoreState.Running) {
-                            current.copy(state = RestoreState.SourceReady)
-                        } else {
-                            current
-                        }
-                    }
-                }
-            }
+        if (src != null && snapshot.singleFilePassword.isNotEmpty()) {
+            stage(
+                RestoreRequest.SingleFile(
+                    sourceFileUri = src,
+                    outputFileUri = outputFileUri,
+                    password = snapshot.singleFilePassword,
+                ),
+            )
         }
     }
 
     /**
-     * Stops a running restore. The folder run stops *cooperatively* — cancelling its coroutine
-     * would make the engine's result be discarded, so the user would never learn how many files
-     * were already restored. The single-file run has no partial result worth reporting and is
-     * cancelled outright.
+     * Hands [request] to the coordinator, which picks the host. A refusal — it already has a run
+     * staged or running — re-syncs the screen to that run instead of being discarded. Swallowing it
+     * left the user in front of a form whose button did nothing, and then handed them the *other*
+     * run's progress and counters as if they belonged to the selection just made.
+     */
+    private fun stage(request: RestoreRequest) {
+        if (!coordinator.start(request)) {
+            logger.warning("A restore is already in flight — showing that run instead of starting a new one")
+        }
+        _uiState.update { it.withRunState(coordinator.state.value) }
+    }
+
+    /**
+     * Stops the running restore *cooperatively* — never by cancelling its coroutine, which would
+     * make the engine's result be discarded. A folder run then reports how many files it already
+     * restored; a single-file run reports nothing, because its half-written output is deleted.
      */
     fun cancel() {
-        if (_uiState.value.mode == RestoreMode.WHOLE_FOLDER) {
-            coordinator.requestStop()
-        } else {
-            restoreJob?.cancel()
-            restoreJob = null
-        }
+        coordinator.requestStop()
     }
 
     fun reset() {
-        restoreJob?.cancel()
-        restoreJob = null
         coordinator.acknowledgeResult()
         persistSingleFileSelection(uri = null, name = null)
-        // Keep the selected mode so "Start over" clears the selection without flipping flows.
-        _uiState.value = RestoreUiState(mode = _uiState.value.mode)
+        // Keep the selected mode so "Start over" clears the selection without flipping flows, and
+        // pull the run state for the same reason [setMode] does: a blank rebuild must never hide a
+        // restore that is still in flight.
+        _uiState.value = RestoreUiState(mode = _uiState.value.mode).withRunState(coordinator.state.value)
     }
 
     private companion object {

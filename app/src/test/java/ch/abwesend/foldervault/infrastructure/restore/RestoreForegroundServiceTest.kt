@@ -10,6 +10,7 @@ import ch.abwesend.foldervault.domain.coroutine.AppDispatchers
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.restore.IRestoreRunCoordinator
 import ch.abwesend.foldervault.domain.restore.RestoreCollisionPolicy
+import ch.abwesend.foldervault.domain.restore.RestoreMode
 import ch.abwesend.foldervault.domain.restore.RestoreRequest
 import ch.abwesend.foldervault.domain.restore.RestoreResult
 import ch.abwesend.foldervault.domain.restore.RestoreRunState
@@ -268,8 +269,12 @@ private class FakeRestoreRunCoordinator : IRestoreRunCoordinator {
 
     /** Stages a run the way the real coordinator's `start` does, `Running` state included. */
     fun stage() {
-        stagedRequest = RestoreRequest("source", "output", "password", RestoreCollisionPolicy.SKIP)
-        _state.value = RestoreRunState.Running(progress = null, hostedInForegroundService = false)
+        stagedRequest = RestoreRequest.WholeFolder("source", "output", "password", RestoreCollisionPolicy.SKIP)
+        _state.value = RestoreRunState.Running(
+            mode = RestoreMode.WHOLE_FOLDER,
+            progress = null,
+            hostedInForegroundService = false,
+        )
     }
 
     /** Makes [runClaimed] block until [releaseRun], simulating a long restore. */
@@ -302,7 +307,7 @@ private class FakeRestoreRunCoordinator : IRestoreRunCoordinator {
         runGate?.await()
         stagedRequest = null
         claimed = false
-        _state.value = RestoreRunState.Finished(RestoreResult.Success(1, 0, 0, 0))
+        _state.value = RestoreRunState.Finished(RestoreMode.WHOLE_FOLDER, RestoreResult.Success(1, 0, 0, 0))
     }
 
     override fun markHostedInForegroundService() {

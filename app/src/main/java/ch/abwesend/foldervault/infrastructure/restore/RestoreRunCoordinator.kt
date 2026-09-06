@@ -6,6 +6,7 @@ import ch.abwesend.foldervault.domain.restore.IForegroundRestoreLauncher
 import ch.abwesend.foldervault.domain.restore.IRestoreEngine
 import ch.abwesend.foldervault.domain.restore.IRestoreRunCoordinator
 import ch.abwesend.foldervault.domain.restore.RestoreFailureReason
+import ch.abwesend.foldervault.domain.restore.RestoreMode
 import ch.abwesend.foldervault.domain.restore.RestoreProgress
 import ch.abwesend.foldervault.domain.restore.RestoreRequest
 import ch.abwesend.foldervault.domain.restore.RestoreResult
@@ -23,11 +24,17 @@ import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Owns the single folder restore that may be in flight, independently of any ViewModel.
+ * Owns the single restore that may be in flight, independently of any ViewModel.
  *
  * A service-hosted restore outlives the screen that started it, so the run state cannot live in
  * `RestoreViewModel` — the screen observes [state] instead. The staged [RestoreRequest] also stays
  * here rather than travelling in the service's `Intent`, because it carries the backup password.
+ *
+ * Both flows are hosted here. A single file can be as large as a whole folder — a video, a disk
+ * image — and a run tied to `viewModelScope` was lost the moment the user navigated away, taking
+ * however much of a multi-gigabyte decrypt had already been done with it. The two differ only in
+ * which engine call [runClaimed] dispatches to; everything around it — the claim handshake, the
+ * timed takeover, the cooperative stop — is the same run.
  *
  * The handshake is deliberately two-step: [start] records the request and flips the state to
  * `Running` *synchronously*, so the UI reacts to the user's tap immediately; the host that then
@@ -85,7 +92,11 @@ class RestoreRunCoordinator(
         if (accepted) {
             runControl.reset()
             stagedRequest = request
-            _state.value = RestoreRunState.Running(progress = null, hostedInForegroundService = false)
+            _state.value = RestoreRunState.Running(
+                mode = request.mode,
+                progress = null,
+                hostedInForegroundService = false,
+            )
             val dispatched = foregroundLauncher.start()
             scope.launch {
                 if (dispatched) delay(FOREGROUND_HANDOVER_GRACE_MS)
@@ -136,31 +147,55 @@ class RestoreRunCoordinator(
      * call this after [tryClaim] returned `true`.
      */
     override suspend fun runClaimed() {
-        val request = stagedRequest ?: return
+        val request = stagedRequest
+        if (request == null) {
+            // Defensive: a host that won the claim but found nothing staged must hand the flag back,
+            // or `tryClaim` can never succeed again and the coordinator wedges at `Running` for the
+            // life of the process — with no way out, since the progress dialog is driven by exactly
+            // that state.
+            log.warning("Claimed a restore that is no longer staged — releasing the claim again")
+            releaseClaim()
+            return
+        }
         try {
-            val result = engine.decryptAll(
-                sourceUri = request.sourceUri,
-                outputUri = request.outputUri,
-                password = request.password,
-                collisionPolicy = request.collisionPolicy,
-                runControl = runControl,
-                onProgress = ::publishProgress,
-            )
-            finish(result)
+            finish(request.mode, execute(request))
         } catch (e: CancellationException) {
             // The host went away mid-run (service destroyed, process going down). Leaving the
             // state at Running would strand the UI in a progress dialog that can never complete.
-            finish(RestoreResult.Failure(RestoreFailureReason.RUN_INTERRUPTED))
+            finish(request.mode, RestoreResult.Failure(RestoreFailureReason.RUN_INTERRUPTED))
             throw e
         } catch (e: Exception) {
             // The engine reports per-file problems through its counters, so reaching here means
             // something unexpected — which must still release the UI rather than hang it.
-            log.error("Folder restore failed unexpectedly", e)
-            finish(RestoreResult.Failure(RestoreFailureReason.RUN_INTERRUPTED))
+            log.error("Restore failed unexpectedly", e)
+            finish(request.mode, RestoreResult.Failure(RestoreFailureReason.RUN_INTERRUPTED))
         }
     }
 
-    /** Requests a cooperative stop; the run ends at the next file boundary with partial counts. */
+    /** Dispatches to the engine call the staged [request] asks for. */
+    private suspend fun execute(request: RestoreRequest): RestoreResult = when (request) {
+        is RestoreRequest.WholeFolder -> engine.decryptAll(
+            sourceUri = request.sourceUri,
+            outputUri = request.outputUri,
+            password = request.password,
+            collisionPolicy = request.collisionPolicy,
+            runControl = runControl,
+            onProgress = ::publishProgress,
+        )
+        is RestoreRequest.SingleFile -> engine.decryptSingleFile(
+            sourceFileUri = request.sourceFileUri,
+            outputFileUri = request.outputFileUri,
+            password = request.password,
+            runControl = runControl,
+            onProgress = ::publishProgress,
+        )
+    }
+
+    /**
+     * Requests a cooperative stop. A folder run ends at the next file boundary with the counts of
+     * what it already restored; a single-file run ends at the next chunk of its one file, with
+     * nothing — half a plaintext file is worse than none, so the engine deletes it.
+     */
     override fun requestStop() {
         runControl.requestStop()
     }
@@ -176,9 +211,9 @@ class RestoreRunCoordinator(
         }
     }
 
-    private fun finish(result: RestoreResult) {
+    private fun finish(mode: RestoreMode, result: RestoreResult) {
         stagedRequest = null
         executing.set(false)
-        _state.value = RestoreRunState.Finished(result)
+        _state.value = RestoreRunState.Finished(mode, result)
     }
 }

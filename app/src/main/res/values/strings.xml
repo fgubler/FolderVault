@@ -394,6 +394,7 @@
     <string name="restore_notification_title">FolderVault Restore</string>
     <string name="restore_notification_preparing_text">Preparing the restore…</string>
     <string name="restore_notification_progress_text">Restoring %1$d / %2$d files</string>
+    <string name="restore_notification_single_file_progress">Decrypting the file — %1$d%%</string>
 
     <!-- Restore single file -->
     <string name="restore_single_explanation_body">1. Pick one encrypted file. If the Google Drive app is installed, you can select it directly on Google Drive in the file picker — no download needed.\n2. Enter your backup password.\n3. Choose where to save the decrypted file. Its original name is suggested, but you can change it. If you pick a file that already exists, its content is replaced.</string>
@@ -405,6 +406,8 @@
     <string name="restore_single_wrong_password">Wrong password — the file could not be decrypted. If you saved over an existing file, its previous content is gone.</string>
     <string name="restore_single_decrypting">Decrypting the file…</string>
     <string name="restore_single_success_decrypted">The file was decrypted and saved.</string>
+    <string name="restore_single_cancelled">The restore was stopped. The partly decrypted file was removed, so nothing was left behind.</string>
+    <string name="restore_single_progress_percent">Decrypting the file — %1$d%%</string>
     <string name="restore_single_success_copied">The file was not encrypted, so it was saved as an unchanged copy.</string>
 
     <!-- Restore collision policy display names -->

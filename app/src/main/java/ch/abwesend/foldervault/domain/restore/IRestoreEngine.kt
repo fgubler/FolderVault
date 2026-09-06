@@ -34,14 +34,24 @@ interface IRestoreEngine {
      * check (a wrong password), or [RestoreResult.Failure] for unreadable, corrupt or uncopyable
      * files.
      *
-     * On any failure — and on cancellation — the output document is deleted again, so no truncated
-     * plaintext is left behind masquerading as a restored file. Large files are processed in
-     * cancellation-check chunks, so a cancel aborts within one chunk of work; small files finish
-     * their (short) run first and are then cleaned up.
+     * Stopping is cooperative through [runControl], the same rule as [decryptAll] — never by
+     * cancelling the coroutine. A single file has no file boundary to poll, so the check rides the
+     * source stream instead and fires every few megabytes; the run then returns
+     * [RestoreResult.Cancelled] with zero counts. They *are* zero: unlike a folder restore, a
+     * stopped single-file restore leaves nothing usable behind — half a plaintext file is
+     * indistinguishable from a whole one — so the output document is deleted.
+     *
+     * On any failure — and on cancellation — that same deletion applies, so no truncated plaintext
+     * is left behind masquerading as a restored file.
+     *
+     * [onProgress] reports [RestoreProgress.Bytes] of the *source* as it is consumed, at a rate
+     * bounded so a multi-gigabyte file does not produce thousands of updates.
      */
     suspend fun decryptSingleFile(
         sourceFileUri: String,
         outputFileUri: String,
         password: String,
+        runControl: RestoreRunControl,
+        onProgress: (RestoreProgress) -> Unit,
     ): RestoreResult
 }

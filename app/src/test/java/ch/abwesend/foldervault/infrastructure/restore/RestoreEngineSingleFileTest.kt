@@ -15,8 +15,11 @@ import androidx.test.platform.app.InstrumentationRegistry
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
 import ch.abwesend.foldervault.domain.crypto.DecryptionError
 import ch.abwesend.foldervault.domain.crypto.IFvc1Cipher
+import ch.abwesend.foldervault.domain.restore.IRestoreEngine
 import ch.abwesend.foldervault.domain.restore.RestoreFailureReason
+import ch.abwesend.foldervault.domain.restore.RestoreProgress
 import ch.abwesend.foldervault.domain.restore.RestoreResult
+import ch.abwesend.foldervault.domain.restore.RestoreRunControl
 import ch.abwesend.foldervault.domain.result.BinaryResult
 import ch.abwesend.foldervault.infrastructure.crypto.Fvc1Cipher
 import kotlinx.coroutines.CoroutineDispatcher
@@ -96,7 +99,7 @@ class RestoreEngineSingleFileTest {
         val source = addSource("report.pdf", encryptedBlob(PASSWORD))
         val output = addOutput()
 
-        val result = engine.decryptSingleFile(source.toString(), output.toString(), PASSWORD)
+        val result = engine.restoreFile(source.toString(), output.toString(), PASSWORD)
 
         assertEquals(RestoreResult.Success(decrypted = 1, copied = 0, skipped = 0, failed = 0), result)
         assertContentEquals(plaintext, outputBytes())
@@ -107,7 +110,7 @@ class RestoreEngineSingleFileTest {
         val source = addSource(displayName = null, content = encryptedBlob(PASSWORD))
         val output = addOutput()
 
-        val result = engine.decryptSingleFile(source.toString(), output.toString(), PASSWORD)
+        val result = engine.restoreFile(source.toString(), output.toString(), PASSWORD)
 
         assertEquals(RestoreResult.Success(decrypted = 1, copied = 0, skipped = 0, failed = 0), result)
         assertContentEquals(plaintext, outputBytes())
@@ -118,7 +121,7 @@ class RestoreEngineSingleFileTest {
         val source = addSource("report.pdf.crypt", encryptedBlob(PASSWORD))
         val output = addOutput()
 
-        val result = engine.decryptSingleFile(source.toString(), output.toString(), PASSWORD)
+        val result = engine.restoreFile(source.toString(), output.toString(), PASSWORD)
 
         assertEquals(RestoreResult.Success(decrypted = 1, copied = 0, skipped = 0, failed = 0), result)
         assertContentEquals(plaintext, outputBytes())
@@ -132,7 +135,7 @@ class RestoreEngineSingleFileTest {
         val source = addSource("report.pdf.crypt", encryptedBlob(PASSWORD))
         val sourceContent = sourceBytes(source)
 
-        val result = engine.decryptSingleFile(source.toString(), source.toString(), PASSWORD)
+        val result = engine.restoreFile(source.toString(), source.toString(), PASSWORD)
 
         assertEquals(RestoreResult.Failure(RestoreFailureReason.OUTPUT_SAME_AS_SOURCE), result)
         assertContentEquals(sourceContent, sourceBytes(source), "the backup file must be untouched")
@@ -146,7 +149,7 @@ class RestoreEngineSingleFileTest {
         val source = addUnreadableSource("report.pdf")
         val output = addOutput()
 
-        val result = engine.decryptSingleFile(source.toString(), output.toString(), PASSWORD)
+        val result = engine.restoreFile(source.toString(), output.toString(), PASSWORD)
 
         assertEquals(RestoreResult.Failure(RestoreFailureReason.SOURCE_FILE_NOT_ACCESSIBLE), result)
     }
@@ -160,7 +163,7 @@ class RestoreEngineSingleFileTest {
         val existing = "precious pre-existing content".toByteArray()
         val output = addOutput(existing)
 
-        val result = engine.decryptSingleFile(source.toString(), output.toString(), PASSWORD)
+        val result = engine.restoreFile(source.toString(), output.toString(), PASSWORD)
 
         assertEquals(RestoreResult.Failure(RestoreFailureReason.SOURCE_FILE_NOT_ACCESSIBLE), result)
         assertContentEquals(existing, outputBytes())
@@ -172,7 +175,7 @@ class RestoreEngineSingleFileTest {
         val source = addSource("notes.txt", plainBytes)
         val output = addOutput()
 
-        val result = engine.decryptSingleFile(source.toString(), output.toString(), PASSWORD)
+        val result = engine.restoreFile(source.toString(), output.toString(), PASSWORD)
 
         assertEquals(RestoreResult.Success(decrypted = 0, copied = 1, skipped = 0, failed = 0), result)
         assertContentEquals(plainBytes, outputBytes())
@@ -186,7 +189,7 @@ class RestoreEngineSingleFileTest {
         val source = addSource("report.pdf.crypt", encryptedBlob(PASSWORD))
         val output = addOutput("a much, much longer piece of pre-existing content".repeat(10).toByteArray())
 
-        val result = engine.decryptSingleFile(source.toString(), output.toString(), PASSWORD)
+        val result = engine.restoreFile(source.toString(), output.toString(), PASSWORD)
 
         assertEquals(RestoreResult.Success(decrypted = 1, copied = 0, skipped = 0, failed = 0), result)
         assertContentEquals(plaintext, outputBytes())
@@ -199,7 +202,7 @@ class RestoreEngineSingleFileTest {
         val source = addSource("broken.txt.crypt", "definitely not an FVC1 file".toByteArray())
         val output = addOutput()
 
-        val result = engine.decryptSingleFile(source.toString(), output.toString(), PASSWORD)
+        val result = engine.restoreFile(source.toString(), output.toString(), PASSWORD)
 
         assertIs<RestoreResult.Failure>(result)
         assertEquals(RestoreFailureReason.FILE_HEADER_NOT_READABLE, result.reason)
@@ -215,7 +218,7 @@ class RestoreEngineSingleFileTest {
         val source = addSource("broken.txt.crypt", "definitely not an FVC1 file".toByteArray())
         val output = addOutput(existingContent)
 
-        val result = engine.decryptSingleFile(source.toString(), output.toString(), PASSWORD)
+        val result = engine.restoreFile(source.toString(), output.toString(), PASSWORD)
 
         assertIs<RestoreResult.Failure>(result)
         assertTrue(outputExists(), "an untouched pre-existing output must survive the failure")
@@ -227,7 +230,7 @@ class RestoreEngineSingleFileTest {
         val source = addSource("report.pdf.crypt", encryptedBlob(PASSWORD))
         val output = addOutput()
 
-        val result = engine.decryptSingleFile(source.toString(), output.toString(), "wrong-password")
+        val result = engine.restoreFile(source.toString(), output.toString(), "wrong-password")
 
         assertEquals(RestoreResult.InvalidPassword, result)
         assertFalse(outputExists(), "the freshly created output document must be deleted on failure")
@@ -243,7 +246,7 @@ class RestoreEngineSingleFileTest {
         val output = addOutput()
 
         val job = launch(start = CoroutineStart.UNDISPATCHED) {
-            queuedEngine.decryptSingleFile(source.toString(), output.toString(), PASSWORD)
+            queuedEngine.restoreFile(source.toString(), output.toString(), PASSWORD)
         }
         job.cancel()
         job.join()
@@ -266,7 +269,7 @@ class RestoreEngineSingleFileTest {
         lateinit var job: Job
         FakeSafProvider.onOpen = { name -> if (name == OUTPUT_NAME) job.cancel() }
         job = launch {
-            chunkedEngine.decryptSingleFile(source.toString(), output.toString(), PASSWORD)
+            chunkedEngine.restoreFile(source.toString(), output.toString(), PASSWORD)
         }
         job.join()
 
@@ -287,7 +290,7 @@ class RestoreEngineSingleFileTest {
         lateinit var job: Job
         FakeSafProvider.onOpen = { name -> if (name == "broken.txt.crypt") job.cancel() }
         job = launch {
-            engine.decryptSingleFile(source.toString(), output.toString(), PASSWORD)
+            engine.restoreFile(source.toString(), output.toString(), PASSWORD)
         }
         job.join()
 
@@ -309,7 +312,7 @@ class RestoreEngineSingleFileTest {
         lateinit var job: Job
         FakeSafProvider.onOpen = { name -> if (name == OUTPUT_NAME) job.cancel() }
         job = launch {
-            chunkedEngine.decryptSingleFile(source.toString(), output.toString(), PASSWORD)
+            chunkedEngine.restoreFile(source.toString(), output.toString(), PASSWORD)
         }
         job.join()
 
@@ -325,7 +328,7 @@ class RestoreEngineSingleFileTest {
         val source = addSource("report.pdf.crypt", encryptedBlob(PASSWORD))
         val output = addOutput()
 
-        val result = engine.decryptSingleFile(source.toString(), output.toString(), PASSWORD)
+        val result = engine.restoreFile(source.toString(), output.toString(), PASSWORD)
 
         assertEquals(RestoreResult.Success(decrypted = 1, copied = 0, skipped = 0, failed = 0), result)
         assertEquals("wt", FakeSafProvider.openModes[OUTPUT_NAME], "the output must be opened truncating")
@@ -340,10 +343,107 @@ class RestoreEngineSingleFileTest {
         val source = addSource("report.pdf.crypt", encryptedBlob(PASSWORD))
         val output = addOutput()
 
-        val result = chunkedEngine.decryptSingleFile(source.toString(), output.toString(), PASSWORD)
+        val result = chunkedEngine.restoreFile(source.toString(), output.toString(), PASSWORD)
 
         assertEquals(RestoreResult.Success(decrypted = 1, copied = 0, skipped = 0, failed = 0), result)
         assertContentEquals(plaintext, outputBytes())
+    }
+
+    @Test
+    fun `a cooperative stop mid-file ends the run as Cancelled and deletes the output`() = runTest {
+        // The stop counterpart of the cancellation test above, and the one the UI actually uses:
+        // `RestoreRunControl` must reach *inside* the one file, because a single-file run has no
+        // file boundary to poll. The stop is requested from the provider's openFile for the OUTPUT
+        // document — after the decrypt started, before its stream loop ran — so only the
+        // between-chunk check can end it. Unlike a cancel this must come back as a normal result.
+        val recordingCipher = RecordingCipher(cipher)
+        val chunkedEngine = RestoreEngine(context, recordingCipher, dispatchers, TEST_CHUNKING)
+        val source = addSource("report.pdf.crypt", encryptedBlob(PASSWORD))
+        val output = addOutput()
+        val runControl = RestoreRunControl()
+        FakeSafProvider.onOpen = { name -> if (name == OUTPUT_NAME) runControl.requestStop() }
+
+        val result = chunkedEngine.restoreFile(source.toString(), output.toString(), PASSWORD, runControl)
+
+        assertEquals(RestoreResult.Cancelled(0, 0, 0, 0), result, "a stop must report a result, not throw")
+        assertFalse(recordingCipher.decryptFileReturned, "the decrypt must be abandoned mid-file")
+        // Half a plaintext file is indistinguishable from a whole one, so there is nothing to keep.
+        assertFalse(outputExists(), "the partly written output must be deleted")
+    }
+
+    @Test
+    fun `a stop that landed before the run started still cleans the picker's document up`() = runTest {
+        // The user tapped Cancel while the run was still staged — the picker had already created
+        // the (empty) output document, so leaving it behind would litter the chosen folder.
+        val source = addSource("report.pdf.crypt", encryptedBlob(PASSWORD))
+        val output = addOutput()
+        val runControl = RestoreRunControl().apply { requestStop() }
+
+        val result = engine.restoreFile(source.toString(), output.toString(), PASSWORD, runControl)
+
+        assertEquals(RestoreResult.Cancelled(0, 0, 0, 0), result)
+        assertFalse(outputExists(), "the picker-created document must not be left behind")
+    }
+
+    @Test
+    fun `a completed restore keeps its success even when a stop lands at the very end`() = runTest {
+        // The run control is asked *after* the work, so a stop arriving once the file is whole must
+        // not throw away a finished restore — the plaintext is complete and correct.
+        val source = addSource("report.pdf.crypt", encryptedBlob(PASSWORD))
+        val output = addOutput()
+        val runControl = RestoreRunControl()
+
+        val result = engine.restoreFile(source.toString(), output.toString(), PASSWORD, runControl) {
+            runControl.requestStop()
+        }
+
+        assertEquals(RestoreResult.Success(decrypted = 1, copied = 0, skipped = 0, failed = 0), result)
+        assertContentEquals(plaintext, outputBytes())
+    }
+
+    @Test
+    fun `progress is reported in bytes of the source, ending at its full size`() = runTest {
+        val content = encryptedBlob(PASSWORD)
+        val chunkedEngine = RestoreEngine(context, cipher, dispatchers, TEST_CHUNKING)
+        val source = addSource("report.pdf.crypt", content)
+        val output = addOutput()
+        val reported = mutableListOf<RestoreProgress.Bytes>()
+
+        val result = chunkedEngine.restoreFile(source.toString(), output.toString(), PASSWORD) {
+            reported.add(it as RestoreProgress.Bytes)
+        }
+
+        assertEquals(RestoreResult.Success(decrypted = 1, copied = 0, skipped = 0, failed = 0), result)
+        // The opening emission tells the UI the extent of the run before any byte is read.
+        assertEquals(0L, reported.first().processedBytes)
+        assertEquals(content.size.toLong(), reported.first().totalBytes)
+        assertTrue(reported.size > 1, "a file crossing several chunks must report more than the opening 0")
+        assertTrue(
+            reported.zipWithNext().all { (a, b) -> b.processedBytes >= a.processedBytes },
+            "byte progress must never go backwards",
+        )
+        assertTrue(
+            reported.all { it.processedBytes <= content.size.toLong() },
+            "byte progress must never exceed the source size",
+        )
+    }
+
+    @Test
+    fun `a source whose size the provider does not report still shows movement`() = runTest {
+        // `length() == 0` means "unknown" as often as it means "empty", so the run reports bytes
+        // with no total: the UI keeps an indeterminate bar rather than one stuck at zero.
+        val chunkedEngine = RestoreEngine(context, cipher, dispatchers, TEST_CHUNKING)
+        val source = addSource("report.pdf.crypt", encryptedBlob(PASSWORD), reportedSize = 0L)
+        val output = addOutput()
+        val reported = mutableListOf<RestoreProgress.Bytes>()
+
+        chunkedEngine.restoreFile(source.toString(), output.toString(), PASSWORD) {
+            reported.add(it as RestoreProgress.Bytes)
+        }
+
+        assertTrue(reported.all { it.totalBytes == null }, "an unknown size must not be reported as a total")
+        assertTrue(reported.all { it.fraction == null && it.percent == null }, "there is no fraction without a total")
+        assertTrue(reported.any { it.processedBytes > 0 }, "the run must still report the bytes it consumed")
     }
 
     /** Registers a picked *source* document (single-document uri), backed by a real temp file. */
@@ -431,9 +531,21 @@ class RestoreEngineSingleFileTest {
         const val TEST_ITERATIONS = 1_000
 
         /** Chunking small enough that the ~100-byte fixtures cross several chunk boundaries. */
-        val TEST_CHUNKING = CancellationChunking(thresholdBytes = 16, chunkSizeBytes = 16)
+        val TEST_CHUNKING = SingleFileChunking(stopCheckBytes = 16, progressSteps = 4)
     }
 }
+
+/**
+ * Test shorthand for [IRestoreEngine.decryptSingleFile]: the stop signal and the progress callback
+ * matter to a handful of cases, and defaulting them keeps the other seventeen about the file.
+ */
+private suspend fun RestoreEngine.restoreFile(
+    sourceFileUri: String,
+    outputFileUri: String,
+    password: String,
+    runControl: RestoreRunControl = RestoreRunControl(),
+    onProgress: (RestoreProgress) -> Unit = {},
+): RestoreResult = decryptSingleFile(sourceFileUri, outputFileUri, password, runControl, onProgress)
 
 /**
  * Delegates to the real cipher but records whether [decryptFile] ran to completion — the

@@ -42,6 +42,7 @@ private class FakeRestoreEngine(
     var singleFileOutputFileUri: String? = null
     var singleFilePassword: String? = null
     var singleFileCallCount = 0
+    var singleFileStopRequested = false
     var decryptAllCallCount = 0
     var decryptAllPassword: String? = null
 
@@ -69,17 +70,23 @@ private class FakeRestoreEngine(
         }
     }
 
+    @Suppress("LongParameterList")
     override suspend fun decryptSingleFile(
         sourceFileUri: String,
         outputFileUri: String,
         password: String,
+        runControl: RestoreRunControl,
+        onProgress: (RestoreProgress) -> Unit,
     ): RestoreResult {
         singleFileCallCount++
         singleFileSourceUri = sourceFileUri
         singleFileOutputFileUri = outputFileUri
         singleFilePassword = password
         gate?.await()
-        return singleFileResult
+        // Honors the cooperative stop the way the real engine does. A stopped single-file run
+        // reports nothing: its half-written output is deleted rather than left to pass for whole.
+        singleFileStopRequested = runControl.shouldStop()
+        return if (singleFileStopRequested) RestoreResult.Cancelled(0, 0, 0, 0) else singleFileResult
     }
 }
 
@@ -127,6 +134,20 @@ private fun restoreViewModel(
     coordinator = coordinator,
     savedStateHandle = handle,
 )
+
+/**
+ * A ViewModel already switched to [RestoreMode.SINGLE_FILE] — the only mode the single-file API is
+ * reachable from, since "Decrypt & save" lives in that segment of the screen and the mode survives
+ * process death via `SavedStateHandle`. It matters now that *both* flows are coordinator-hosted: a
+ * screen only picks up the run whose mode matches its own, so a folder restore still going in the
+ * service cannot drive the single-file screen (or drop its result there).
+ */
+private fun singleFileViewModel(
+    engine: IRestoreEngine,
+    coordinator: RestoreRunCoordinator = testCoordinator(engine),
+    handle: SavedStateHandle = SavedStateHandle(),
+): RestoreViewModel = restoreViewModel(engine, coordinator = coordinator, handle = handle)
+    .also { it.setMode(RestoreMode.SINGLE_FILE) }
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class RestoreViewModelTest : StringSpec({
@@ -178,7 +199,7 @@ class RestoreViewModelTest : StringSpec({
 
     "startSingleFileRestore delegates the picked source, output and password to the engine" {
         val engine = FakeRestoreEngine()
-        val viewModel = restoreViewModel(engine)
+        val viewModel = singleFileViewModel(engine)
         viewModel.setSourceFile("content://src", "report.pdf.crypt")
         viewModel.setSingleFilePassword("secret")
 
@@ -190,7 +211,7 @@ class RestoreViewModelTest : StringSpec({
     }
 
     "startSingleFileRestore lands on Done(Success) on a successful decrypt" {
-        val viewModel = restoreViewModel(FakeRestoreEngine(RestoreResult.Success(1, 0, 0, 0)))
+        val viewModel = singleFileViewModel(FakeRestoreEngine(RestoreResult.Success(1, 0, 0, 0)))
         viewModel.setSourceFile("content://src", "report.pdf.crypt")
         viewModel.setSingleFilePassword("secret")
 
@@ -202,7 +223,7 @@ class RestoreViewModelTest : StringSpec({
     }
 
     "startSingleFileRestore surfaces InvalidPassword as the result" {
-        val viewModel = restoreViewModel(FakeRestoreEngine(RestoreResult.InvalidPassword))
+        val viewModel = singleFileViewModel(FakeRestoreEngine(RestoreResult.InvalidPassword))
         viewModel.setSourceFile("content://src", "report.pdf.crypt")
         viewModel.setSingleFilePassword("wrong")
 
@@ -216,7 +237,7 @@ class RestoreViewModelTest : StringSpec({
     "startSingleFileRestore ignores a second start while a restore is running (review S2)" {
         val gate = CompletableDeferred<Unit>()
         val engine = FakeRestoreEngine(gate = gate)
-        val viewModel = restoreViewModel(engine)
+        val viewModel = singleFileViewModel(engine)
         viewModel.setSourceFile("content://src", "report.pdf.crypt")
         viewModel.setSingleFilePassword("secret")
 
@@ -362,8 +383,79 @@ class RestoreViewModelTest : StringSpec({
         gate.complete(Unit)
     }
 
+    "a single-file restore prefers the foreground service, so leaving the app cannot kill it" {
+        // The point of moving this flow off `viewModelScope`: a picked file can be a multi-gigabyte
+        // video, and losing that decrypt because the user left the app is the same failure the
+        // folder flow already had a service for.
+        val launcher = FakeForegroundRestoreLauncher(dispatched = true)
+        val engine = FakeRestoreEngine()
+        val viewModel = singleFileViewModel(engine, coordinator = testCoordinator(engine, launcher))
+        viewModel.setSourceFile("content://src", "report.pdf.crypt")
+        viewModel.setSingleFilePassword("secret")
+
+        viewModel.startSingleFileRestore("content://out")
+
+        launcher.startCount shouldBe 1
+    }
+
+    "a single-file restore survives the screen being left and re-entered" {
+        // The regression this whole change is about: the run used to die with the ViewModel, taking
+        // whatever had been decrypted with it. A ViewModel built later must show the run's state.
+        val engine = FakeRestoreEngine()
+        val coordinator = testCoordinator(engine)
+        val handle = SavedStateHandle()
+        val before = singleFileViewModel(engine, coordinator = coordinator, handle = handle)
+        before.setSourceFile("content://src", "report.pdf.crypt")
+        before.setSingleFilePassword("secret")
+        before.startSingleFileRestore("content://out")
+
+        // A fresh ViewModel over the same coordinator — the mode comes back from saved state, the
+        // way it does after the screen is re-entered or the process is recreated.
+        val after = restoreViewModel(engine, coordinator = coordinator, handle = handle)
+
+        val state = after.uiState.value.state
+        state.shouldBeInstanceOf<RestoreState.Done>()
+        state.result shouldBe RestoreResult.Success(1, 0, 0, 0)
+        engine.singleFileCallCount shouldBe 1
+    }
+
+    "cancelling a single-file restore stops it cooperatively rather than cancelling the coroutine" {
+        // `RestoreRunControl`, not `Job.cancel()` — a cancelled coroutine makes `withContext`
+        // discard the engine's result and throw, so the user would be left with no outcome at all.
+        val gate = CompletableDeferred<Unit>()
+        val engine = FakeRestoreEngine(gate = gate)
+        val viewModel = singleFileViewModel(engine)
+        viewModel.setSourceFile("content://src", "report.pdf.crypt")
+        viewModel.setSingleFilePassword("secret")
+        viewModel.startSingleFileRestore("content://out")
+
+        viewModel.cancel()
+        gate.complete(Unit)
+
+        engine.singleFileStopRequested shouldBe true
+        viewModel.uiState.value.state.shouldBeInstanceOf<RestoreState.Done>()
+    }
+
+    "a folder run in flight never drives the single-file screen" {
+        // Both flows share one coordinator now, so the screen must ignore the other mode's run —
+        // otherwise a folder restore going in the service would show its progress here, and drop
+        // its result on top of the single-file one.
+        val gate = CompletableDeferred<Unit>()
+        val engine = FakeRestoreEngine(gate = gate)
+        val viewModel = restoreViewModel(engine)
+        viewModel.setSourceFolder("content://src")
+        viewModel.setOutputFolder("content://out")
+        viewModel.startRestore("secret")
+
+        viewModel.setMode(RestoreMode.SINGLE_FILE)
+
+        viewModel.uiState.value.state shouldBe RestoreState.Idle
+        gate.complete(Unit)
+        viewModel.uiState.value.state shouldBe RestoreState.Idle
+    }
+
     "a successful single-file restore clears the password from the state (review S3)" {
-        val viewModel = restoreViewModel(FakeRestoreEngine(RestoreResult.Success(1, 0, 0, 0)))
+        val viewModel = singleFileViewModel(FakeRestoreEngine(RestoreResult.Success(1, 0, 0, 0)))
         viewModel.setSourceFile("content://src", "report.pdf.crypt")
         viewModel.setSingleFilePassword("secret")
 
@@ -373,7 +465,7 @@ class RestoreViewModelTest : StringSpec({
     }
 
     "a failed single-file restore keeps the password so the user can correct it" {
-        val viewModel = restoreViewModel(FakeRestoreEngine(RestoreResult.InvalidPassword))
+        val viewModel = singleFileViewModel(FakeRestoreEngine(RestoreResult.InvalidPassword))
         viewModel.setSourceFile("content://src", "report.pdf.crypt")
         viewModel.setSingleFilePassword("almost-right")
 

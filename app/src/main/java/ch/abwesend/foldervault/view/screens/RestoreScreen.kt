@@ -83,10 +83,10 @@ fun RestoreScreen(
             // exposure as a folder restore the foreground service could not take.
             warnToKeepAppOpen = !uiState.restoreHostedInForegroundService,
             onCancel = viewModel::cancel,
-            // Only the folder run is owned by `IRestoreRunCoordinator` and therefore outlives this
-            // screen, so only it may be left behind. The single-file run is scoped to this
-            // ViewModel and would be cancelled mid-write, so its dialog stays blocking.
-            onLeaveScreen = if (uiState.mode == RestoreMode.WHOLE_FOLDER) onBack else null,
+            // Both runs are owned by `IRestoreRunCoordinator` and outlive this screen, so both may
+            // be left behind. (Until the single-file run moved off `viewModelScope`, leaving would
+            // have cancelled it mid-write, and this dialog had to stay blocking for that mode.)
+            onLeaveScreen = onBack,
         )
     }
 
@@ -552,14 +552,21 @@ private fun RestoreResultSection(mode: RestoreMode, result: RestoreResult, onRes
             )
         }
         is RestoreResult.Cancelled -> {
-            // A stopped run really did restore what it had already written — reporting only
-            // "cancelled" would leave the user guessing whether anything landed at all.
-            val msg = buildString {
-                append(stringResource(R.string.restore_cancelled, result.decrypted))
-                if (result.copied > 0) append(stringResource(R.string.restore_success_and_copied, result.copied))
-                if (result.skipped > 0) append(stringResource(R.string.restore_success_and_skipped, result.skipped))
-                if (result.failed > 0) append(stringResource(R.string.restore_success_and_failed, result.failed))
-                append(".")
+            // A stopped folder run really did restore what it had already written — reporting only
+            // "cancelled" would leave the user guessing whether anything landed at all. A stopped
+            // single-file run is the opposite: its counters are all zero *by design*, because half
+            // a plaintext file is indistinguishable from a whole one and is deleted. Rendering the
+            // folder message there would read as "restored 0 files" and hide that deletion.
+            val msg = if (mode == RestoreMode.SINGLE_FILE) {
+                stringResource(R.string.restore_single_cancelled)
+            } else {
+                buildString {
+                    append(stringResource(R.string.restore_cancelled, result.decrypted))
+                    if (result.copied > 0) append(stringResource(R.string.restore_success_and_copied, result.copied))
+                    if (result.skipped > 0) append(stringResource(R.string.restore_success_and_skipped, result.skipped))
+                    if (result.failed > 0) append(stringResource(R.string.restore_success_and_failed, result.failed))
+                    append(".")
+                }
             }
             Text(msg, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -578,13 +585,11 @@ private fun RestoreResultSection(mode: RestoreMode, result: RestoreResult, onRes
 /**
  * Modal progress dialog for a running restore.
  *
- * [onLeaveScreen] is non-null exactly for a run this screen does not own — the whole-folder
- * restore, which `IRestoreRunCoordinator` keeps going (in the foreground service, or at worst in an
- * application-scoped coroutine) while the user is elsewhere. A modal dialog *consumes* the back
- * gesture, so with the empty `onDismissRequest` this used to have, the user was pinned to this
- * screen for the entire run — up to an hour on a large backup, and the exact opposite of what the
- * foreground service exists for. A single-file restore genuinely dies with this ViewModel, so its
- * dialog stays blocking and [onLeaveScreen] is null.
+ * [onLeaveScreen] exists because a modal dialog *consumes* the back gesture: with the empty
+ * `onDismissRequest` this used to have, the user was pinned to this screen for the entire run — up
+ * to an hour on a large backup, and the exact opposite of what the foreground service exists for.
+ * Leaving is safe because `IRestoreRunCoordinator` owns the run and keeps it going (in the
+ * foreground service, or at worst in an application-scoped coroutine) while the user is elsewhere.
  */
 @Composable
 private fun RestoreProgressDialog(
@@ -592,56 +597,19 @@ private fun RestoreProgressDialog(
     progress: RestoreProgress?,
     warnToKeepAppOpen: Boolean,
     onCancel: () -> Unit,
-    onLeaveScreen: (() -> Unit)?,
+    onLeaveScreen: () -> Unit,
 ) {
     AlertDialog(
-        onDismissRequest = onLeaveScreen ?: {},
+        onDismissRequest = onLeaveScreen,
         title = { Text(stringResource(R.string.dialog_restoring_title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (progress == null || progress.total == 0) {
-                    // The single-file flow never reports progress, so this branch covers its whole
-                    // (potentially long) run — "Verifying password" would be misleading there.
-                    val textRes = if (mode == RestoreMode.SINGLE_FILE) {
-                        R.string.restore_single_decrypting
-                    } else {
-                        R.string.restore_verifying_password
-                    }
-                    Text(
-                        stringResource(textRes),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                } else {
-                    val fraction = progress.processed.toFloat() / progress.total.toFloat()
-                    LinearProgressIndicator(
-                        progress = { fraction },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Text(
-                            stringResource(R.string.restore_decrypting_progress, progress.processed, progress.total),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        if (progress.failed > 0) {
-                            Text(
-                                stringResource(R.string.restore_failed_count, progress.failed),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
-                    }
-                    if (progress.currentFileName.isNotEmpty()) {
-                        Text(
-                            progress.currentFileName,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                        )
-                    }
+                when {
+                    progress is RestoreProgress.Files && progress.total > 0 -> FileCountProgress(progress)
+                    progress is RestoreProgress.Bytes && progress.fraction != null -> ByteProgress(progress)
+                    // Nothing measurable yet: the folder run is still walking the tree and probing
+                    // the password, or the single file's provider does not report a size.
+                    else -> IndeterminateProgress(mode)
                 }
                 if (warnToKeepAppOpen) {
                     Text(
@@ -653,20 +621,84 @@ private fun RestoreProgressDialog(
             }
         },
         confirmButton = {
-            if (onLeaveScreen != null) {
-                // Wording follows what leaving actually costs: a service-hosted run is safe to walk
-                // away from, while a run the service could not take only survives inside this
-                // process — the same distinction `warnToKeepAppOpen` spells out below the progress.
-                val leaveLabelRes = if (warnToKeepAppOpen) {
-                    R.string.button_restore_leave_screen
-                } else {
-                    R.string.button_restore_continue_in_background
-                }
-                TextButton(onClick = onLeaveScreen) { Text(stringResource(leaveLabelRes)) }
+            // Wording follows what leaving actually costs: a service-hosted run is safe to walk
+            // away from entirely, while a run the service could not take only survives inside this
+            // process — the same distinction `warnToKeepAppOpen` spells out below the progress.
+            val leaveLabelRes = if (warnToKeepAppOpen) {
+                R.string.button_restore_leave_screen
+            } else {
+                R.string.button_restore_continue_in_background
             }
+            TextButton(onClick = onLeaveScreen) { Text(stringResource(leaveLabelRes)) }
         },
         dismissButton = { TextButton(onClick = onCancel) { Text(stringResource(R.string.button_cancel)) } },
     )
+}
+
+/** Whole-folder progress: a determinate bar over the file count, plus the file being worked on. */
+@Suppress("MultipleEmitters")
+@Composable
+private fun FileCountProgress(progress: RestoreProgress.Files) {
+    LinearProgressIndicator(
+        progress = { progress.processed.toFloat() / progress.total.toFloat() },
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(
+            stringResource(R.string.restore_decrypting_progress, progress.processed, progress.total),
+            style = MaterialTheme.typography.bodySmall,
+        )
+        if (progress.failed > 0) {
+            Text(
+                stringResource(R.string.restore_failed_count, progress.failed),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+    }
+    if (progress.currentFileName.isNotEmpty()) {
+        Text(
+            progress.currentFileName,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
+    }
+}
+
+/**
+ * Single-file progress: a determinate bar over the bytes of the source. Only reached when the
+ * provider reported a size — without one there is nothing to be determinate about.
+ */
+@Suppress("MultipleEmitters")
+@Composable
+private fun ByteProgress(progress: RestoreProgress.Bytes) {
+    LinearProgressIndicator(
+        progress = { progress.fraction ?: 0f },
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Text(
+        stringResource(R.string.restore_single_progress_percent, progress.percent ?: 0),
+        style = MaterialTheme.typography.bodySmall,
+    )
+}
+
+/**
+ * The run has nothing measurable to report yet. For a folder that is the source walk and the
+ * password probing, which on a large backup is a minute or more — hence the explicit label, since
+ * an unexplained spinner reads as a hang. "Verifying password" would be wrong for a single file,
+ * which has no probing phase.
+ */
+@Suppress("MultipleEmitters")
+@Composable
+private fun IndeterminateProgress(mode: RestoreMode) {
+    val textRes = if (mode == RestoreMode.SINGLE_FILE) {
+        R.string.restore_single_decrypting
+    } else {
+        R.string.restore_verifying_password
+    }
+    Text(stringResource(textRes), style = MaterialTheme.typography.bodyMedium)
+    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
 }
 
 @Preview(showBackground = true)

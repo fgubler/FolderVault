@@ -6,21 +6,13 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.lifecycle.SavedStateHandle
-import ch.abwesend.foldervault.domain.coroutine.IDispatchers
-import ch.abwesend.foldervault.domain.restore.IForegroundRestoreLauncher
-import ch.abwesend.foldervault.domain.restore.IRestoreEngine
-import ch.abwesend.foldervault.domain.restore.RestoreCollisionPolicy
 import ch.abwesend.foldervault.domain.restore.RestoreMode
-import ch.abwesend.foldervault.domain.restore.RestoreProgress
 import ch.abwesend.foldervault.domain.restore.RestoreResult
-import ch.abwesend.foldervault.domain.restore.RestoreRunControl
-import ch.abwesend.foldervault.domain.restore.RestoreScanResult
 import ch.abwesend.foldervault.infrastructure.restore.RestoreRunCoordinator
 import ch.abwesend.foldervault.ui.theme.FolderVaultTheme
 import ch.abwesend.foldervault.view.screens.RestoreScreen
 import ch.abwesend.foldervault.view.viewmodel.RestoreViewModel
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -101,10 +93,14 @@ class RestoreProgressDialogTest {
         composeTestRule.waitForIdle()
     }
 
-    private fun setRestoreScreen(viewModel: RestoreViewModel, onBack: () -> Unit) {
+    private fun setRestoreScreen(
+        viewModel: RestoreViewModel,
+        onRestoreSucceeded: (mode: RestoreMode, result: RestoreResult) -> Unit = { _, _ -> },
+        onBack: () -> Unit,
+    ) {
         composeTestRule.setContent {
             FolderVaultTheme {
-                RestoreScreen(onBack = onBack, viewModel = viewModel)
+                RestoreScreen(onBack = onBack, viewModel = viewModel, onRestoreSucceeded = onRestoreSucceeded)
             }
         }
     }
@@ -120,48 +116,4 @@ class RestoreProgressDialogTest {
         coordinator = coordinator,
         savedStateHandle = SavedStateHandle(),
     )
-}
-
-private object UnconfinedDispatchers : IDispatchers {
-    override val default = Dispatchers.Unconfined
-    override val io = Dispatchers.Unconfined
-    override val main = Dispatchers.Unconfined
-    override val mainImmediate = Dispatchers.Unconfined
-}
-
-/** The OS refused the foreground service, so the coordinator's in-app fallback takes the run. */
-private object NoForegroundRestoreLauncher : IForegroundRestoreLauncher {
-    override fun start(): Boolean = false
-}
-
-/** Suspends both restore calls on [gate], so the dialog stays up while the test asserts on it. */
-private class GatedRestoreEngine(private val gate: CompletableDeferred<Unit>) : IRestoreEngine {
-
-    override suspend fun scanSourceFolder(sourceUri: String): RestoreScanResult =
-        RestoreScanResult(cryptFileCount = 1, otherFileCount = 0)
-
-    @Suppress("LongParameterList")
-    override suspend fun decryptAll(
-        sourceUri: String,
-        outputUri: String,
-        password: String,
-        collisionPolicy: RestoreCollisionPolicy,
-        runControl: RestoreRunControl,
-        onProgress: (RestoreProgress) -> Unit,
-    ): RestoreResult {
-        gate.await()
-        return RestoreResult.Success(1, 0, 0, 0)
-    }
-
-    @Suppress("LongParameterList")
-    override suspend fun decryptSingleFile(
-        sourceFileUri: String,
-        outputFileUri: String,
-        password: String,
-        runControl: RestoreRunControl,
-        onProgress: (RestoreProgress) -> Unit,
-    ): RestoreResult {
-        gate.await()
-        return RestoreResult.Success(1, 0, 0, 0)
-    }
 }

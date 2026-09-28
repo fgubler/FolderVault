@@ -340,9 +340,10 @@
     <string name="restore_title">Restore backup</string>
     <string name="restore_explanation_title">Restore an encrypted backup</string>
     <string name="restore_explanation_body">1. Pick your backup folder. If the Google Drive app is installed, you can select the folder directly on Google Drive in the file picker — no download needed. Otherwise, download it to local storage first.\n2. Pick an empty output folder.\n3. Enter your backup password — every file will be decrypted locally.</string>
-    <string name="restore_step1_header">Step 1: backup folder</string>
+    <string name="restore_step1_header">Step 1: backup folder (to be restored)</string>
     <string name="restore_pick_backup_folder">Pick backup folder</string>
-    <string name="restore_scanning">Analyzing backup folder…</string>
+    <string name="dialog_scanning_title">Analyzing backup folder</string>
+    <string name="dialog_scanning_text">Counting the encrypted files in the folder you picked. If it is on Google Drive, this can take a moment. You can pick the output folder once this is done.</string>
     <string name="restore_no_encrypted_files">No encrypted files found. Your %1$d file(s) are already usable without decryption.</string>
     <string name="restore_found_encrypted">Found %1$d encrypted file(s).</string>
     <string name="restore_found_encrypted_and_other">Found %1$d encrypted file(s) and %2$d other file(s).</string>

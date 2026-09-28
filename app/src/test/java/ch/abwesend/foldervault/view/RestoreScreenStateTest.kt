@@ -6,23 +6,16 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performScrollTo
 import androidx.lifecycle.SavedStateHandle
-import ch.abwesend.foldervault.domain.coroutine.IDispatchers
-import ch.abwesend.foldervault.domain.restore.IForegroundRestoreLauncher
-import ch.abwesend.foldervault.domain.restore.IRestoreEngine
-import ch.abwesend.foldervault.domain.restore.RestoreCollisionPolicy
 import ch.abwesend.foldervault.domain.restore.RestoreMode
-import ch.abwesend.foldervault.domain.restore.RestoreProgress
 import ch.abwesend.foldervault.domain.restore.RestoreResult
-import ch.abwesend.foldervault.domain.restore.RestoreRunControl
-import ch.abwesend.foldervault.domain.restore.RestoreScanResult
 import ch.abwesend.foldervault.infrastructure.restore.RestoreRunCoordinator
 import ch.abwesend.foldervault.ui.theme.FolderVaultTheme
 import ch.abwesend.foldervault.view.screens.RestoreScreen
 import ch.abwesend.foldervault.view.viewmodel.RestoreState
 import ch.abwesend.foldervault.view.viewmodel.RestoreViewModel
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -40,7 +33,8 @@ import org.robolectric.annotation.Config
  * in the app requests focus, so the fix is structural — a success leaves this screen altogether
  * (`onRestoreSucceeded`) and resets the form, while a failure keeps the controls for a retry. And
  * while a picked backup folder was being scanned, the pick button stayed tappable and the only hint
- * was a muted one-liner, so the wait read as nothing happening.
+ * was a muted one-liner, so the wait read as nothing happening — now a modal dialog says what is
+ * going on until the scan ends.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class)
@@ -51,7 +45,7 @@ class RestoreScreenStateTest {
 
     private val scanGate = CompletableDeferred<Unit>()
     private val decryptGate = CompletableDeferred<Unit>()
-    private val engine = GatedRestoreEngine(scanGate = scanGate, decryptGate = decryptGate)
+    private val engine = GatedRestoreEngine(decryptGate = decryptGate, scanGate = scanGate)
 
     private val successes = mutableListOf<Pair<RestoreMode, RestoreResult.Success>>()
 
@@ -84,8 +78,8 @@ class RestoreScreenStateTest {
         composeTestRule.waitForIdle()
 
         assertEquals(emptyList<Pair<RestoreMode, RestoreResult.Success>>(), successes)
-        composeTestRule.onNodeWithText(PASSWORD_LABEL).assertIsDisplayed()
-        composeTestRule.onNodeWithText(DECRYPT_BUTTON).assertIsDisplayed()
+        composeTestRule.onNodeWithText(PASSWORD_LABEL).performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText(DECRYPT_BUTTON).performScrollTo().assertIsDisplayed()
     }
 
     @Test
@@ -123,12 +117,12 @@ class RestoreScreenStateTest {
         decryptGate.complete(Unit)
         composeTestRule.waitForIdle()
 
-        composeTestRule.onNodeWithText(PASSWORD_LABEL).assertIsDisplayed()
-        composeTestRule.onNodeWithText(START_RESTORE_BUTTON).assertIsDisplayed()
+        composeTestRule.onNodeWithText(PASSWORD_LABEL).performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText(START_RESTORE_BUTTON).performScrollTo().assertIsDisplayed()
     }
 
     @Test
-    fun `picking a backup folder disables the pick button and shows the scanning status until the scan ends`() {
+    fun `picking a backup folder blocks the form with the scanning dialog until the scan ends`() {
         val viewModel = viewModel()
         setRestoreScreen(viewModel)
 
@@ -136,14 +130,16 @@ class RestoreScreenStateTest {
         composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithText(PICK_FOLDER_BUTTON).assertIsNotEnabled()
-        composeTestRule.onNodeWithText(SCANNING_STATUS).assertIsDisplayed()
+        composeTestRule.onNodeWithText(SCANNING_DIALOG_TITLE).assertIsDisplayed()
+        composeTestRule.onNodeWithText(PICK_OUTPUT_BUTTON).assertDoesNotExist()
 
         scanGate.complete(Unit)
         composeTestRule.waitForIdle()
 
+        composeTestRule.onNodeWithText(SCANNING_DIALOG_TITLE).assertDoesNotExist()
         composeTestRule.onNodeWithText(PICK_FOLDER_BUTTON).assertIsEnabled()
-        composeTestRule.onNodeWithText(SCANNING_STATUS).assertDoesNotExist()
-        composeTestRule.onNodeWithText("Found 1 encrypted file(s).").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Found 1 encrypted file(s).").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText(PICK_OUTPUT_BUTTON).performScrollTo().assertIsDisplayed()
     }
 
     private fun startSingleFileRestore(viewModel: RestoreViewModel) {
@@ -183,61 +179,7 @@ class RestoreScreenStateTest {
         const val START_RESTORE_BUTTON = "Start restore"
         const val START_OVER_BUTTON = "Start over (clear selection)"
         const val PICK_FOLDER_BUTTON = "Pick backup folder"
-        const val SCANNING_STATUS = "Analyzing backup folder…"
-    }
-}
-
-private object UnconfinedDispatchers : IDispatchers {
-    override val default = Dispatchers.Unconfined
-    override val io = Dispatchers.Unconfined
-    override val main = Dispatchers.Unconfined
-    override val mainImmediate = Dispatchers.Unconfined
-}
-
-/** The OS refused the foreground service, so the coordinator's in-app fallback takes the run. */
-private object NoForegroundRestoreLauncher : IForegroundRestoreLauncher {
-    override fun start(): Boolean = false
-}
-
-/**
- * Suspends the scan on [scanGate] and both restore calls on [decryptGate], so the test can assert on
- * the intermediate state before letting each step finish. [decryptResult] is what both restore calls
- * answer once released.
- */
-private class GatedRestoreEngine(
-    private val scanGate: CompletableDeferred<Unit>,
-    private val decryptGate: CompletableDeferred<Unit>,
-) : IRestoreEngine {
-
-    var decryptResult: RestoreResult = RestoreResult.Success(decrypted = 1, copied = 0, skipped = 0, failed = 0)
-
-    override suspend fun scanSourceFolder(sourceUri: String): RestoreScanResult {
-        scanGate.await()
-        return RestoreScanResult(cryptFileCount = 1, otherFileCount = 0)
-    }
-
-    @Suppress("LongParameterList")
-    override suspend fun decryptAll(
-        sourceUri: String,
-        outputUri: String,
-        password: String,
-        collisionPolicy: RestoreCollisionPolicy,
-        runControl: RestoreRunControl,
-        onProgress: (RestoreProgress) -> Unit,
-    ): RestoreResult {
-        decryptGate.await()
-        return decryptResult
-    }
-
-    @Suppress("LongParameterList")
-    override suspend fun decryptSingleFile(
-        sourceFileUri: String,
-        outputFileUri: String,
-        password: String,
-        runControl: RestoreRunControl,
-        onProgress: (RestoreProgress) -> Unit,
-    ): RestoreResult {
-        decryptGate.await()
-        return decryptResult
+        const val PICK_OUTPUT_BUTTON = "Pick output folder"
+        const val SCANNING_DIALOG_TITLE = "Analyzing backup folder"
     }
 }

@@ -58,6 +58,21 @@ three message shapes, the mode-specific button label and both callbacks. Still u
 sandbox (no Gradle); the `NavBackStack.removeAll` call in `returnHome` is the one API use worth a
 look if the host compile complains.
 
+**Follow-up 2 (same day) — scanning becomes a blocking dialog.** The user wanted the folder scan
+to be unmistakable: `RestoreScanningDialog` (title "Analyzing backup folder", a sentence saying
+what is counted and that the output-folder step follows, a spinner, no buttons — the scan has no
+cancel path, so dismiss requests are ignored) shows while the state is `Scanning` and leaves with
+it; the inline status line under the pick button went away (the button stays disabled behind the
+scrim). Step 1's header is now "backup folder (to be restored)". The `@StringRes`
+`IndeterminateProgress` overload from the first pass was no longer used and was removed again.
+
+**Host test run:** six failures, none in production code. (1) `RestoreProgressDialogTest` threw
+`NoSuchMethodError` for `GatedRestoreEngine.<init>` — both Compose tests declared file-private
+fixtures of the same names in the same package, which compile to one JVM class; they now live once
+in `RestoreScreenTestFixtures.kt`. (2) Three `assertIsDisplayed` checks failed for nodes that
+exist but sit below the fold of Robolectric's default 470 dp screen (the form scrolls); those now
+`performScrollTo()` first.
+
 ## 2026-09-28 — Bug: "Backup problem … upload failed" after a run whose log shows nothing failed
 
 The user's log showed two periodic runs, one transient `uploadFile(...) failed (attempt 1/5)` that

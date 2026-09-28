@@ -13,12 +13,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -40,6 +43,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -88,6 +92,10 @@ fun RestoreScreen(
     val actions = rememberRestoreLaunchActions(
         viewModel = viewModel,
     )
+
+    if (uiState.state == RestoreState.Scanning) {
+        RestoreScanningDialog()
+    }
 
     if (uiState.state is RestoreState.Running) {
         RestoreProgressDialog(
@@ -402,8 +410,8 @@ private fun SourceFolderSection(
 ) {
     Text(stringResource(R.string.restore_step1_header), style = MaterialTheme.typography.labelLarge)
     // Scanning walks the whole picked tree (a network round-trip per directory on a cloud
-    // provider), so a second pick must wait, and the wait must look like work in progress rather
-    // than a muted hint that nothing is happening.
+    // provider). The modal RestoreScanningDialog already keeps the user from picking again; the
+    // disabled button is what they see behind its scrim.
     OutlinedButton(
         onClick = onPickSource,
         enabled = state != RestoreState.Scanning,
@@ -412,7 +420,6 @@ private fun SourceFolderSection(
         Text(stringResource(R.string.restore_pick_backup_folder))
     }
     when (state) {
-        RestoreState.Scanning -> IndeterminateProgress(R.string.restore_scanning)
         RestoreState.SourceReady, RestoreState.ReadyToStart, is RestoreState.Done -> {
             if (cryptFileCount == 0 && otherFileCount > 0) {
                 Text(
@@ -705,15 +712,29 @@ private fun IndeterminateProgress(mode: RestoreMode) {
     } else {
         R.string.restore_verifying_password
     }
-    IndeterminateProgress(textRes)
-}
-
-/** A labelled indeterminate bar: the one shape every "please wait" on this screen shares. */
-@Suppress("MultipleEmitters")
-@Composable
-private fun IndeterminateProgress(@StringRes textRes: Int) {
     Text(stringResource(textRes), style = MaterialTheme.typography.bodyMedium)
     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+}
+
+/**
+ * Blocks the folder form while the picked backup folder is scanned. The scan has no cancel path
+ * (it is a plain tree walk the ViewModel awaits), so the dialog has no buttons and ignores dismiss
+ * requests; it leaves with the `Scanning` state, after which the output-folder step appears.
+ */
+@Composable
+private fun RestoreScanningDialog() {
+    AlertDialog(
+        onDismissRequest = {},
+        title = { Text(stringResource(R.string.dialog_scanning_title)) },
+        text = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                Spacer(modifier = Modifier.width(16.dp))
+                Text(stringResource(R.string.dialog_scanning_text), style = MaterialTheme.typography.bodyMedium)
+            }
+        },
+        confirmButton = {},
+    )
 }
 
 @Preview(showBackground = true)

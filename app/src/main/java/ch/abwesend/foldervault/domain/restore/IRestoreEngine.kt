@@ -3,32 +3,55 @@ package ch.abwesend.foldervault.domain.restore
 interface IRestoreEngine {
     suspend fun scanSourceFolder(sourceUri: String): RestoreScanResult
 
+    /**
+     * Restores every file of the backup tree [sourceUri] into [outputUri].
+     *
+     * Stopping is cooperative through [runControl] — never by cancelling the coroutine: the engine
+     * polls it at each file boundary and returns [RestoreResult.Cancelled] with the counts of what
+     * it already restored. Cancelling instead would make `withContext` discard that value and
+     * throw, leaving the user with no idea how far the run got.
+     *
+     * The password is verified against a few of the smallest encrypted files *before* anything is
+     * written, so a wrong password returns [RestoreResult.InvalidPassword] with nothing modified.
+     */
+    @Suppress("LongParameterList")
     suspend fun decryptAll(
         sourceUri: String,
         outputUri: String,
         password: String,
         collisionPolicy: RestoreCollisionPolicy,
+        runControl: RestoreRunControl,
         onProgress: (RestoreProgress) -> Unit,
     ): RestoreResult
 
     /**
-     * Restores a single picked file into the destination folder [outputFolderUri] (a tree the
-     * caller picked via the system folder picker). The output file is created by the engine with
-     * [outputFileName] as its base name; if a file of that name already exists in the folder, a
-     * unique name is generated automatically (`name_restored`, `name_restored_2`, …) so a restore
-     * can never overwrite an existing file. Returns [RestoreResult.Success] with `decrypted = 1`
-     * (or `copied = 1` for a plain file), [RestoreResult.InvalidPassword] only when decryption
-     * fails on the GCM tag check (a wrong password), or [RestoreResult.Failure] for unreadable,
-     * corrupt or uncopyable files.
+     * Restores a single picked file into the destination document [outputFileUri] — the file the
+     * user named in the system "Save as" file picker. The picker itself decides the name and the
+     * location, and it is the picker (not this engine) that resolves a collision with an existing
+     * file: picking an existing name means the user confirmed overwriting it, so its previous
+     * content is replaced. Returns [RestoreResult.Success] with `decrypted = 1` (or `copied = 1`
+     * for a plain file), [RestoreResult.InvalidPassword] only when decryption fails on the GCM tag
+     * check (a wrong password), or [RestoreResult.Failure] for unreadable, corrupt or uncopyable
+     * files.
      *
-     * On any failure — and on cancellation — the freshly created output document is deleted again.
-     * Large files are processed in cancellation-check chunks, so a cancel aborts within one chunk
-     * of work; small files finish their (short) run first and are then cleaned up.
+     * Stopping is cooperative through [runControl], the same rule as [decryptAll] — never by
+     * cancelling the coroutine. A single file has no file boundary to poll, so the check rides the
+     * source stream instead and fires every few megabytes; the run then returns
+     * [RestoreResult.Cancelled] with zero counts. They *are* zero: unlike a folder restore, a
+     * stopped single-file restore leaves nothing usable behind — half a plaintext file is
+     * indistinguishable from a whole one — so the output document is deleted.
+     *
+     * On any failure — and on cancellation — that same deletion applies, so no truncated plaintext
+     * is left behind masquerading as a restored file.
+     *
+     * [onProgress] reports [RestoreProgress.Bytes] of the *source* as it is consumed, at a rate
+     * bounded so a multi-gigabyte file does not produce thousands of updates.
      */
     suspend fun decryptSingleFile(
         sourceFileUri: String,
-        outputFolderUri: String,
-        outputFileName: String,
+        outputFileUri: String,
         password: String,
+        runControl: RestoreRunControl,
+        onProgress: (RestoreProgress) -> Unit,
     ): RestoreResult
 }

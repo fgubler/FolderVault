@@ -20,6 +20,15 @@ class WorkerErrorHandler {
          * backoff) absorbs a transient token-refresh blip without wasting work or churning the API.
          */
         const val MAX_AUTH_RETRY_COUNT = 5
+
+        /**
+         * Cap for "no usable network" runs — the classic case being a scheduled backup that fires
+         * before connectivity is actually up (e.g. the phone just woke in the morning). Kept
+         * generous so WorkManager's backoff can bridge a connectivity gap of many minutes before
+         * the failure is finally surfaced to the user, yet bounded so a device that is genuinely
+         * offline for a long time does not retry forever.
+         */
+        const val MAX_NETWORK_RETRY_COUNT = 10
     }
 
     /**

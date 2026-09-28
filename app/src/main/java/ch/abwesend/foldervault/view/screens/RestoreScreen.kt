@@ -13,12 +13,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -34,11 +37,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -63,6 +68,7 @@ import org.koin.androidx.compose.koinViewModel
 @Composable
 fun RestoreScreen(
     onBack: () -> Unit,
+    onRestoreSucceeded: (RestoreMode, RestoreResult.Success) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: RestoreViewModel = koinViewModel(),
 ) {
@@ -71,12 +77,39 @@ fun RestoreScreen(
 
     UnexpectedErrorDialog(error = unexpectedError, onDismiss = viewModel::dismissUnexpectedError)
 
+    // Success is not a state of this form. The result goes to the dedicated success screen, and
+    // the form is reset in the same step: coming back ("restore another") lands on a clean screen
+    // in the same mode, and the coordinator's result is acknowledged exactly once. Failures stay
+    // inline, with the controls, so the user can correct the input and retry.
+    val state = uiState.state
+    LaunchedEffect(state) {
+        if (state is RestoreState.Done && state.result is RestoreResult.Success) {
+            onRestoreSucceeded(uiState.mode, state.result)
+            viewModel.reset()
+        }
+    }
+
     val actions = rememberRestoreLaunchActions(
         viewModel = viewModel,
     )
 
+    if (uiState.state == RestoreState.Scanning) {
+        RestoreScanningDialog()
+    }
+
     if (uiState.state is RestoreState.Running) {
-        RestoreProgressDialog(mode = uiState.mode, progress = uiState.progress, onCancel = viewModel::cancel)
+        RestoreProgressDialog(
+            mode = uiState.mode,
+            progress = uiState.progress,
+            // The single-file flow always runs in the ViewModel scope, so it carries the same
+            // exposure as a folder restore the foreground service could not take.
+            warnToKeepAppOpen = !uiState.restoreHostedInForegroundService,
+            onCancel = viewModel::cancel,
+            // Both runs are owned by `IRestoreRunCoordinator` and outlive this screen, so both may
+            // be left behind. (Until the single-file run moved off `viewModelScope`, leaving would
+            // have cancelled it mid-write, and this dialog had to stay blocking for that mode.)
+            onLeaveScreen = onBack,
+        )
     }
 
     Scaffold(
@@ -110,6 +143,15 @@ fun RestoreScreen(
         )
     }
 }
+
+/**
+ * Mime type of the "Save as" picker for the single-file restore. A wildcard keeps the picker from
+ * forcing an extension of its own onto the suggested name, which already carries the original one.
+ */
+private const val SAVE_AS_MIME_TYPE = "*/*"
+
+/** The source picker accepts any file: a backup may hold encrypted and plain files alike. */
+private const val SOURCE_FILE_MIME_TYPE = "*/*"
 
 /** Bundles the four system-picker triggers the restore screen needs. */
 private class RestoreLaunchActions(
@@ -162,27 +204,32 @@ private fun rememberRestoreLaunchActions(
     }
 
     val saveAsLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocumentTree(),
+        ActivityResultContracts.CreateDocument(SAVE_AS_MIME_TYPE),
     ) { uri ->
-        // The single-file output is a destination *folder*: the app then creates a fresh,
-        // non-colliding file inside it, so a restore can never overwrite an existing file. The
-        // password is read from the ViewModel state, which survives the activity recreation a
-        // configuration change during the picker round-trip causes (composable state would not).
+        // A "Save as" *file* picker: the user names the destination file directly, so no folder
+        // access has to be granted. Picking an existing name means the user confirmed overwriting
+        // it. The document is written once within this session, so the temporary CreateDocument
+        // grant is enough — no persistable permission is taken. The password is read from the
+        // ViewModel state, which survives the activity recreation a configuration change during
+        // the picker round-trip causes (composable state would not).
         if (uri != null) {
-            context.contentResolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-            )
             viewModel.startSingleFileRestore(uri.toString())
         }
     }
 
-    return RestoreLaunchActions(
-        pickSourceFolder = { sourceLauncher.launch(null) },
-        pickOutputFolder = { outputLauncher.launch(null) },
-        pickSourceFile = { sourceFileLauncher.launch(arrayOf("*/*")) },
-        decryptAndSave = { saveAsLauncher.launch(null) },
-    )
+    // Remembered so the four lambdas keep their identity across recompositions — without this they
+    // were rebuilt on every `uiState` change, making the callbacks handed to `RestoreContent` a new
+    // object every time and defeating its skippability (and contradicting the `remember` prefix in
+    // this function's own name). Safe to hold on to: `decryptAndSave` reads the suggested name from
+    // the ViewModel lazily, when it is invoked, so nothing stale is captured here.
+    return remember(viewModel, sourceLauncher, outputLauncher, sourceFileLauncher, saveAsLauncher) {
+        RestoreLaunchActions(
+            pickSourceFolder = { sourceLauncher.launch(null) },
+            pickOutputFolder = { outputLauncher.launch(null) },
+            pickSourceFile = { sourceFileLauncher.launch(arrayOf(SOURCE_FILE_MIME_TYPE)) },
+            decryptAndSave = { saveAsLauncher.launch(viewModel.uiState.value.suggestedOutputName.orEmpty()) },
+        )
+    }
 }
 
 @Suppress("LongParameterList")
@@ -246,6 +293,15 @@ private fun RestoreModeSelector(mode: RestoreMode, onModeChange: (RestoreMode) -
     }
 }
 
+/**
+ * True for the moment between a run finishing successfully and [RestoreScreen]'s hand-off to the
+ * success screen (which also resets this form). Both flows use it to keep their input controls out
+ * of composition during that frame: a password field left mounted under the closing progress
+ * dialog would regain focus and pop the keyboard just as the screen changes.
+ */
+private val RestoreState.succeeded: Boolean
+    get() = this is RestoreState.Done && result is RestoreResult.Success
+
 @Suppress("LongParameterList", "MultipleEmitters")
 @Composable
 private fun WholeFolderContent(
@@ -274,7 +330,7 @@ private fun WholeFolderContent(
         (
             state == RestoreState.SourceReady ||
                 state == RestoreState.ReadyToStart ||
-                state is RestoreState.Done
+                (state is RestoreState.Done && !state.succeeded)
             )
 
     if (showOutputAndRestore) {
@@ -282,7 +338,7 @@ private fun WholeFolderContent(
         OutputFolderSection(outputUri = uiState.outputUri, onPickOutput = onPickOutput)
     }
 
-    if (showOutputAndRestore && uiState.outputUri != null && state != RestoreState.Scanning) {
+    if (showOutputAndRestore && uiState.outputUri != null) {
         HorizontalDivider()
         PasswordAndStartSection(
             collisionPolicy = uiState.collisionPolicy,
@@ -292,7 +348,7 @@ private fun WholeFolderContent(
         )
     }
 
-    if (state is RestoreState.Done) {
+    if (state is RestoreState.Done && !state.succeeded) {
         HorizontalDivider()
         RestoreResultSection(mode = RestoreMode.WHOLE_FOLDER, result = state.result, onReset = onReset)
     }
@@ -316,8 +372,8 @@ private fun SingleFileContent(
     HorizontalDivider()
     SingleFileSourceSection(fileName = uiState.sourceFileName, onPickSourceFile = onPickSourceFile)
 
-    val sourceReady = uiState.sourceFileUri != null
-    if (sourceReady) {
+    val showPassword = uiState.sourceFileUri != null && !state.succeeded
+    if (showPassword) {
         HorizontalDivider()
         SingleFilePasswordSection(
             password = uiState.singleFilePassword,
@@ -327,7 +383,7 @@ private fun SingleFileContent(
         )
     }
 
-    if (state is RestoreState.Done) {
+    if (state is RestoreState.Done && !state.succeeded) {
         HorizontalDivider()
         RestoreResultSection(mode = RestoreMode.SINGLE_FILE, result = state.result, onReset = onReset)
     }
@@ -353,15 +409,17 @@ private fun SourceFolderSection(
     onPickSource: () -> Unit,
 ) {
     Text(stringResource(R.string.restore_step1_header), style = MaterialTheme.typography.labelLarge)
-    OutlinedButton(onClick = onPickSource, modifier = Modifier.fillMaxWidth()) {
+    // Scanning walks the whole picked tree (a network round-trip per directory on a cloud
+    // provider). The modal RestoreScanningDialog already keeps the user from picking again; the
+    // disabled button is what they see behind its scrim.
+    OutlinedButton(
+        onClick = onPickSource,
+        enabled = state != RestoreState.Scanning,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
         Text(stringResource(R.string.restore_pick_backup_folder))
     }
     when (state) {
-        RestoreState.Scanning -> Text(
-            stringResource(R.string.restore_scanning),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
         RestoreState.SourceReady, RestoreState.ReadyToStart, is RestoreState.Done -> {
             if (cryptFileCount == 0 && otherFileCount > 0) {
                 Text(
@@ -491,36 +549,42 @@ private fun SingleFilePasswordSection(
 private fun RestoreResultSection(mode: RestoreMode, result: RestoreResult, onReset: () -> Unit) {
     Text(stringResource(R.string.restore_result_header), style = MaterialTheme.typography.labelLarge)
     when (result) {
-        is RestoreResult.Success -> {
-            // The single-file flow handled exactly one file — the counter-based folder message
-            // ("Restored 0 encrypted file(s), copied 1 plain file(s).") would read oddly here.
+        // A success is shown by RestoreSuccessScreen; RestoreScreen hands over before this renders.
+        is RestoreResult.Success -> Unit
+        RestoreResult.InvalidPassword -> {
+            // "No files were modified" holds for the folder flow (it probes the password before
+            // writing anything) but not for the single-file one: the output document was already
+            // truncated by the time the GCM tag check failed, so a picked existing file is gone.
+            val msgRes = if (mode == RestoreMode.SINGLE_FILE) {
+                R.string.restore_single_wrong_password
+            } else {
+                R.string.restore_wrong_password
+            }
+            Text(
+                stringResource(msgRes),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        is RestoreResult.Cancelled -> {
+            // A stopped folder run really did restore what it had already written — reporting only
+            // "cancelled" would leave the user guessing whether anything landed at all. A stopped
+            // single-file run is the opposite: its counters are all zero *by design*, because half
+            // a plaintext file is indistinguishable from a whole one and is deleted. Rendering the
+            // folder message there would read as "restored 0 files" and hide that deletion.
             val msg = if (mode == RestoreMode.SINGLE_FILE) {
-                if (result.copied > 0) {
-                    stringResource(R.string.restore_single_success_copied)
-                } else {
-                    stringResource(R.string.restore_single_success_decrypted)
-                }
+                stringResource(R.string.restore_single_cancelled)
             } else {
                 buildString {
-                    append(stringResource(R.string.restore_success_base, result.decrypted))
+                    append(stringResource(R.string.restore_cancelled, result.decrypted))
                     if (result.copied > 0) append(stringResource(R.string.restore_success_and_copied, result.copied))
                     if (result.skipped > 0) append(stringResource(R.string.restore_success_and_skipped, result.skipped))
                     if (result.failed > 0) append(stringResource(R.string.restore_success_and_failed, result.failed))
                     append(".")
                 }
             }
-            Text(msg, style = MaterialTheme.typography.bodyMedium)
+            Text(msg, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        RestoreResult.InvalidPassword -> Text(
-            stringResource(R.string.restore_wrong_password),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.error,
-        )
-        RestoreResult.Cancelled -> Text(
-            stringResource(R.string.restore_cancelled),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
         is RestoreResult.Failure -> Text(
             stringResource(R.string.restore_failed, stringResource(result.reason.messageResId)),
             style = MaterialTheme.typography.bodyMedium,
@@ -533,61 +597,143 @@ private fun RestoreResultSection(mode: RestoreMode, result: RestoreResult, onRes
     }
 }
 
+/**
+ * Modal progress dialog for a running restore.
+ *
+ * [onLeaveScreen] exists because a modal dialog *consumes* the back gesture: with the empty
+ * `onDismissRequest` this used to have, the user was pinned to this screen for the entire run — up
+ * to an hour on a large backup, and the exact opposite of what the foreground service exists for.
+ * Leaving is safe because `IRestoreRunCoordinator` owns the run and keeps it going (in the
+ * foreground service, or at worst in an application-scoped coroutine) while the user is elsewhere.
+ */
 @Composable
-private fun RestoreProgressDialog(mode: RestoreMode, progress: RestoreProgress?, onCancel: () -> Unit) {
+private fun RestoreProgressDialog(
+    mode: RestoreMode,
+    progress: RestoreProgress?,
+    warnToKeepAppOpen: Boolean,
+    onCancel: () -> Unit,
+    onLeaveScreen: () -> Unit,
+) {
     AlertDialog(
-        onDismissRequest = {},
+        onDismissRequest = onLeaveScreen,
         title = { Text(stringResource(R.string.dialog_restoring_title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (progress == null || progress.total == 0) {
-                    // The single-file flow never reports progress, so this branch covers its whole
-                    // (potentially long) run — "Verifying password" would be misleading there.
-                    val textRes = if (mode == RestoreMode.SINGLE_FILE) {
-                        R.string.restore_single_decrypting
-                    } else {
-                        R.string.restore_verifying_password
-                    }
+                when {
+                    progress is RestoreProgress.Files && progress.total > 0 -> FileCountProgress(progress)
+                    progress is RestoreProgress.Bytes && progress.fraction != null -> ByteProgress(progress)
+                    // Nothing measurable yet: the folder run is still walking the tree and probing
+                    // the password, or the single file's provider does not report a size.
+                    else -> IndeterminateProgress(mode)
+                }
+                if (warnToKeepAppOpen) {
                     Text(
-                        stringResource(textRes),
-                        style = MaterialTheme.typography.bodyMedium,
+                        stringResource(R.string.restore_keep_app_open),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary,
                     )
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                } else {
-                    val fraction = progress.processed.toFloat() / progress.total.toFloat()
-                    LinearProgressIndicator(
-                        progress = { fraction },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Text(
-                            stringResource(R.string.restore_decrypting_progress, progress.processed, progress.total),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        if (progress.failed > 0) {
-                            Text(
-                                stringResource(R.string.restore_failed_count, progress.failed),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
-                    }
-                    if (progress.currentFileName.isNotEmpty()) {
-                        Text(
-                            progress.currentFileName,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                        )
-                    }
                 }
             }
         },
-        confirmButton = {},
+        confirmButton = {
+            // Wording follows what leaving actually costs: a service-hosted run is safe to walk
+            // away from entirely, while a run the service could not take only survives inside this
+            // process — the same distinction `warnToKeepAppOpen` spells out below the progress.
+            val leaveLabelRes = if (warnToKeepAppOpen) {
+                R.string.button_restore_leave_screen
+            } else {
+                R.string.button_restore_continue_in_background
+            }
+            TextButton(onClick = onLeaveScreen) { Text(stringResource(leaveLabelRes)) }
+        },
         dismissButton = { TextButton(onClick = onCancel) { Text(stringResource(R.string.button_cancel)) } },
+    )
+}
+
+/** Whole-folder progress: a determinate bar over the file count, plus the file being worked on. */
+@Suppress("MultipleEmitters")
+@Composable
+private fun FileCountProgress(progress: RestoreProgress.Files) {
+    LinearProgressIndicator(
+        progress = { progress.processed.toFloat() / progress.total.toFloat() },
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(
+            stringResource(R.string.restore_decrypting_progress, progress.processed, progress.total),
+            style = MaterialTheme.typography.bodySmall,
+        )
+        if (progress.failed > 0) {
+            Text(
+                stringResource(R.string.restore_failed_count, progress.failed),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+    }
+    if (progress.currentFileName.isNotEmpty()) {
+        Text(
+            progress.currentFileName,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
+    }
+}
+
+/**
+ * Single-file progress: a determinate bar over the bytes of the source. Only reached when the
+ * provider reported a size — without one there is nothing to be determinate about.
+ */
+@Suppress("MultipleEmitters")
+@Composable
+private fun ByteProgress(progress: RestoreProgress.Bytes) {
+    LinearProgressIndicator(
+        progress = { progress.fraction ?: 0f },
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Text(
+        stringResource(R.string.restore_single_progress_percent, progress.percent ?: 0),
+        style = MaterialTheme.typography.bodySmall,
+    )
+}
+
+/**
+ * The run has nothing measurable to report yet. For a folder that is the source walk and the
+ * password probing, which on a large backup is a minute or more — hence the explicit label, since
+ * an unexplained spinner reads as a hang. "Verifying password" would be wrong for a single file,
+ * which has no probing phase.
+ */
+@Suppress("MultipleEmitters")
+@Composable
+private fun IndeterminateProgress(mode: RestoreMode) {
+    val textRes = if (mode == RestoreMode.SINGLE_FILE) {
+        R.string.restore_single_decrypting
+    } else {
+        R.string.restore_verifying_password
+    }
+    Text(stringResource(textRes), style = MaterialTheme.typography.bodyMedium)
+    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+}
+
+/**
+ * Blocks the folder form while the picked backup folder is scanned. The scan has no cancel path
+ * (it is a plain tree walk the ViewModel awaits), so the dialog has no buttons and ignores dismiss
+ * requests; it leaves with the `Scanning` state, after which the output-folder step appears.
+ */
+@Composable
+private fun RestoreScanningDialog() {
+    AlertDialog(
+        onDismissRequest = {},
+        title = { Text(stringResource(R.string.dialog_scanning_title)) },
+        text = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                Spacer(modifier = Modifier.width(16.dp))
+                Text(stringResource(R.string.dialog_scanning_text), style = MaterialTheme.typography.bodyMedium)
+            }
+        },
+        confirmButton = {},
     )
 }
 

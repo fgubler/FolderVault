@@ -2,6 +2,7 @@ package ch.abwesend.foldervault.infrastructure.cloud.googledrive
 
 import ch.abwesend.foldervault.domain.cloud.CloudAuthException
 import ch.abwesend.foldervault.domain.cloud.CloudException
+import ch.abwesend.foldervault.domain.cloud.CloudNetworkUnavailableException
 import ch.abwesend.foldervault.domain.cloud.CloudNotFoundException
 import ch.abwesend.foldervault.domain.cloud.CloudPermanentException
 import ch.abwesend.foldervault.domain.cloud.CloudQuotaExceededException
@@ -9,6 +10,11 @@ import ch.abwesend.foldervault.domain.cloud.CloudRateLimitException
 import ch.abwesend.foldervault.domain.cloud.CloudTransientException
 import com.google.api.client.googleapis.json.GoogleJsonResponseException
 import java.io.IOException
+import java.net.ConnectException
+import java.net.NoRouteToHostException
+import java.net.PortUnreachableException
+import java.net.SocketException
+import java.net.UnknownHostException
 
 internal object DriveErrorClassifier {
 
@@ -18,8 +24,48 @@ internal object DriveErrorClassifier {
             val reason = e.details?.errors?.firstOrNull()?.reason.orEmpty()
             return classifyByCodeAndReason(e.statusCode, reason, e)
         }
-        if (e is IOException) return CloudTransientException(cause = e)
+        if (e is IOException) return classifyIoException(e)
         return CloudTransientException(cause = e)
+    }
+
+    /**
+     * A no-connectivity [IOException] (DNS resolution failed, or the socket layer could not reach
+     * any network) maps to [CloudNetworkUnavailableException] so the worker can ride WorkManager's
+     * backoff and defer the failure notification; any other [IOException] stays a generic transient
+     * error.
+     */
+    internal fun classifyIoException(e: IOException): CloudTransientException =
+        if (isConnectivityError(e)) CloudNetworkUnavailableException(cause = e) else CloudTransientException(cause = e)
+
+    /**
+     * Whether [throwable] (or any of its causes) indicates the device had no usable network *at
+     * all*, as opposed to a connection that existed and then failed.
+     *
+     * Deliberately matches the specific no-route/no-DNS types rather than their common base class
+     * [SocketException]: a bare `SocketException` is also what the platform throws for a
+     * *mid-transfer* failure on a perfectly healthy network ("Connection reset by peer", "Broken
+     * pipe", "Software caused connection abort"), which is an everyday event on mobile. Treating
+     * those as "no network" would be expensive: [CloudNetworkUnavailableException] aborts the
+     * *entire* backup run (the uploader drains its remaining queue untouched) and defers the
+     * user-facing failure notification for the whole retry cap — where the right handling is to
+     * count the one file as failed and carry on with the rest. Such errors therefore stay generic
+     * transient errors, which the retry policy already absorbs.
+     *
+     * [java.net.SocketTimeoutException] is likewise absent on purpose: a timeout means the network
+     * was there and too slow, not missing.
+     */
+    internal fun isConnectivityError(throwable: Throwable): Boolean {
+        var current: Throwable? = throwable
+        val seen = mutableSetOf<Throwable>()
+        while (current != null && seen.add(current)) {
+            val noNetwork = current is UnknownHostException || // DNS could not be reached at all
+                current is ConnectException || // "Network is unreachable" / connection refused
+                current is NoRouteToHostException ||
+                current is PortUnreachableException
+            if (noNetwork) return true
+            current = current.cause
+        }
+        return false
     }
 
     internal fun classifyByCodeAndReason(statusCode: Int, reason: String, cause: Throwable): CloudException =

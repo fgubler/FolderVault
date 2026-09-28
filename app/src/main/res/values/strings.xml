@@ -91,6 +91,7 @@
     <string name="status_up_to_date">Up to date</string>
     <string name="status_completed_with_warnings">Completed with warnings</string>
     <string name="status_failed">Failed</string>
+    <string name="status_waiting_for_network">Waiting for a network connection</string>
     <string name="status_cancelled">Cancelled</string>
 
     <!-- MessageSeverity display names -->
@@ -339,9 +340,10 @@
     <string name="restore_title">Restore backup</string>
     <string name="restore_explanation_title">Restore an encrypted backup</string>
     <string name="restore_explanation_body">1. Pick your backup folder. If the Google Drive app is installed, you can select the folder directly on Google Drive in the file picker — no download needed. Otherwise, download it to local storage first.\n2. Pick an empty output folder.\n3. Enter your backup password — every file will be decrypted locally.</string>
-    <string name="restore_step1_header">Step 1: backup folder</string>
+    <string name="restore_step1_header">Step 1: backup folder (to be restored)</string>
     <string name="restore_pick_backup_folder">Pick backup folder</string>
-    <string name="restore_scanning">Scanning…</string>
+    <string name="dialog_scanning_title">Analyzing backup folder</string>
+    <string name="dialog_scanning_text">Counting the encrypted files in the folder you picked. If it is on Google Drive, this can take a moment. You can pick the output folder once this is done.</string>
     <string name="restore_no_encrypted_files">No encrypted files found. Your %1$d file(s) are already usable without decryption.</string>
     <string name="restore_found_encrypted">Found %1$d encrypted file(s).</string>
     <string name="restore_found_encrypted_and_other">Found %1$d encrypted file(s) and %2$d other file(s).</string>
@@ -359,7 +361,7 @@
     <string name="restore_success_and_skipped">, skipped %1$d</string>
     <string name="restore_success_and_failed">, %1$d failed</string>
     <string name="restore_wrong_password">Wrong password. No files were modified.</string>
-    <string name="restore_cancelled">Restore was cancelled.</string>
+    <string name="restore_cancelled">Restore was stopped after restoring %1$d encrypted file(s)</string>
     <string name="restore_failed">Restore failed: %1$s</string>
 
     <!-- Restore failure reasons (inserted into restore_failed) -->
@@ -371,9 +373,15 @@
     <string name="restore_failure_invalid_encrypted_file">The file is not a valid encrypted backup file</string>
     <string name="restore_failure_decryption">Failed to read or decrypt the file</string>
     <string name="restore_failure_copy">Failed to copy the file</string>
+    <string name="restore_failure_same_as_source">The destination is the encrypted file itself. Please choose a different name or folder, so the backup file is not overwritten.</string>
+    <string name="restore_failure_folder_same_as_source">The output folder is the backup folder itself. Please choose a different folder, so the backed-up files are not overwritten.</string>
+    <string name="restore_failure_interrupted">The restore was interrupted before it finished</string>
     <string name="button_restore_start_over">Start over (clear selection)</string>
     <string name="dialog_restoring_title">Restoring…</string>
     <string name="restore_verifying_password">Verifying password…</string>
+    <string name="button_restore_continue_in_background">Continue in background</string>
+    <string name="button_restore_leave_screen">Leave this screen</string>
+    <string name="restore_keep_app_open">Please keep the app open until the restore has finished — leaving it may interrupt the restore.</string>
     <string name="restore_decrypting_progress">Decrypting %1$d / %2$d files</string>
     <string name="restore_failed_count">%1$d failed</string>
 
@@ -381,16 +389,31 @@
     <string name="restore_mode_whole_folder">Whole folder</string>
     <string name="restore_mode_single_file">Single file</string>
 
+    <!-- Restore foreground service -->
+    <string name="notification_channel_restore_name">Restore status</string>
+    <string name="notification_channel_restore_description">Progress updates while a restore is running</string>
+    <string name="restore_notification_title">FolderVault Restore</string>
+    <string name="restore_notification_preparing_text">Preparing the restore…</string>
+    <string name="restore_notification_progress_text">Restoring %1$d / %2$d files</string>
+    <string name="restore_notification_single_file_progress">Decrypting the file — %1$d%%</string>
+
     <!-- Restore single file -->
-    <string name="restore_single_explanation_body">1. Pick one encrypted file. If the Google Drive app is installed, you can select it directly on Google Drive in the file picker — no download needed.\n2. Enter your backup password.\n3. Choose a destination folder. The decrypted file is saved there under its original name; if a file with that name already exists, a unique name (with a \"_restored\" suffix) is used so nothing is overwritten.</string>
+    <string name="restore_single_explanation_body">1. Pick one encrypted file. If the Google Drive app is installed, you can select it directly on Google Drive in the file picker — no download needed.\n2. Enter your backup password.\n3. Choose where to save the decrypted file. Its original name is suggested, but you can change it. If you pick a file that already exists, its content is replaced.</string>
     <string name="restore_single_step1_header">Step 1: encrypted file</string>
     <string name="restore_pick_encrypted_file">Pick encrypted file</string>
     <string name="restore_single_file_selected">Selected: %1$s</string>
     <string name="restore_single_step2_header">Step 2: password</string>
-    <string name="button_decrypt_and_save">Decrypt &amp; save to folder…</string>
+    <string name="button_decrypt_and_save">Decrypt &amp; save as…</string>
+    <string name="restore_single_wrong_password">Wrong password — the file could not be decrypted. If you saved over an existing file, its previous content is gone.</string>
     <string name="restore_single_decrypting">Decrypting the file…</string>
     <string name="restore_single_success_decrypted">The file was decrypted and saved.</string>
+    <string name="restore_single_cancelled">The restore was stopped. The partly decrypted file was removed, so nothing was left behind.</string>
+    <string name="restore_single_progress_percent">Decrypting the file — %1$d%%</string>
     <string name="restore_single_success_copied">The file was not encrypted, so it was saved as an unchanged copy.</string>
+    <string name="restore_success_title">Restore complete</string>
+    <string name="button_restore_another_file">Restore another file</string>
+    <string name="button_restore_another_folder">Restore another folder</string>
+    <string name="button_done">Done</string>
 
     <!-- Restore collision policy display names -->
     <string name="collision_skip">Skip existing files</string>

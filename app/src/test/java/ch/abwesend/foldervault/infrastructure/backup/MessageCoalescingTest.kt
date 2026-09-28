@@ -91,6 +91,20 @@ class MessageCoalescingTest {
     }
 
     @Test
+    fun `run-scoped count ignores other runs and dismissed rows`() = runTest {
+        dao.coalesceInsert(message("run-1", "config-1", MessageType.UPLOAD_FAILED))
+        dao.coalesceInsert(message("run-2", "config-1", MessageType.UPLOAD_FAILED))
+        dao.coalesceInsert(message("run-2", "config-1", MessageType.AUTH_LOST))
+
+        assertEquals(2, dao.getCountForType("config-1", MessageType.UPLOAD_FAILED))
+        assertEquals(1, dao.getCountForRunAndType("run-2", "config-1", MessageType.UPLOAD_FAILED))
+        assertEquals(0, dao.getCountForRunAndType("run-3", "config-1", MessageType.UPLOAD_FAILED))
+
+        dao.dismissAllForConfig("config-1")
+        assertEquals(0, dao.getCountForRunAndType("run-2", "config-1", MessageType.UPLOAD_FAILED))
+    }
+
+    @Test
     fun `null runId falls back to plain insert without coalescing`() = runTest {
         dao.coalesceInsert(message(runId = null, configId = "config-1", MessageType.UPLOAD_FAILED))
         dao.coalesceInsert(message(runId = null, configId = "config-1", MessageType.UPLOAD_FAILED))

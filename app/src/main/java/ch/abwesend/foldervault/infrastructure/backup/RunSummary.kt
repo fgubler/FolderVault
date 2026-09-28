@@ -19,4 +19,13 @@ class RunSummary {
      */
     var sourceFolderInaccessible: Boolean = false
     var consecutiveQuotaCount: Int = 0
+
+    /**
+     * Set when an upload or the manifest write failed because the device had no usable network
+     * connection (typically DNS resolution failing when a scheduled run fires before connectivity
+     * is up). Distinct from an ordinary per-file failure: the run made no real progress and should
+     * be retried by WorkManager once connectivity returns, rather than surfacing an immediate
+     * "upload failed" notification.
+     */
+    var networkUnavailable: Boolean = false
 }

@@ -3,7 +3,6 @@ package ch.abwesend.foldervault.infrastructure.cloud.googledrive
 import ch.abwesend.foldervault.domain.cloud.CloudEntry
 import ch.abwesend.foldervault.domain.cloud.CloudFile
 import ch.abwesend.foldervault.domain.cloud.CloudFolder
-import ch.abwesend.foldervault.domain.cloud.CloudTransientException
 import ch.abwesend.foldervault.domain.cloud.ICloudStorageProvider
 import ch.abwesend.foldervault.domain.cloud.UploadContent
 import ch.abwesend.foldervault.domain.coroutine.IDispatchers
@@ -39,7 +38,7 @@ class GoogleDriveRepository(private val drive: Drive) : ICloudStorageProvider {
     } catch (e: GoogleJsonResponseException) {
         throw DriveErrorClassifier.classify(e)
     } catch (e: IOException) {
-        throw CloudTransientException(cause = e)
+        throw DriveErrorClassifier.classifyIoException(e)
     }
 
     /** Classifies and applies exponential-backoff retry for transient / rate-limit errors. */

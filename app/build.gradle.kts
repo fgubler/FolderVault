@@ -23,8 +23,8 @@ android {
     defaultConfig {
         applicationId = "ch.abwesend.foldervault"
         minSdk = 26
-        versionCode = 16
-        versionName = "1.9.0"
+        versionCode = 18
+        versionName = "2.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

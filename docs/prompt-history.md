@@ -7,6 +7,577 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-09-28 — Restore screen: password field refocus after a single-file restore; scanning state
+
+Two user reports on the restore screen, fixed in `RestoreScreen.kt` only (no ViewModel or domain
+change):
+
+1. *"When single file restore is finished, the password field is focused again. Should just show the
+   success message."* Nothing in the app requests focus — the field simply never *lost* it.
+   `SingleFileContent` kept `SingleFilePasswordSection` mounted whenever a source file was picked,
+   i.e. also through `Running` and `Done`. The modal `RestoreProgressDialog` is a separate window,
+   so the field stayed the main window's focused node underneath it; when the dialog left
+   composition on `Done`, window focus fell back to the field and the IME popped up over the
+   result (the ViewModel had just cleared the password on success, so it was empty as well, and the
+   button was re-enabled). Fix: the password section leaves composition once the run *succeeded*
+   (a private `RestoreState.succeeded` extension), which disposes the focused node; a failed run keeps
+   the section and the typed password for a retry, as before. Whole-folder mode escaped the bug
+   only because its password section is unmounted during `Running`; for consistency it now also
+   hides its output/password/start controls after success (result + "Start over" only), and the
+   `state != Scanning` guard on the password section became redundant and was dropped.
+2. *"After selecting a folder to restore, the button should be disabled and the status text shown
+   more prominently until the folder is analyzed."* The scan is a full SAF tree walk. The "Pick
+   backup folder" button is now `enabled = state != Scanning`, and the scanning status reuses the
+   progress dialog's labelled `LinearProgressIndicator` (`IndeterminateProgress` gained a
+   `@StringRes` overload) instead of a muted `bodySmall` one-liner. `restore_scanning` reworded from
+   "Scanning…" to "Analyzing backup folder…".
+
+Tests (written first, Robolectric + Compose, `RestoreScreenStateTest`): single-file success hides
+the password field and shows only the result; wrong password keeps it; folder success hides the
+password/start controls, folder failure keeps them; picking a folder disables the pick button and
+shows the scanning status until the (gated) scan ends. Gradle cannot run in this sandbox (the home
+directory is read-only, so the wrapper cannot create its distribution cache) — build, detekt and
+tests were handed to the user to run outside it.
+
+**Follow-up (same day) — success gets its own screen.** The user preferred not to hide sections of
+the form on success ("make things simpler … navigate to a new 'restoration success' screen which
+only shows the information we need, plus two buttons: restore another, and done"). Added
+`AppDestination.RestoreSuccess(mode, decrypted, copied, skipped, failed)` (counters, not the
+non-serializable domain result) and `RestoreSuccessScreen` (check icon, "Restore complete", the
+success sentence that used to live in `RestoreResultSection`, a filled "Done" and an outlined
+"Restore another file/folder"). `RestoreScreen` gained `onRestoreSucceeded`: a `LaunchedEffect` on
+the run state hands a `Done(Success)` to the nav graph and calls `viewModel.reset()` in the same
+step, so "Restore another" (pop, also the back gesture) lands on a clean form in the same mode and
+the coordinator's result is acknowledged once; "Done" pops everything above Home
+(`returnHome`, which also covers a deep-linked stack without Home). The `Success` branch of the
+inline result section is gone; failures are unchanged. The `RestoreState.succeeded` guard stays,
+now only for the hand-off frame, so the password field is never in composition while the progress
+dialog closes (see the CLAUDE.md bullet). Tests: `RestoreScreenStateTest`'s two success cases now
+assert the hand-off (mode + result) and the reset form; new `RestoreSuccessScreenTest` pins the
+three message shapes, the mode-specific button label and both callbacks. Still unverified in the
+sandbox (no Gradle); the `NavBackStack.removeAll` call in `returnHome` is the one API use worth a
+look if the host compile complains.
+
+**Follow-up 2 (same day) — scanning becomes a blocking dialog.** The user wanted the folder scan
+to be unmistakable: `RestoreScanningDialog` (title "Analyzing backup folder", a sentence saying
+what is counted and that the output-folder step follows, a spinner, no buttons — the scan has no
+cancel path, so dismiss requests are ignored) shows while the state is `Scanning` and leaves with
+it; the inline status line under the pick button went away (the button stays disabled behind the
+scrim). Step 1's header is now "backup folder (to be restored)". The `@StringRes`
+`IndeterminateProgress` overload from the first pass was no longer used and was removed again.
+
+**Host test run:** six failures, none in production code. (1) `RestoreProgressDialogTest` threw
+`NoSuchMethodError` for `GatedRestoreEngine.<init>` — both Compose tests declared file-private
+fixtures of the same names in the same package, which compile to one JVM class; they now live once
+in `RestoreScreenTestFixtures.kt`. (2) Three `assertIsDisplayed` checks failed for nodes that
+exist but sit below the fold of Robolectric's default 470 dp screen (the form scrolls); those now
+`performScrollTo()` first.
+
+## 2026-09-28 — Bug: "Backup problem … upload failed" after a run whose log shows nothing failed
+
+The user's log showed two periodic runs, one transient `uploadFile(...) failed (attempt 1/5)` that
+the retry (or its idempotency probe) resolved, two clean `Uploaded file to Drive` lines — and yet a
+"failed" notification. Every path to the *completion* "Backup failed" notification logs at ERROR
+(`FatalError`, the worker's fatal catch, the network give-up), so the log excerpt ruled those out.
+
+### Root cause
+`BackupNotificationManager.postProblemNotificationIfNeeded` decided per notifying `MessageType`
+with `backupMessageDao.getCountForType(configId, type)` — the count of **all undismissed** messages
+of that type for the config, regardless of run. An `UPLOAD_FAILED` warning from an earlier run stays
+undismissed until the user dismisses it (WARNINGs are only pruned after 30 days), so after every
+later clean run it re-posted "Backup 'X' had issues: upload failed — tap to review", once per 24 h
+throttle window. Spec §8.3 is explicit: one notification per run, "if *that run* produced any
+`notifies` messages".
+
+### Fix
+- `BackupMessageDao.getCountForRunAndType(runId, configId, type)` — the run-scoped count.
+- `postProblemNotificationIfNeeded` uses it; the cross-run throttle is unchanged (a recurring
+  condition still alerts at most once per window). `getCountForType` stays for the two callers that
+  legitimately want config-wide presence: `clearResolvedThrottles` and the watchdog breadcrumb.
+- Tests: `ProblemNotificationScopeTest` (Robolectric + MockK DAOs; stale-warning run stays silent,
+  this-run warning notifies, throttle still applies) and a `MessageCoalescingTest` case for the
+  DAO query (SQLite-backed — host only).
+
+### Not changed, worth knowing
+`BackupWorker.handleNetworkUnavailable`'s give-up branch also calls the problem notification, but
+`markNetworkUnavailable` deliberately emits no message, so that call was only ever firing on stale
+messages from other runs; with the fix it is silent and the "Backup failed" completion notification
+(if enabled) is what informs the user. Emitting a run-scoped message there would be a separate,
+deliberate behaviour change.
+
+The sandbox had no Gradle cache (`/home/agent` read-only), so compile / tests / detekt were run by
+the user on the host.
+
+## 2026-09-06 — Review round 6 fixes: the coordinator gets tests, the restore notification gets a rate limit
+
+Round 6 of `/code-review` found no blockers but two Suggestions, both on the host seam the
+single-file-service commit had just widened. The user asked for both to be fixed.
+
+### S19 — `RestoreRunCoordinator` had no tests of its own
+
+`RestoreForegroundServiceTest` and `RestoreViewModelTest` both substitute a fake for the
+coordinator, so the real claim handshake, the timed takeover and the failure mapping were covered by
+nothing — while three findings of this review (a service tearing itself down without promoting, a
+stale takeover stealing the next run, an early return leaving the claim flag set) had been defects
+in exactly that logic, each found by reading rather than by a test.
+
+New `RestoreRunCoordinatorTest`: 17 Kotest cases, plain JVM (the coordinator imports nothing from
+Android), hand-written fakes for `IRestoreEngine` and `IForegroundRestoreLauncher` per the project's
+preference behind a domain seam. A `StandardTestDispatcher` turns the 5 s handover grace window into
+an `advanceTimeBy`, so the whole suite runs in ~0.2 s. What it pins:
+
+- `start` flips to `Running` **synchronously** (asserted with no time advance at all — the UI must
+  react to the tap, not to a dispatch) and refuses a second run without reaching the engine.
+- The host selection: a *refused* `startForegroundService` is taken over in-app at `currentTime == 0`,
+  a *dispatched* one is left the full grace window first, and a service that claims inside that
+  window keeps the run — the takeover cannot execute it a second time.
+- **S12's identity check.** A run that finishes inside the grace window leaves its takeover
+  coroutine sleeping; the test starts a second restore before it wakes and asserts that the service
+  dispatched for *that* run can still claim it. Verified red against a `tryClaimFor` with the
+  identity check removed — and it was the only test that failed, which is what makes it a
+  regression test rather than a coincidence.
+- **N17's release-on-early-return**, as an invariant rather than a reproduction (the handshake keeps
+  a second host out, so the race is not reachable through the UI): a `runClaimed` with nothing
+  staged must leave the coordinator claimable *and* must not invent a result for a run that never
+  existed.
+- The two ways a run can end badly: a cancelled host reports `RUN_INTERRUPTED` **and** re-throws,
+  an unexpected engine throw reports the same failure without escaping.
+- Dispatch to `decryptAll` vs `decryptSingleFile` with the right arguments, progress publishing that
+  keeps the mode and the host flag, `acknowledgeResult`'s two cases, the shared `RestoreRunControl`
+  reaching the running engine — and that its stop flag does not leak into the next run.
+- That a finished run drops its staged request, which is the observable proxy for "the password does
+  not outlive the restore".
+
+### S20 — one notification post per restored file
+
+`observeProgress` re-posted the ongoing notification on every coordinator emission, and a folder
+restore emits once per file: a few thousand small files meant a few thousand `notify()` binder
+round-trips for a counter changing faster than anyone can read it. `BackupForegroundService` had
+already solved this — its progress collector ends each iteration with
+`delay(PROGRESS_UPDATE_INTERVAL_MS)` — so the restore service now does the same, with the same
+constant and the reasoning written down.
+
+The delay is a *sample*, not a filter: `state` is a `StateFlow`, so what is published while the
+collector sleeps is conflated away and it always wakes on the latest counts. The first value is
+posted before the first sleep, so the notification never lags the start of the run; a run that ends
+during a sleep just ends the collection (`takeWhile` sees `Finished`) and the notification goes with
+the service. The single-file flow was never affected — `SingleFileChunking` already bounds it to
+~200 emissions per file.
+
+Covered by a new case in `RestoreForegroundServiceTest`: 200 per-file updates published back to
+back must produce at most two posts (the opening `null` plus one sampled), and the *last* counts
+must still arrive — a rate limit that dropped the final value would be a different bug. Verified red
+with the `delay` removed.
+
+### Not fixed here
+
+The other round-6 findings (N19–N23: a stale comment, the dialog's scrim tap, "Cancel" wording, the
+stale `latestProgress` on a reused service instance, the per-file `DocumentFile.getName()` query)
+are recorded in `review/develop.md` and left open — the ask was S19 and S20.
+
+## 2026-09-06 — The single-file restore moves into the foreground service
+
+Follow-up the user asked for after review round 5, from a question raised there: a picked file can
+be a multi-gigabyte video, so why was only the *folder* restore protected by a foreground service?
+
+It should not have been. The single-file run lived on `viewModelScope`, so navigating away from the
+restore screen popped the nav entry, cleared the ViewModel, cancelled the job — and
+`cleanUpSingleFileOutput` then deleted however much had been decrypted. Backgrounding the app left
+the process killable with nothing holding it up. The only thing making a long single-file decrypt
+survivable at all was the blocking progress dialog, which was a side effect rather than a design —
+and round 5's S18 fix had just narrowed it.
+
+Most of the machinery was already generic, so the change is mainly a widening.
+
+### Domain
+
+- **`RestoreRequest` is now sealed**: `WholeFolder` / `SingleFile`, each carrying its own uris and
+  the password. It still never travels in an `Intent`.
+- **`RestoreRunState.Running` / `Finished` carry the `RestoreMode`** that staged the run. This is
+  the load-bearing part: one coordinator now hosts both flows, so a screen must show only *its*
+  mode's run. Without the guard a folder restore going in the service would drive the single-file
+  screen's progress and drop its result there. `RestoreViewModel.withRunState` matches on it.
+- **`RestoreProgress` is now sealed**: `Files` (one unit per file) and `Bytes` (one unit per byte of
+  the source, `totalBytes = null` when the provider reports no size). Squeezing a single file into
+  the file-count shape would have reported "0 / 1 files" for the entire run.
+
+### Stopping inside one file
+
+A folder restore polls `RestoreRunControl` at each file boundary. A single file has none, so the
+poll rides the source stream: `ChunkedProgressInputStream` (was `ChunkedCancellationInputStream`)
+counts bytes and, every `SingleFileChunking.stopCheckBytes`, polls the stop signal, confirms the
+host coroutine is alive, and publishes progress at the coarser `progressIntervalFor` rate.
+
+Two decisions worth recording:
+
+- **Every source is wrapped now**, whatever its size. The old 100 MiB threshold left everything
+  below it uninterruptible *and* progress-less, on the strength of a size the provider may not even
+  report. The wrapper costs one counter increment per read, against AES-GCM and SAF round-trips.
+- **A stop throws, but the thrown type is not the verdict.** There is no way to return normally from
+  inside the cipher's blocking copy loop, so the callback throws `RestoreStoppedException` —
+  deliberately *not* a `CancellationException`, since the coroutine is alive and well and conflating
+  the two is the exact mistake `RestoreRunControl` exists to prevent. The layers below can only
+  report that as an ordinary stream failure, so `decryptSingleFile` asks the run control what
+  actually happened and reports `Cancelled`. A run that *finished* before the stop landed keeps its
+  success — the file is whole.
+
+`Cancelled` carries zero counts for a single file, and that is correct rather than a gap: half a
+plaintext file is indistinguishable from a whole one, so the output document is deleted. The result
+screen says so explicitly instead of rendering the folder message as "restored 0 files".
+
+### What the foreground service buys, and what it does not
+
+It protects against app-lifecycle death — navigating away, backgrounding, the process being reaped.
+It does **not** protect against Android 15's dataSync time limit: a folder restore that hits the
+wall stops at a file boundary with real files on disk, while a single-file one has to throw its
+whole decrypt away. There is no continuation either — session-scoped picked uris plus an in-memory
+password mean no worker could resume it. Not a blocker (six hours against local I/O and AES-GCM is
+an enormous file), but it is a real asymmetry and the KDoc says so.
+
+### Elsewhere
+
+- The service, its launcher and the manifest needed no logic change — only their KDoc, which said
+  "whole-folder". The claim handshake, the timed takeover and `onTimeout` are flow-agnostic.
+- The notification renders both shapes and gained a real progress bar (determinate where the extent
+  is known, indeterminate otherwise). It still never names a file: it can sit on a lockscreen, and
+  the folder variant has always shown counts only.
+- S18's asymmetry is retired: `onLeaveScreen` is no longer nullable, because both runs may now be
+  left behind.
+- `RestoreViewModel` lost its `restoreJob` entirely — `cancel()` is `coordinator.requestStop()` for
+  both flows. `reset()` joins `setMode` in *pulling* the run state, so no blank rebuild can hide a
+  run in flight (the same shape as round 5's N13).
+- **Also fixed, unasked, in a method being rewritten anyway:** round 5's N17 —
+  `RestoreRunCoordinator.runClaimed`'s early return now hands the claim back. Leaving it set meant
+  `tryClaim` could never succeed again and the coordinator wedged at `Running` for the life of the
+  process, with no way out.
+
+### Verification
+
+`./gradlew assembleDebug` and `./gradlew detekt` clean. `./gradlew test` → **560 tests (14 new),
+45 failures, all of them the SQLite-on-aarch64 sandbox limit** — classified per test from the JUnit
+XML. Please re-run `! ./gradlew test` outside the sandbox.
+
+New coverage: `RestoreNotificationManagerTest` (5, both progress shapes plus the no-file-name rule),
+5 engine cases (stop mid-file, stop before the run starts, a stop that loses the race to completion,
+byte progress, unknown source size), and 4 ViewModel cases (service preferred, run survives the
+screen, cooperative stop, and a folder run never driving the single-file screen).
+
+One sandbox note: `compileDebugKotlin` intermittently fails with `Daemon compilation failed: null`
+plus a cascade of bogus "Unresolved reference" errors on *import* lines of untouched files. Re-running
+the same command succeeds. It is the daemon, not the code — do not go chasing the phantom errors.
+
+
+## 2026-09-06 — Review round 5: the progress dialog's escape hatch, and re-attaching the screen to a run in flight
+
+Fifth review pass over `develop` vs `master` at `cbeff27` (`review/develop.md`), then the two fixes
+the user asked for: S18 and N13. Every round-4 fix (B9, B10, B11, S16, S17, N12) was re-checked
+against the committed code first and holds; no Blocking findings are open. The round also recorded
+three new nitpicks that were *not* fixed (N16 uninterruptible source walk, N17 claim flag never
+released on `runClaimed`'s early return, N18 missing notification content intent).
+
+### S18 — a running folder restore trapped the user on the restore screen
+
+`RestoreProgressDialog` was built with `onDismissRequest = {}`. A Compose `AlertDialog` defaults to
+`dismissOnBackPress = true`, so the back gesture reached that empty lambda and was then *consumed* —
+and the top bar's back arrow sits behind the modal. For the whole duration of a folder restore the
+only ways off the screen were Home and force-stopping the app.
+
+That contradicts everything else the feature is built on: `RestoreForegroundService` exists so the
+run survives the user leaving, `IRestoreRunCoordinator`'s KDoc says the run "is not tied to the
+lifetime of the screen that started it", its scope is application-scoped for the same reason, and
+`RestoreViewModelTest` already tested that a result survives the screen being left and re-entered.
+The UI was the one layer that did not let it happen.
+
+The dialog now takes `onLeaveScreen: (() -> Unit)?`, which the screen sets to its own `onBack` for
+`RestoreMode.WHOLE_FOLDER` and to `null` for `SINGLE_FILE`. It drives both `onDismissRequest` and a
+`confirmButton`, so there is a visible affordance as well as a gestural one. **The asymmetry is the
+point:** the folder run is owned by the coordinator and outlives the screen, while the single-file
+run lives on `viewModelScope` and would be cancelled mid-write — so its dialog stays blocking.
+
+The button label follows what leaving actually costs, matching the distinction the existing
+`restore_keep_app_open` warning already draws two lines below it: "Continue in background" when the
+run is service-hosted, "Leave this screen" when the service could not take it and the run only
+survives inside this process.
+
+New `RestoreProgressDialogTest` (3 Robolectric/Compose cases). Two of them were verified red against
+the pre-fix code.
+
+### N13 — a rejected "Start restore" was swallowed, and the other run's result landed on the new selection
+
+Two halves, both fixed.
+
+*The reachable half.* `observeFolderRestore`'s coordinator→UI projection only ever ran on a
+coordinator *emission*, and a `StateFlow` re-emits only on change. A folder run publishes no progress
+at all while it walks the source tree and probes the password — minutes on a large backup. `setMode`
+rebuilt the UI state blank, so switching to `SINGLE_FILE` and back in that window left an empty,
+fully enabled form on screen while a restore was running. Picking different folders and tapping
+"Start restore" was then silently refused by the coordinator, and when the *old* run reached its
+first file boundary the screen went to `Running` and finally to `Done` — presenting that run's
+counters and success message as the outcome of the selection just made. Nothing was written to the
+wrong place, but the report attributed the run to the wrong folders.
+
+The projection is now `RestoreUiState.withRunState(runState)` and is *pulled* as well as pushed:
+`setMode` rebuilds as `RestoreUiState(mode = mode).withRunState(coordinator.state.value)`.
+
+*The backstop half.* `startRestore` discarded `coordinator.start`'s `Boolean`. It now logs the
+refusal and re-syncs from the coordinator, so the screen can never sit in front of a dead button.
+
+Two new cases in `RestoreViewModelTest`. The mode round-trip one was verified red against the
+pre-fix code; the refusal one is an invariant guard rather than a reproduction, since the `setMode`
+fix removes the only UI path that reached the refusal with an out-of-sync screen.
+
+### Verification
+
+`./gradlew assembleDebug` and `./gradlew detekt` clean. `./gradlew test` → **546 tests (5 new),
+45 failures, all of them the known SQLite-on-aarch64 sandbox limit** — classified per test from the
+JUnit XML, not by suite name. Please re-run `! ./gradlew test` outside the sandbox for the 7
+SQLite-backed suites.
+
+Two sandbox notes worth keeping:
+- A `test` invocation that finds a stale `app/build/test-results/testDebugUnitTest/binary` directory
+  dies with `FileAlreadyExistsException` *without running anything*, leaving the previous run's XML
+  in place. `rm -rf app/build/test-results/testDebugUnitTest` first; never read the leftover XML as
+  the current result.
+- `cp` here produced a **zero-filled** copy of a source file (27 KB of NUL bytes), which then
+  destroyed the original when restored from. Use `git checkout --` / `git stash` for scratch
+  backups, not `cp`.
+
+
+## 2026-09-06 — Review round 4: FGS start obligation, network-retry loop, validation flapping, restore-into-itself
+
+Fourth review pass over `develop` vs `master` (`review/develop.md`), then the fixes the user asked
+for: B9–B11 and S16/S17. Every round-3 finding marked `fixed` was re-checked first and holds.
+
+### B9 — a declined restore-service start never called `startForeground`
+`RestoreForegroundService.startRun`'s "nothing to claim" branch went straight to `stopSelf()`. Since
+every start arrives through `startForegroundService`, the platform's promotion obligation was still
+outstanding, which is the `Context.startForegroundService() did not then call
+Service.startForeground()` crash. Reachable whenever the coordinator's 5 s fallback wins the race
+against a delayed service dispatch. `BackupForegroundService` already documents the invariant
+("must become foreground promptly on EVERY start") and promotes unconditionally.
+
+- The decline path now promotes first and only then stops.
+- `latestProgress` is tracked from `observeProgress`, so the promotion of a *second* start command
+  re-posts the live run's progress instead of resetting the notification to "preparing".
+- Regression test: `a start with nothing to claim still promotes before stopping itself`, asserted
+  through the notification build — `stopForeground(STOP_FOREGROUND_REMOVE)` has already cleared
+  Robolectric's `lastForegroundNotification` by the time the assertion runs.
+
+### B10 — a network-unavailable foreground run re-enqueued itself into a loop
+`handleResult`'s `RunResult.NetworkUnavailable` arm called `scheduleOneTime(...)` with no delay and
+without `forceInline`. With the exact-alarm opt-in and a long-window run that trampolines straight
+back into the service, finds the network still gone and re-enqueues — and because every re-enqueue
+is a *fresh* `WorkRequest`, `runAttemptCount` resets, so `MAX_NETWORK_RETRY_COUNT` never bounded it.
+Each cycle cost a run row and a slice of the dataSync budget shared with the restore service.
+
+- Now `scheduleOneTime(..., forceInline = true)`, so the retry runs inline in the worker and rides
+  `Result.retry()`'s exponential backoff up to the cap — the same reasoning the budget-exhaustion
+  degrade path already used. `KEY_FORCE_INLINE`'s KDoc now lists both callers.
+- Regression test in `BackupForegroundServiceTest` (cannot run in the sandbox — SQLite/aarch64).
+
+### B11 — the new `RestoreForegroundServiceTest` was flaky
+`a staged restore is claimed, promoted to the foreground and executed` was the only case that did
+not hold the fake's run open, so `launchRun`'s `finally` could call
+`stopForeground(STOP_FOREGROUND_REMOVE)` — which nulls Robolectric's `lastForegroundNotification` —
+before the assertion read it. Green alone, red in the full suite (twice). Fixed with
+`holdRunOpen()`.
+
+### S16 — `NET_CAPABILITY_VALIDATED` removed from `NetworkStateMonitor` again
+The monitor's flow only ever *stops* a run, and a stop schedules a continuation whose WorkManager
+constraint is the weaker one: `NetworkUnmeteredController.isConstrained` is `!isConnected ||
+isMetered` — no validation (only `NetworkConnectedController` checks it, on API 26+, verified
+against `work-runtime-2.10.0`). Requiring validation here therefore made a `WIFI_ONLY` run stop and
+immediately restart on the very network it had just rejected. An unvalidated network is handled
+properly one layer down instead: `CloudNetworkUnavailableException` → `RunResult.NetworkUnavailable`
+→ WorkManager backoff with a cap. Also note `BackupForegroundServiceTest`'s own network fake never
+added `VALIDATED`, so the stricter check would have had its watcher stop every run in that suite.
+
+### S17 — a whole-folder restore into its own source folder is refused
+A plain (non-encrypted) entry keeps its relative path, so it resolved to *itself* as its own output;
+under `OVERWRITE` the collision handling deleted the document and then had nothing to copy from, so
+the file was simply gone (counted as `failed`). The single-file flow got this guard on 2026-09-06,
+the folder flow had not. New `RestoreFailureReason.OUTPUT_FOLDER_SAME_AS_SOURCE` + string, checked
+before anything is listed, covered by `RestoreEngineFolderTest`.
+
+### Verification
+`assembleDebug` and `detekt` clean; `./gradlew test` → 541 tests, 45 failures, **all** of them the
+known SQLite-on-aarch64 sandbox limit (the extra one is B10's new test, which lands in that same
+suite). The full suite was re-run three times to confirm B11's flake is gone. The 7 SQLite-backed
+suites still need `! ./gradlew test` outside the sandbox.
+
+## 2026-09-06 — Folder restore: robust password probing, cooperative stop, foreground service, SAF cost
+
+Follow-up to the same day's single-file picker change. The user reported that restoring a whole
+backup folder "fails" but could not reproduce it, so the session started with an audit; four of the
+five findings were then fixed (the fifth, `.bin` name mangling, is recorded as `S4` in
+`review/develop.md` and deliberately left for later).
+
+### 1. One damaged file no longer fails the whole restore
+`verifyProbePassword` probed exactly *one* file — the smallest `.crypt` — and reported
+`InvalidPassword` for the entire folder if its header could not be read or its GCM tag failed. A
+single zero-byte leftover from an interrupted upload, or an incomplete download from Drive, would
+therefore refuse a correct password and restore nothing. **This is the most likely cause of the
+reported failure.**
+
+- New pure `PasswordProbe` (`infrastructure/restore/`): `selectCandidates` takes up to
+  `MAX_PROBES = 5` files smallest-first (a GCM decrypt must read to the tag, so probing the
+  smallest keeps verification off multi-GB files), dropping empty ones — unless *every* candidate
+  reports size 0, which means the provider does not report sizes rather than that the files are
+  empty. `shouldProceed` then decides: any successful decrypt → go; else any tag failure → stop;
+  else (nothing usable) → go, and let the per-file `failed` counter report the damage rather than
+  blaming the password.
+- Android-free by design, so the decision is unit-tested without SAF (`PasswordProbeTest`, 11
+  cases); the end-to-end behaviour is covered by the new `RestoreEngineFolderTest`.
+
+### 2. Cancelling a folder restore now reports what it restored
+`decryptAll` returned `RestoreResult.Cancelled` when `!isActive`, which was **unreachable**:
+`withContext` discards the value a cancelled block returns and throws instead. Stopping a restore
+therefore produced no result at all and `restore_cancelled` was dead text.
+
+- New `RestoreRunControl` (domain), mirroring `BackupRunControl`: the engine polls `shouldStop()`
+  at each file boundary and returns normally. Same convention as the backup pipeline
+  ("cooperative stops, never by cancelling the coroutine").
+- `RestoreResult.Cancelled` became a data class carrying the same counters as `Success` — a run
+  stopped after 3000 of 10000 files really did restore those files.
+
+### 3. The folder restore runs in its own foreground service
+It ran on `viewModelScope`, so leaving the app could have it killed mid-write.
+
+- New `RestoreForegroundService` (dataSync) + `ForegroundRestoreLauncher` +
+  `RestoreNotificationManager` (own channel), and `RestoreRunCoordinator` behind the domain seam
+  `IRestoreRunCoordinator`, which owns the run state so it is no longer tied to the screen.
+- **Separate from `BackupForegroundService` on purpose** (the user asked for this explicitly): that
+  service is built around backup configs — per-config `BackupRunner` lock, `ForegroundRunState`,
+  time budgets, a multi-config queue, WorkManager continuation handover. A restore has none of
+  those and, crucially, no background continuation: it depends on session-scoped picked tree uris
+  and an in-memory password, so no worker could resume it.
+- No runtime permission is involved: a user-initiated start is exempt from the Android 12+
+  background-FGS restriction, so unlike backups there is no exact-alarm trampoline. What *can*
+  refuse it is Android 15's dataSync budget, **shared with the backup service** — hence the
+  fallback.
+- Host handover: `start()` stages the run, dispatches the service, and schedules an unconditional
+  timed takeover. Whoever wins `tryClaim()` runs it; the service claims *before* promoting and
+  hands the claim back if `startForeground` is refused.
+- The fallback runs in an application-scoped coroutine, not `viewModelScope` — see B4 below.
+- The progress dialog shows "please keep the app open" whenever the run is **not** service-hosted,
+  which also covers the single-file flow (always ViewModel-scoped).
+
+### 4. SAF round-trips per restored file cut from O(N²) to O(N)
+- New `OutputTreeCache`: `DocumentFile.findFile` lists *all* children on every call, so a flat
+  backup folder of N files cost N full listings — each an IPC round-trip, and a network call
+  against a cloud provider. The cache lists each directory once and keeps its index current as the
+  restore creates and deletes documents. Keyed by `DocumentFile` identity rather than uri (every
+  directory the restore touches comes from the cache itself), which also keeps it free of `Uri` and
+  therefore unit-testable — `OutputTreeCacheTest` (8 cases) uses a hand-written `FakeDocumentFile`
+  placed in `androidx.documentfile.provider` because `DocumentFile`'s constructor is package-private.
+- New `IFvc1Cipher.decryptFile(input, output, keyProvider)` overload: the key is chosen from the
+  header the cipher already reads, so each file is opened **once** instead of twice (once to read
+  the header for key derivation, once to decrypt). `keyFor` became `cachedKey(header, …)`.
+
+### Review follow-up fixed in the same slice (`review/develop.md` B4)
+The first cut put host selection in the ViewModel. If the service was dispatched but its
+`startForeground` refused, *and* the user navigated away within the grace period, the run ended up
+staged with no host: the coordinator stayed `Running` forever, refusing every later restore and
+keeping the plaintext password alive. Host selection moved into the coordinator, with an
+application-scoped fallback — which additionally stops an in-app restore from dying on mere
+navigation.
+
+### Decisions carried forward
+- **`RestoreRequest` never travels in an `Intent`.** It carries the backup password; the service is
+  started with an empty intent and picks the request up from the coordinator.
+- **A folder restore is coordinator-owned, not ViewModel-owned.** `RestoreViewModel` mirrors
+  `IRestoreRunCoordinator.state` (guarded on `mode == WHOLE_FOLDER` so a folder run cannot drive
+  the single-file screen) and no longer executes the run itself.
+
+### Getting Robolectric to run on the aarch64 sandbox
+Initially reported as "Robolectric cannot run here" — wrong. It needs two workarounds, both in a
+Gradle **init script outside the repo** so the project's build config stays untouched (see
+`CLAUDE.md`): force `org.conscrypt:conscrypt-openjdk-uber:2.7.0` (the 2.5.2 Robolectric 4.14 pins
+ships no aarch64 `.so`; 2.7.0 does) and set `robolectric.graphicsMode`/`sqliteMode` to `LEGACY`
+(Robolectric's own nativeruntime has no aarch64 build). Robolectric failures then drop from 96 to
+44, and the 44 that remain are all SQLite-backed suites — legacy SQLite uses sqlite4java, which has
+no aarch64 build either. Those still need `! ./gradlew test`.
+
+This immediately paid for itself twice: it let `RestoreEngineFolderTest` be written and verified,
+and running `RestoreEngineSingleFileTest` for the first time caught B5 below.
+
+### Review follow-up fixed in the same slice (`review/develop.md` B5)
+`decryptSingleFile` resolved its output `DocumentFile` *inside* `withContext`, so a cancellation
+arriving before that block ran reached the cleanup handler with a null reference and orphaned the
+document the "Save as" picker had just created. Harmless under the old folder-picker flow (the
+engine created the output itself); real under the file picker. Now resolved before the
+`withContext` — `fromSingleUri` does no I/O.
+
+### Verification notes
+- `./gradlew assembleDebug` green; `./gradlew detekt` reports only the 4 pre-existing issues.
+- `./gradlew test` (with the init script): **520 tests, 44 failures — all 44 the SQLite/aarch64
+  limit**, none related to this work. All 38 new cases pass: `RestoreEngineFolderTest` 13,
+  `PasswordProbe` 11, `OutputTreeCache` 8, `RestoreViewModel` +6.
+- Gradle needs `-Pksp.incremental=false` in the sandbox (KSP's mmap caches fail there).
+
+---
+
+## 2026-09-06 — Single-file restore saves through the "Save as" file picker
+
+### What was done
+- **Problem**: decrypting one downloaded backup file made the user pick a destination *folder*
+  (`OpenDocumentTree`) and grant persistable read+write access to it, just to write one file. The
+  app then invented a non-colliding name inside that folder.
+- **Fix**: the destination is now picked with `ActivityResultContracts.CreateDocument("*/*")` — a
+  system "Save as" *file* picker prefilled with `suggestedOutputName` (source name minus `.crypt`).
+  No folder access is granted; the temporary write grant on the created document is enough, so no
+  `takePersistableUriPermission` call remains in that flow.
+- `IRestoreEngine.decryptSingleFile(sourceFileUri, outputFolderUri, outputFileName, password)` →
+  `decryptSingleFile(sourceFileUri, outputFileUri, password)`. Name, location and the
+  overwrite confirmation are now the picker's business; the engine only writes what it is handed.
+- `RestoreEngine`: resolves the output via `DocumentFile.fromSingleUri` instead of
+  `fromTreeUri` + create-a-unique-child; `resolveUniqueOutput` deleted (`resolveWithSuffix` stays,
+  it still serves `decryptAll`'s `RENAME_WITH_SUFFIX` policy). `OUTPUT_FOLDER_NOT_ACCESSIBLE` is no
+  longer reachable from this flow (still used by `decryptAll`).
+- `RestoreViewModel.startSingleFileRestore(outputFileUri)` no longer needs `suggestedOutputName` to
+  proceed — that value now only prefills the picker.
+- Strings: `button_decrypt_and_save` → "Decrypt & save as…"; step 3 of
+  `restore_single_explanation_body` rewritten to say the original name is suggested and that
+  picking an existing file replaces its content.
+- Tests: `RestoreEngineSingleFileTest` reworked around a picked output *document* (the fake SAF
+  provider lost its tree/child/`createDocument` plumbing). The de-duplication test was replaced by
+  two new ones — "picking an existing file replaces its content instead of appending to it" (guards
+  the `wt` truncate mode against a longer previous content) and "a failure before the output is
+  written leaves a pre-existing picked file intact". `RestoreViewModelTest`'s fake engine follows
+  the new signature.
+
+### Review follow-ups fixed in the same slice (`review/develop.md` B2 / B3)
+- **B2 — process death during the picker destroyed the target with zero user action.** The password
+  is never persisted, so after process death the arriving picker result auto-started the restore
+  with an *empty* password: a guaranteed GCM-tag failure, but only after `wt` had truncated the
+  output. `startSingleFileRestore` now declines to run on an empty password and leaves the state at
+  `SourceReady` for a retry. Harmless under the old folder flow (always a fresh file); destructive
+  under the file picker, and *not* covered by the accepted trade-off — the user never attempted a
+  decrypt at all.
+- **B3 — `restore_wrong_password` ("Wrong password. No files were modified.") was false here.**
+  True for `decryptAll` (it probes the password before writing anything), false for the single-file
+  flow. `RestoreResultSection` now branches on `RestoreMode` for `InvalidPassword` too and shows the
+  new `restore_single_wrong_password`.
+
+### Decisions carried forward
+- **Overwriting is now possible and accepted.** The user explicitly accepted that a failed decrypt
+  into a picked *existing* file loses that file's data. `cleanUpSingleFileOutput` keeps its guard
+  (delete only when the output stream was actually opened, or when the document is still empty), so
+  a restore that fails *before* touching the output still leaves a pre-existing file alone.
+
+### Verification notes (sandbox)
+- `./gradlew assembleDebug` and `./gradlew test` need `-Pksp.incremental=false` in this sandbox:
+  KSP's memory-mapped incremental caches fail with `NoSuchFileException` on
+  `kspCaches/debug/symbolLookups/*.tab` on the sandbox filesystem.
+- All 96 unit-test failures are `AssertionError: The Robolectric native runtime is not supported on
+  Linux (aarch64)` — every Robolectric class in the project, unrelated to this change. The Kotest
+  suites (incl. `RestoreViewModelTest`, 19 tests) pass. `RestoreEngineSingleFileTest` compiles but
+  cannot execute here; it needs a run outside the sandbox.
+- `./gradlew detekt` reports only the 4 pre-existing issues (`BackupWorker`, `BackupUploader`, plus
+  two stray blank lines in uncommitted edits to `BinaryResult.kt` / `PasswordTextField.kt`).
+
+---
+
 ## 2026-07-16 — Branch review vs master + fixes B1/S1/S2 (truncate mode, unknown-size cancel, shared suffix)
 
 ### What was requested

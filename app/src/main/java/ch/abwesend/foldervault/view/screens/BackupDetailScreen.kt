@@ -361,7 +361,8 @@ private fun ConfigInfoSection(config: BackupConfig, reliableExecutionActive: Boo
 private fun StatusSection(config: BackupConfig) {
     val statusColor = when (config.lastRunStatus) {
         BackupRunStatus.FAILED -> MaterialTheme.colorScheme.error
-        BackupRunStatus.COMPLETED_WITH_WARNINGS -> MaterialTheme.colorScheme.tertiary
+        BackupRunStatus.COMPLETED_WITH_WARNINGS,
+        BackupRunStatus.WAITING_FOR_NETWORK -> MaterialTheme.colorScheme.tertiary
         else -> MaterialTheme.colorScheme.onSurface
     }
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {

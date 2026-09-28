@@ -72,10 +72,73 @@ Crashlytics confinement: ONLY `infrastructure/logging/CrashlyticsSink.kt` may im
   The decision is pure (`ExecutionStrategySelector.scheduledMode`; API < 31 needs no grant). The
   service's `startForeground` is guarded: on `ForegroundServiceStartNotAllowedException` (shared
   dataSync budget exhausted) it degrades via `scheduleOneTime(forceInline = true)` — `forceInline`
-  stops the degraded run from trampolining straight back and looping. The service's
+  stops the degraded run from trampolining straight back and looping. **Every re-enqueue from
+  inside the foreground service needs that flag** for the same reason: a `RunResult` the service
+  cannot resolve itself (budget exhausted, `NetworkUnavailable`) must go back to WorkManager as an
+  *inline* run, or it trampolines right back, fails the same way and loops — and each fresh
+  `WorkRequest` resets `runAttemptCount`, so the worker's retry caps never bound it. The service's
   "foreground-UI-only start" invariant is relaxed *only* for this alarm origin. Feature is OFF by
   default and degrades cleanly (unpermitted / un-opted installs are unaffected). See
   `docs/prompt-history.md` 2026-07-15 for the full design.
+- **Restore run host**: **both** restore flows — whole-folder and single-file — run in
+  `RestoreForegroundService` (dataSync, started only from the visible restore screen, so a
+  user-initiated start needs no exact-alarm trampoline). A single picked file gets the same
+  protection because it can be just as large; while that flow ran on `viewModelScope`, navigating
+  away cancelled it and deleted whatever had been decrypted. The service is deliberately *separate*
+  from `BackupForegroundService`: a restore has no config, no network policy and no WorkManager
+  continuation (it depends on session-scoped picked uris and an in-memory password, so no worker
+  could resume it). Both services share Android 15's dataSync budget, so `startForeground` can be
+  refused — `RestoreRunCoordinator` therefore stages the run, dispatches the service, and schedules
+  an *unconditional timed* takeover in an **application-scoped** coroutine (never `viewModelScope`,
+  or navigating away would strand or lose the run). Whoever wins `tryClaim()` executes it; the
+  service claims before promoting and hands the claim back on refusal. Both services must call
+  `startForeground` on **every** start command, including one they decline (nothing staged, no
+  config id): they are started via `startForegroundService`, and stopping with that obligation
+  outstanding crashes the app with `Context.startForegroundService() did not then call
+  Service.startForeground()`. The run state lives in `IRestoreRunCoordinator`, not in
+  `RestoreViewModel`. `RestoreRequest` (a sealed `WholeFolder` / `SingleFile`) carries the password
+  and therefore never travels in an `Intent`; its `mode` is what lets a screen ignore the *other*
+  flow's run instead of showing its progress and dropping its result. A run that is not
+  service-hosted makes the progress dialog say "keep the app open".
+- **The restore progress dialog must not trap the user**: it is modal, so it *consumes* the back
+  gesture; with an empty `onDismissRequest` the user was pinned to the restore screen for the whole
+  run, which defeats the foreground service. `RestoreProgressDialog` takes an `onLeaveScreen`
+  driving both `onDismissRequest` and a confirm button. Safe for both flows now that the coordinator
+  owns both runs — it was not, and must not become so again for a run scoped to a ViewModel.
+- **A successful restore leaves the restore form.** `RestoreScreen` hands a `Done(Success)` to the
+  `AppDestination.RestoreSuccess` screen (result + "Restore another" / "Done") and calls
+  `viewModel.reset()` in the same `LaunchedEffect`, so the form underneath is already clean (same
+  mode) when the user pops back, and the coordinator's result is acknowledged exactly once.
+  Failures stay inline with the controls for a retry. During the hand-off frame the password/start
+  and result sections are kept out of composition (`RestoreState.succeeded`): the modal progress
+  dialog is its own window, so a text field left mounted underneath stays the main window's focused
+  node and regains focus (keyboard up) the moment the dialog closes. Nothing in the app requests
+  focus — never re-introduce a success state that keeps the password field mounted.
+- **Restore progress is two shapes**: `RestoreProgress.Files` (folder: one unit per file) and
+  `RestoreProgress.Bytes` (single file: one unit per byte of the *source*, `totalBytes = null` when
+  the provider reports no size). Reporting a single file as "0 / 1 files" would sit at 0 for the
+  whole run. A single-file run polls the stop signal and emits progress from inside the source
+  stream (`SingleFileChunking`: stop check every few MiB, progress bounded to ~200 updates per
+  file) — it has no file boundary to poll, and an unbounded emission rate would post thousands of
+  notification updates.
+- **Restore stops cooperatively** via `RestoreRunControl.shouldStop()`, polled at each file
+  boundary — never by cancelling the coroutine, which would make `withContext` discard the
+  engine's `RestoreResult.Cancelled` (with its partial counts) and throw instead. Same rule as
+  `BackupRunControl`.
+- **`NetworkStateMonitor` deliberately does NOT require `NET_CAPABILITY_VALIDATED`** (nor does
+  `AndroidNetworkConnectivityChecker`): its flow only ever *stops* a run, and a stop schedules a
+  continuation whose WorkManager constraint is the weaker one — `NetworkUnmeteredController` does
+  not look at validation — so requiring it would stop, re-enqueue and immediately run again on the
+  very network just rejected. An unreachable network is handled where it can be handled properly
+  instead: `CloudNetworkUnavailableException` → `RunResult.NetworkUnavailable` → WorkManager
+  backoff, capped by `WorkerErrorHandler.MAX_NETWORK_RETRY_COUNT`.
+- **A whole-folder restore refuses to run into its own source tree** (`OUTPUT_FOLDER_SAME_AS_SOURCE`),
+  as does the single-file flow (`OUTPUT_SAME_AS_SOURCE`): a plain file keeps its relative path, so
+  it resolves to itself as its own output, and `OVERWRITE` deletes it before the copy that should
+  recreate it can read it.
+- **Never call `DocumentFile.findFile` in a loop**: it lists *all* children per call, so N lookups
+  cost N full SAF listings (an IPC round-trip each, a network call on a cloud provider). Use
+  `OutputTreeCache`, which lists a directory once and keeps its index current.
 - **Watchdog** (`BackupWatchdogWorker`, WorkManager-only, daily, unique-name KEEP, registered once
   from `FolderVaultApp.ensureWatchdogScheduled`): backstops the periodic schedule. Enqueues a
   one-time catch-up run (never an FGS — a background worker can't start one) for every non-paused
@@ -84,17 +147,41 @@ Crashlytics confinement: ONLY `infrastructure/logging/CrashlyticsSink.kt` may im
   every window (continuations + cancellations included), a progressing run is never mis-flagged.
   Emits one `WATCHDOG_TRIGGERED_RUN` message per config, throttled by presence
   (`getCountForType`), since a null-`runId` message cannot coalesce.
+- **The per-run problem notification is scoped to the run's own messages**
+  (`BackupMessageDao.getCountForRunAndType`, spec §8.3). Never decide it with the config-wide
+  `getCountForType`: undismissed warnings of earlier runs would make every later clean run
+  re-announce "upload failed" once per throttle window. `getCountForType` is for presence checks
+  (`clearResolvedThrottles`, the watchdog breadcrumb) only.
 - **Kotest** spec DSL for unit tests (e.g. `StringSpec`, `FunSpec`). Set
   `isolationMode = IsolationMode.InstancePerTest` when using MockK to get a fresh mock per test.
 - **Konsist** architecture tests live in `src/test/.../architecture/`.
 - **Robolectric** / Compose UI tests use JUnit4 (`@RunWith(RobolectricTestRunner::class)`) —
   they run on the JUnit5 platform via the Vintage engine.
+- **Robolectric on a linux/aarch64 sandbox** needs two workarounds, both supplied by a Gradle
+  *init script* outside the repo (never by changing the project's build config):
+  ```kotlin
+  // /tmp/robolectric-legacy.gradle.kts  — use with:  ./gradlew test -I /tmp/robolectric-legacy.gradle.kts
+  allprojects {
+      // Conscrypt 2.5.2 (pinned by Robolectric 4.14) ships no aarch64 .so; 2.7.0 does.
+      configurations.configureEach { resolutionStrategy.force("org.conscrypt:conscrypt-openjdk-uber:2.7.0") }
+      tasks.withType<Test>().configureEach {
+          // Robolectric's own nativeruntime has no aarch64 build either.
+          systemProperty("robolectric.graphicsMode", "LEGACY")
+          systemProperty("robolectric.sqliteMode", "LEGACY")
+      }
+  }
+  ```
+  With it, Robolectric and Compose UI tests run. What still cannot run there are the **44
+  SQLite-backed tests** (Room/DAO/migration/worker/service suites): legacy SQLite uses sqlite4java,
+  which has no aarch64 build either, so they fail with `UnsupportedOperationException: Architecture
+  'aarch64' is not supported by SQLite library`. Ask the user to run `! ./gradlew test` for those.
+  Gradle also needs `-Pksp.incremental=false` in the sandbox (KSP's memory-mapped caches fail with
+  `NoSuchFileException` on `kspCaches/**/*.tab`) — again a command-line flag only.
 - **Prefer hand-written fakes over MockK** for new tests of logic behind a domain / platform
   seam (see `IDatabaseFileAccess` + `DatabaseRecoveryServiceTest`): extract the platform access
-  behind an interface and fake it. MockK/Robolectric tests DO run in the Bash sandbox (since
-  2026-07-13, with a correct sandbox profile and a fresh Gradle daemon) — use them where the
-  Android framework is unavoidable (services, workers); the failures below mean a stale
-  daemon/profile, not a hard limit.
+  behind an interface and fake it. MockK/Robolectric tests DO run in the Bash sandbox — use them
+  where the Android framework is unavoidable (services, workers). See the aarch64 note above for
+  the two init-script flags they need there.
 
 ### Style
 - Prefer KDoc style comments over normal comments on methods, classes and properties

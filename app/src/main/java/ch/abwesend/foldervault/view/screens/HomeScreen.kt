@@ -244,7 +244,9 @@ private fun BackupConfigCard(
 private fun BackupStatusLine(config: BackupConfig) {
     val color = when (config.lastRunStatus) {
         BackupRunStatus.FAILED -> MaterialTheme.colorScheme.error
-        BackupRunStatus.COMPLETED_WITH_WARNINGS -> MaterialTheme.colorScheme.tertiary
+        // Not an error colour: the run is queued for another attempt, not broken.
+        BackupRunStatus.COMPLETED_WITH_WARNINGS,
+        BackupRunStatus.WAITING_FOR_NETWORK -> MaterialTheme.colorScheme.tertiary
         BackupRunStatus.RUNNING -> MaterialTheme.colorScheme.primary
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
@@ -256,6 +258,8 @@ private fun BackupStatusLine(config: BackupConfig) {
         config.lastRunStatus == BackupRunStatus.INITIAL_SYNC_IN_PROGRESS ->
             stringResource(R.string.home_status_initial_sync, config.filesUploadedTotal, config.totalFilesDiscovered)
         config.lastRunStatus == BackupRunStatus.RUNNING -> stringResource(R.string.home_status_running)
+        config.lastRunStatus == BackupRunStatus.WAITING_FOR_NETWORK ->
+            stringResource(R.string.status_waiting_for_network)
         config.lastRunAt != null -> buildLastRunText(config)
         else -> stringResource(R.string.home_status_never_run)
     }

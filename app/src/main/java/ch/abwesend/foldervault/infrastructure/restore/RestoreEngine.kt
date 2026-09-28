@@ -14,6 +14,7 @@ import ch.abwesend.foldervault.domain.restore.RestoreCollisionPolicy
 import ch.abwesend.foldervault.domain.restore.RestoreFailureReason
 import ch.abwesend.foldervault.domain.restore.RestoreProgress
 import ch.abwesend.foldervault.domain.restore.RestoreResult
+import ch.abwesend.foldervault.domain.restore.RestoreRunControl
 import ch.abwesend.foldervault.domain.restore.RestoreScanResult
 import ch.abwesend.foldervault.domain.result.BinaryResult
 import ch.abwesend.foldervault.domain.result.ErrorResult
@@ -23,7 +24,6 @@ import ch.abwesend.foldervault.infrastructure.storage.ScopedStorageHelper
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import java.io.InputStream
 import java.io.OutputStream
@@ -31,24 +31,56 @@ import java.util.Base64
 import javax.crypto.SecretKey
 
 /**
- * Cooperative-cancellation chunking for the single-file restore flow: a source file larger than
- * [thresholdBytes] is consumed in chunks of [chunkSizeBytes] with a cancellation check between
- * chunks, so the number of chunks grows with the file size and a cancel never has to wait for
- * more than one chunk of decrypt/copy work. Files up to the threshold run as a single piece.
- * Overridable so tests can exercise the chunked path with small fixtures.
+ * How often a single-file restore comes up for air.
+ *
+ * A folder restore polls the stop signal at each file boundary; a single file has none, so the
+ * poll rides the source stream instead. [stopCheckBytes] bounds how long a stop — a user tap, the
+ * OS dataSync time limit, a dead host — waits before the run reacts; it is deliberately small,
+ * because the check is a volatile read plus `ensureActive()` and the *whole* file is otherwise one
+ * uninterruptible blocking read loop.
+ *
+ * Progress is emitted more coarsely: [progressSteps] updates over a file of known size, and every
+ * [stopCheckBytes] when the provider does not report one. Without that bound a multi-gigabyte file
+ * would post tens of thousands of notification updates.
+ *
+ * Overridable so tests can exercise both with small fixtures.
  */
-data class CancellationChunking(val thresholdBytes: Long, val chunkSizeBytes: Long) {
+data class SingleFileChunking(val stopCheckBytes: Long, val progressSteps: Int) {
+
+    /**
+     * Bytes between two progress emissions for a source of [sizeBytes]. Never finer than
+     * [stopCheckBytes] — a progress update cannot be cheaper to produce than the stop check that
+     * shares its counter — and every [stopCheckBytes] when the size is unknown.
+     */
+    fun progressIntervalFor(sizeBytes: Long?): Long =
+        if (sizeBytes == null || sizeBytes <= 0L) {
+            stopCheckBytes
+        } else {
+            maxOf(stopCheckBytes, sizeBytes / progressSteps)
+        }
+
     companion object {
         private const val MEBI_BYTE = 1024L * 1024L
-        val DEFAULT = CancellationChunking(thresholdBytes = 100 * MEBI_BYTE, chunkSizeBytes = 50 * MEBI_BYTE)
+        val DEFAULT = SingleFileChunking(stopCheckBytes = 4 * MEBI_BYTE, progressSteps = 200)
     }
 }
+
+/**
+ * Unwinds a single-file restore that the user (or the OS time limit) stopped mid-stream.
+ *
+ * Thrown from inside the read loop because there is no other way out of the cipher's blocking
+ * copy — but it never reaches a caller: [RestoreEngine.decryptSingleFile] asks [RestoreRunControl]
+ * what actually happened and reports [RestoreResult.Cancelled]. Deliberately *not* a
+ * `CancellationException`: the coroutine is alive and well, and treating a cooperative stop as
+ * cancellation is exactly the mistake `RestoreRunControl`'s KDoc exists to prevent.
+ */
+private class RestoreStoppedException : java.io.IOException("Restore stopped")
 
 class RestoreEngine(
     context: Context,
     private val cipher: IFvc1Cipher,
     private val dispatchers: IDispatchers,
-    private val cancellationChunking: CancellationChunking = CancellationChunking.DEFAULT,
+    private val singleFileChunking: SingleFileChunking = SingleFileChunking.DEFAULT,
 ) : IRestoreEngine {
 
     private val context = context.applicationContext
@@ -72,23 +104,24 @@ class RestoreEngine(
     }
 
     /**
-     * Pass-through [InputStream] that invokes [checkCancelled] each time another [chunkSizeBytes]
-     * consumed bytes complete a chunk, making a long single-file decrypt/copy cooperatively
-     * cancellable. [checkCancelled] aborts by throwing (a `CancellationException` from
-     * `ensureActive`), which propagates out of the crypto/copy loop through the regular
-     * cancellation-rethrow path.
+     * Pass-through [InputStream] that counts the bytes it hands on and calls [onChunk] with the
+     * running total every [chunkSizeBytes], making a long single-file decrypt/copy both
+     * interruptible and observable. Everything the callback wants to do — poll the stop signal,
+     * check the coroutine is alive, publish progress — happens there; aborting is done by throwing
+     * out of it, which unwinds the crypto/copy loop.
      */
-    private class ChunkedCancellationInputStream(
+    private class ChunkedProgressInputStream(
         private val delegate: InputStream,
         private val chunkSizeBytes: Long,
-        private val checkCancelled: () -> Unit,
+        private val onChunk: (bytesRead: Long) -> Unit,
     ) : InputStream() {
-        private var bytesSinceLastCheck = 0L
+        private var totalBytesRead = 0L
+        private var bytesSinceLastChunk = 0L
 
         override fun read(): Int {
             val byte = delegate.read()
             if (byte != -1) {
-                countAndCheck(consumed = 1)
+                countAndReport(consumed = 1)
             }
             return byte
         }
@@ -96,7 +129,7 @@ class RestoreEngine(
         override fun read(destination: ByteArray, offset: Int, length: Int): Int {
             val count = delegate.read(destination, offset, length)
             if (count > 0) {
-                countAndCheck(consumed = count.toLong())
+                countAndReport(consumed = count.toLong())
             }
             return count
         }
@@ -105,20 +138,34 @@ class RestoreEngine(
 
         override fun close() = delegate.close()
 
-        private fun countAndCheck(consumed: Long) {
-            bytesSinceLastCheck += consumed
-            if (bytesSinceLastCheck >= chunkSizeBytes) {
-                bytesSinceLastCheck = 0
-                checkCancelled()
+        private fun countAndReport(consumed: Long) {
+            totalBytesRead += consumed
+            bytesSinceLastChunk += consumed
+            if (bytesSinceLastChunk >= chunkSizeBytes) {
+                bytesSinceLastChunk = 0
+                onChunk(totalBytesRead)
             }
         }
     }
 
     private data class SourceFileEntry(val relativePath: String, val documentFile: DocumentFile)
 
+    /** Outcome of reading a picked source's FVC1 header — see [probeSourceHeader]. */
+    private sealed interface HeaderProbe {
+        /** The file is FVC1-encrypted and its header parsed. */
+        data class Parsed(val header: Fvc1Header) : HeaderProbe
+
+        /** The file opened fine but carries no valid FVC1 header: a plain file, or a damaged one. */
+        object NotEncrypted : HeaderProbe
+
+        /** The file could not be opened at all — a revoked grant, a provider that is gone. */
+        object Unreadable : HeaderProbe
+    }
+
     /** Outcome of resolving an output file: a deliberate skip, an unexpected failure, or a target. */
     private sealed interface OutputResolution {
-        data class Resolved(val file: DocumentFile) : OutputResolution
+        /** [directory] is carried along so a failed write can un-index [file] from the tree cache. */
+        data class Resolved(val directory: DocumentFile, val file: DocumentFile) : OutputResolution
         object Skip : OutputResolution
         object Failed : OutputResolution
     }
@@ -138,8 +185,21 @@ class RestoreEngine(
         outputUri: String,
         password: String,
         collisionPolicy: RestoreCollisionPolicy,
+        runControl: RestoreRunControl,
         onProgress: (RestoreProgress) -> Unit,
     ): RestoreResult = withContext(dispatchers.io) {
+        // Restoring a folder into itself destroys data rather than restoring it: a plain
+        // (non-encrypted) entry keeps its relative path, so it resolves to *itself* as its own
+        // output — and under OVERWRITE the collision handling deletes the existing document before
+        // re-creating it, leaving the following copy nothing to read from. The file is simply gone.
+        // Checked before anything is listed or written, like the single-file flow's own guard.
+        // Two *different* uris addressing the same tree are still not caught — SAF offers no way
+        // to tell — but both pickers hand back the same uri for the same folder.
+        if (sourceUri == outputUri) {
+            logger.warning("Refusing a folder restore whose output tree is its own source")
+            return@withContext RestoreResult.Failure(RestoreFailureReason.OUTPUT_FOLDER_SAME_AS_SOURCE)
+        }
+
         val outputRoot = DocumentFile.fromTreeUri(context, Uri.parse(outputUri))
             ?: return@withContext RestoreResult.Failure(RestoreFailureReason.OUTPUT_FOLDER_NOT_ACCESSIBLE)
 
@@ -156,105 +216,179 @@ class RestoreEngine(
         // normally has a single salt, but merged backups may mix several (BUG-6).
         val keyCache = mutableMapOf<String, SecretKey>()
 
-        val invalidPassword = !verifyProbePassword(files, password, keyCache)
-        if (invalidPassword) return@withContext RestoreResult.InvalidPassword
+        val mayProceed = verifyProbePassword(files, password, keyCache, runControl) { ensureActive() }
+        // Order matters: a stop that landed *during* probing leaves the outcomes incomplete, and
+        // an incomplete set can read as "every usable probe failed" — reporting a wrong password
+        // for a run the user simply cancelled. So the stop is answered first.
+        if (runControl.shouldStop()) return@withContext RestoreResult.Cancelled(0, 0, 0, 0)
+        if (!mayProceed) return@withContext RestoreResult.InvalidPassword
 
+        // One listing per output directory instead of a full listing per restored file.
+        val outputTree = OutputTreeCache(outputRoot)
+        val counters = RestoreCounters()
+        val total = files.size
+        var stopped = false
+
+        for ((index, entry) in files.withIndex()) {
+            if (runControl.shouldStop()) {
+                stopped = true
+                break
+            }
+            // Nothing in this loop suspends — the whole body is blocking stream I/O — so without
+            // an explicit liveness check cancellation could not stop it at all: a host that went
+            // away (the foreground service destroyed, the OS time limit drained) would leave the
+            // run writing decrypted files into the output tree for as long as the process lived,
+            // and `withContext` would then discard the finished result and report the completed
+            // restore as interrupted. The cooperative `shouldStop` above stays the *normal* way
+            // to end a run early (it can report partial counts); this is the hard backstop.
+            ensureActive()
+            onProgress(RestoreProgress.Files(total, index, counters.failed, entry.documentFile.name ?: ""))
+            restoreEntry(entry, outputTree, collisionPolicy, password, keyCache, counters)
+        }
+
+        if (stopped) {
+            counters.toCancelled()
+        } else {
+            onProgress(RestoreProgress.Files(total, total, counters.failed, ""))
+            counters.toSuccess()
+        }
+    }
+
+    /** Running tally of a folder restore, so the loop body stays free of four `var` reassignments. */
+    private class RestoreCounters {
         var decrypted = 0
         var copied = 0
         var skipped = 0
         var failed = 0
-        val total = files.size
 
-        for ((index, entry) in files.withIndex()) {
-            if (!isActive) return@withContext RestoreResult.Cancelled
-            onProgress(RestoreProgress(total, index, failed, entry.documentFile.name ?: ""))
+        fun toSuccess(): RestoreResult.Success = RestoreResult.Success(decrypted, copied, skipped, failed)
+        fun toCancelled(): RestoreResult.Cancelled = RestoreResult.Cancelled(decrypted, copied, skipped, failed)
+    }
 
-            val isCrypt = entry.relativePath.endsWith(CRYPT_SUFFIX)
-            val outputRelPath = RestorePathResolver.outputRelativePath(entry.relativePath, isCrypt)
+    /** Restores one entry of the folder walk into the output tree, updating [counters]. */
+    @Suppress("LongParameterList")
+    private fun restoreEntry(
+        entry: SourceFileEntry,
+        outputTree: OutputTreeCache,
+        collisionPolicy: RestoreCollisionPolicy,
+        password: String,
+        keyCache: MutableMap<String, SecretKey>,
+        counters: RestoreCounters,
+    ) {
+        val isCrypt = entry.relativePath.endsWith(CRYPT_SUFFIX)
+        val outputRelPath = RestorePathResolver.outputRelativePath(entry.relativePath, isCrypt)
 
-            when (val resolution = resolveOutputFile(outputRoot, outputRelPath, collisionPolicy)) {
-                is OutputResolution.Skip -> skipped++
-                is OutputResolution.Failed -> failed++
-                is OutputResolution.Resolved -> {
-                    val outputFile = resolution.file
-                    val success = if (isCrypt) {
-                        val key = keyFor(entry.documentFile, password, keyCache)
-                        key != null && decryptEntry(entry.documentFile, outputFile, key)
-                    } else {
-                        copyEntry(entry.documentFile, outputFile)
-                    }
+        when (val resolution = resolveOutputFile(outputTree, outputRelPath, collisionPolicy)) {
+            is OutputResolution.Skip -> counters.skipped++
+            is OutputResolution.Failed -> counters.failed++
+            is OutputResolution.Resolved -> {
+                val outputFile = resolution.file
+                val success = if (isCrypt) {
+                    decryptEntry(entry.documentFile, outputFile, password, keyCache)
+                } else {
+                    copyEntry(entry.documentFile, outputFile)
+                }
 
-                    if (success) {
-                        if (isCrypt) decrypted++ else copied++
-                    } else {
-                        deletePartialOutput(outputFile)
-                        failed++
-                    }
+                if (success) {
+                    if (isCrypt) counters.decrypted++ else counters.copied++
+                } else {
+                    // Name read before the delete — afterwards the provider reports none.
+                    val outputName = outputTree.nameOf(outputFile)
+                    deletePartialOutput(outputFile)
+                    outputTree.forgetChild(resolution.directory, outputName)
+                    counters.failed++
                 }
             }
         }
-
-        onProgress(RestoreProgress(total, total, failed, ""))
-        RestoreResult.Success(decrypted, copied, skipped, failed)
     }
 
     /**
-     * Restores one picked file into the destination folder [outputFolderUri], creating a fresh
-     * output file whose name is derived from [outputFileName] and made unique via
-     * [resolveUniqueOutput] — so an existing file of the same name is never overwritten. Reuses the
-     * same crypto path as [decryptAll]'s loop body for a single item. Whether to decrypt or copy is
-     * decided in two stages: first the FVC1 header is parsed — a file whose header parses is
-     * decrypted regardless of its name, since a user-picked SAF provider may report a display name
-     * without the `.crypt` suffix (or none at all). Only when the header does not parse (for any
-     * reason) does the `.crypt` filename suffix decide: a suffixed file is still treated as
-     * encrypted, so its unreadable header surfaces as a clear failure instead of copying encrypted
-     * bytes verbatim; anything else is copied. Only a GCM tag failure is reported as
+     * Restores one picked file into the destination document [outputFileUri] — the document the
+     * system "Save as" file picker created (or handed back for an overwrite). Reuses the same
+     * crypto path as [decryptAll]'s loop body for a single item. Whether to decrypt or copy is
+     * decided in two stages: first the FVC1 header is read ([probeSourceHeader]) — a file whose
+     * header parses is decrypted regardless of its name, since a user-picked SAF provider may
+     * report a display name without the `.crypt` suffix (or none at all). Only when the file opens
+     * but carries no valid header does the `.crypt` filename suffix decide: a suffixed file is
+     * still treated as encrypted, so its unreadable header surfaces as a clear failure instead of
+     * copying encrypted bytes verbatim; anything else is copied. A source that cannot be *opened*
+     * at all is a third case, reported as [RestoreFailureReason.SOURCE_FILE_NOT_ACCESSIBLE] before
+     * either stream is touched. Only a GCM tag failure is reported as
      * [RestoreResult.InvalidPassword] — on a lone file that is overwhelmingly a wrong password,
      * and we cannot tell it apart from tampering without the rest of the backup to probe against.
      * Unreadable headers, corrupt files and stream failures surface as [RestoreResult.Failure]
      * instead.
      *
-     * On every non-success outcome — failures *and* cancellation — the freshly created output
-     * document is deleted again via [cleanUpSingleFileOutput]. Cancellation is honored
-     * cooperatively: a source above [CancellationChunking.thresholdBytes] — or of unknown size — is
-     * consumed through [ChunkedCancellationInputStream], which re-checks the coroutine's liveness
-     * after every chunk, so a cancel aborts within one chunk of work instead of after the whole
-     * file. Smaller files still run to completion first, which is why the explicit catch stays:
-     * `withContext` then discards the (possibly fully decrypted) result and throws, and without the
-     * cleanup the plaintext would silently remain at the picked location even though the user asked
-     * to abort.
+     * On every non-success outcome — failures, a cooperative stop *and* coroutine cancellation —
+     * the output document is deleted again via [cleanUpSingleFileOutput]. Unlike a folder restore
+     * there is nothing partial worth keeping: half a plaintext file is indistinguishable from a
+     * whole one, so a stopped run reports [RestoreResult.Cancelled] with zero counts.
+     *
+     * Stopping is cooperative through [runControl], the project-wide rule for restores. A single
+     * file has no file boundary to poll, so the source is read through a
+     * [ChunkedProgressInputStream] that, every [SingleFileChunking.stopCheckBytes], polls the stop
+     * signal, confirms the host coroutine is still alive, and publishes
+     * [RestoreProgress.Bytes] to [onProgress] at the coarser
+     * [SingleFileChunking.progressIntervalFor] rate. A stop unwinds the blocking crypto/copy loop
+     * by throwing (there is no other way out of it), which the layers below see as an ordinary
+     * stream failure — so the run control, not the thrown type, is what decides the reported
+     * outcome. The `CancellationException` catch stays for the *other* kind of ending: a host that
+     * died rather than asked, where `withContext` discards the (possibly fully decrypted) result
+     * and throws, and without the cleanup the plaintext would silently remain at the picked
+     * location.
      */
     override suspend fun decryptSingleFile(
         sourceFileUri: String,
-        outputFolderUri: String,
-        outputFileName: String,
+        outputFileUri: String,
         password: String,
+        runControl: RestoreRunControl,
+        onProgress: (RestoreProgress) -> Unit,
     ): RestoreResult {
+        // The "Save as" picker can hand back the *source* document itself — same folder, the
+        // source's own name typed back in and the overwrite confirmed. Restoring into it would
+        // open the source for reading and then truncate that very document with mode "wt",
+        // destroying the only copy of the encrypted backup, which no password can undo. Checked
+        // before anything is resolved or opened, and returned straight away so the usual output
+        // cleanup cannot delete the source either. Two *different* uris addressing the same
+        // document are still not caught — SAF offers no way to tell — but this is the case a user
+        // can actually stumble into.
+        if (sourceFileUri == outputFileUri) {
+            logger.warning("Refusing a single-file restore whose output is its own source")
+            return RestoreResult.Failure(RestoreFailureReason.OUTPUT_SAME_AS_SOURCE)
+        }
+
         var outputWritten = false
         var cleanedUp = false
-        var createdOutput: DocumentFile? = null
         val markOutputWritten = { outputWritten = true }
+        // Resolved before the `withContext` so that a cancellation arriving before the body ever
+        // runs can still clean the picker-created document up; `fromSingleUri` does no I/O.
+        val output = DocumentFile.fromSingleUri(context, Uri.parse(outputFileUri))
         return try {
             withContext(dispatchers.io) {
                 val source = DocumentFile.fromSingleUri(context, Uri.parse(sourceFileUri))
-                val outputRoot = DocumentFile.fromTreeUri(context, Uri.parse(outputFolderUri))
-                val output = outputRoot
-                    ?.let { resolveUniqueOutput(it, outputFileName) as? OutputResolution.Resolved }
-                    ?.file
-                createdOutput = output
-                val result = when {
+                val attempted = when {
                     source == null -> RestoreResult.Failure(RestoreFailureReason.SOURCE_FILE_NOT_ACCESSIBLE)
-                    outputRoot == null -> RestoreResult.Failure(RestoreFailureReason.OUTPUT_FOLDER_NOT_ACCESSIBLE)
                     output == null -> RestoreResult.Failure(RestoreFailureReason.OUTPUT_FILE_NOT_ACCESSIBLE)
+                    // A stop that arrived while the run was still staged: nothing has been opened,
+                    // but the picker already created the output document, so fall through to the
+                    // cleanup below rather than returning here.
+                    runControl.shouldStop() ->
+                        RestoreResult.Cancelled(decrypted = 0, copied = 0, skipped = 0, failed = 0)
                     else -> {
-                        val wrapInput = singleFileCancellationWrapper(source.length()) { ensureActive() }
-                        val header = readHeader(source, warnOnFailure = false)
-                        if (header != null || source.name.orEmpty().endsWith(CRYPT_SUFFIX)) {
-                            decryptSingle(source, output, password, header, markOutputWritten, wrapInput)
-                        } else {
-                            copySingle(source, output, markOutputWritten, wrapInput)
-                        }
+                        val totalBytes = source.length().takeIf { it > 0L }
+                        onProgress(RestoreProgress.Bytes(processedBytes = 0, totalBytes = totalBytes))
+                        val wrapInput = singleFileStreamWrapper(totalBytes, runControl, onProgress) { ensureActive() }
+                        restoreSinglePickedFile(source, output, password, markOutputWritten, wrapInput)
                     }
+                }
+                // The run control is the authority on what happened: a cooperative stop unwinds the
+                // crypto/copy loop by throwing, which those layers can only report as an ordinary
+                // stream failure. Asking here turns that back into the honest outcome. A run that
+                // *finished* before the stop landed keeps its success — the file is whole.
+                val result = if (attempted !is RestoreResult.Success && runControl.shouldStop()) {
+                    RestoreResult.Cancelled(decrypted = 0, copied = 0, skipped = 0, failed = 0)
+                } else {
+                    attempted
                 }
                 if (result !is RestoreResult.Success && output != null) {
                     cleanUpSingleFileOutput(output, outputWritten)
@@ -266,9 +400,9 @@ class RestoreEngine(
             // A failure result followed by a cancel at the withContext exit would otherwise clean
             // up twice — the second delete of the already-removed document only logs a warning.
             if (!cleanedUp) {
-                createdOutput?.let { output ->
+                output?.let {
                     withContext(NonCancellable + dispatchers.io) {
-                        cleanUpSingleFileOutput(output, outputWritten)
+                        cleanUpSingleFileOutput(it, outputWritten)
                     }
                 }
             }
@@ -293,8 +427,12 @@ class RestoreEngine(
         if (header == null) {
             RestoreResult.Failure(RestoreFailureReason.FILE_HEADER_NOT_READABLE)
         } else {
-            val key = cipher.deriveKey(password, header.salt, header.iterations)
-            when (decryptEntryDetailed(source, output, key, onOutputOpened, wrapInput).getErrorOrNull()) {
+            // The header was already parsed for the decrypt-vs-copy decision, but the cipher reads
+            // its own from the stream — so the provider hands the *stream's* header back here.
+            val error = decryptEntryDetailed(source, output, onOutputOpened, wrapInput) { streamHeader ->
+                cipher.deriveKey(password, streamHeader.salt, streamHeader.iterations)
+            }.getErrorOrNull()
+            when (error) {
                 null -> RestoreResult.Success(decrypted = 1, copied = 0, skipped = 0, failed = 0)
                 DecryptionError.INVALID_PASSWORD -> RestoreResult.InvalidPassword
                 DecryptionError.INVALID_FILE -> RestoreResult.Failure(RestoreFailureReason.INVALID_ENCRYPTED_FILE)
@@ -316,12 +454,12 @@ class RestoreEngine(
         }
 
     /**
-     * Removes the "Save as" output document after a failed or cancelled single-file restore — but
-     * only when deleting cannot destroy pre-existing data. The picker may hand back an *existing*
-     * document when the user picks an existing name and confirms overwriting it, so deletion is
-     * limited to two cases: the restore actually opened the document's output stream (its previous
-     * content is already lost to truncation, only garbage could remain), or the document is still
-     * empty (the picker freshly created it). A pre-existing, never-touched document is left intact.
+     * Removes the "Save as" output document after a failed or cancelled single-file restore, so no
+     * truncated plaintext is left behind masquerading as a restored file. Deletion is limited to
+     * two cases: the restore actually opened the document's output stream (its previous content is
+     * already lost to truncation, only garbage could remain), or the document is still empty (the
+     * picker freshly created it). A pre-existing document the restore never touched — e.g. when the
+     * source file itself turned out to be unreadable — is left intact.
      */
     private fun cleanUpSingleFileOutput(output: DocumentFile, outputWritten: Boolean) {
         if (outputWritten || output.length() == 0L) {
@@ -330,31 +468,68 @@ class RestoreEngine(
     }
 
     /**
-     * Returns the input-stream wrapper implementing the chunked cooperative cancellation of the
-     * single-file flow (see [CancellationChunking]): sources above the threshold are read through
-     * a [ChunkedCancellationInputStream] that calls [checkCancelled] between chunks; smaller
-     * sources pass through unwrapped and stay uninterruptible for their (short) duration. A
-     * source whose provider reports no size (`length() == 0`) is wrapped too: unknown is not
-     * "small", and the wrapper costs only a counter per read.
+     * Runs the picked source through the probe-then-decrypt-or-copy decision. Extracted from
+     * [decryptSingleFile] so that method stays about the *run* (stop, cleanup, cancellation) and
+     * this one about the *file*.
      */
-    private fun singleFileCancellationWrapper(
-        sourceSizeBytes: Long,
-        checkCancelled: () -> Unit,
-    ): (InputStream) -> InputStream =
-        if (sourceSizeBytes <= 0L || sourceSizeBytes > cancellationChunking.thresholdBytes) {
-            { stream -> ChunkedCancellationInputStream(stream, cancellationChunking.chunkSizeBytes, checkCancelled) }
+    @Suppress("LongParameterList")
+    private fun restoreSinglePickedFile(
+        source: DocumentFile,
+        output: DocumentFile,
+        password: String,
+        onOutputOpened: () -> Unit,
+        wrapInput: (InputStream) -> InputStream,
+    ): RestoreResult = when (val probe = probeSourceHeader(source)) {
+        // Reported before either stream is opened, so an unreadable source cannot masquerade as a
+        // copy/decrypt failure — and cannot cost the user a picked overwrite target either, since
+        // nothing was truncated.
+        is HeaderProbe.Unreadable -> RestoreResult.Failure(RestoreFailureReason.SOURCE_FILE_NOT_ACCESSIBLE)
+        is HeaderProbe.Parsed ->
+            decryptSingle(source, output, password, probe.header, onOutputOpened, wrapInput)
+        is HeaderProbe.NotEncrypted -> if (source.name.orEmpty().endsWith(CRYPT_SUFFIX)) {
+            // Suffixed but unreadable header: surface it as a clear decryption failure rather than
+            // copying encrypted bytes out verbatim.
+            decryptSingle(source, output, password, null, onOutputOpened, wrapInput)
         } else {
-            { stream -> stream }
+            copySingle(source, output, onOutputOpened, wrapInput)
         }
+    }
 
-    private fun withInputStream(source: DocumentFile, block: (InputStream) -> Boolean): Boolean =
-        try {
-            context.contentResolver.openInputStream(source.uri)?.use(block) ?: false
-        } catch (e: Exception) {
-            e.rethrowCancellation()
-            logger.warning("Failed to open input stream for ${FileNameRedactor.redact(source.name.orEmpty())}", e)
-            false
+    /**
+     * Returns the input-stream wrapper that makes a single-file restore interruptible and
+     * observable (see [SingleFileChunking]).
+     *
+     * Every source is wrapped, whatever its size. An earlier version only wrapped files above a
+     * 100 MiB threshold, which left everything below it uninterruptible *and* progress-less — and
+     * "below the threshold" is a guess based on a size the provider may not even report. The
+     * wrapper costs one counter increment per read, which is nothing next to the AES-GCM and the
+     * SAF round-trips it rides along with.
+     *
+     * Per chunk the callback does three things, in this order: honour a cooperative stop
+     * ([RestoreRunControl]) by unwinding the read loop, confirm the host coroutine is still alive
+     * ([checkAlive], the hard backstop for a host that died rather than asked), and publish
+     * progress — the last one throttled to [SingleFileChunking.progressIntervalFor] so a
+     * multi-gigabyte file does not post tens of thousands of updates.
+     */
+    private fun singleFileStreamWrapper(
+        totalBytes: Long?,
+        runControl: RestoreRunControl,
+        onProgress: (RestoreProgress) -> Unit,
+        checkAlive: () -> Unit,
+    ): (InputStream) -> InputStream {
+        val progressInterval = singleFileChunking.progressIntervalFor(totalBytes)
+        var lastReportedBytes = 0L
+        return { stream ->
+            ChunkedProgressInputStream(stream, singleFileChunking.stopCheckBytes) { bytesRead ->
+                if (runControl.shouldStop()) throw RestoreStoppedException()
+                checkAlive()
+                if (bytesRead - lastReportedBytes >= progressInterval) {
+                    lastReportedBytes = bytesRead
+                    onProgress(RestoreProgress.Bytes(processedBytes = bytesRead, totalBytes = totalBytes))
+                }
+            }
         }
+    }
 
     private fun withStreams(
         source: DocumentFile,
@@ -380,69 +555,128 @@ class RestoreEngine(
         }
 
     /**
-     * Verifies the password against the *smallest* `.crypt` file, deriving its key into [cache]
-     * for later reuse. Probing the smallest file matters because a full GCM decrypt must read to
-     * the tag at the end — picking the first file could mean decrypting a multi-GB video just to
-     * check the password (BUG-6). Returns `true` when there is nothing encrypted to verify.
+     * Verifies [password] against a handful of the folder's encrypted files before anything is
+     * written, so a wrong password fails while the "no files were modified" promise still holds.
+     *
+     * Probes up to [PasswordProbe.MAX_PROBES] files, smallest first — a GCM decrypt has to read to
+     * the tag at the end of the file, so probing the smallest keeps this from decrypting a
+     * multi-GB video just to check a password (BUG-6). Probing *several* rather than the single
+     * smallest is what keeps one damaged file (a zero-byte leftover from an interrupted upload, an
+     * incomplete download) from failing the whole restore as "wrong password": the run is refused
+     * only when every usable probe failed its tag check. See [PasswordProbe.shouldProceed] for the
+     * full decision table. Returns `true` when there is nothing encrypted to verify.
+     *
+     * Stopping is honored between probes, via [runControl] for a user stop and [checkCancelled]
+     * for a dead host — this phase is not free: every probe decrypts a whole file to reach its GCM
+     * tag, and the first one also pays a ~0.5–2 s PBKDF2 derivation, so on a folder of large files
+     * it is the minute-plus the UI labels "Verifying password…". Without these checks the Cancel
+     * button did nothing at all until it was over. The caller distinguishes "stopped" from
+     * "wrong password" by asking [runControl] again, since a half-finished probe set must never be
+     * read as a verdict.
      */
     private fun verifyProbePassword(
         files: List<SourceFileEntry>,
         password: String,
         cache: MutableMap<String, SecretKey>,
+        runControl: RestoreRunControl,
+        checkCancelled: () -> Unit,
     ): Boolean {
-        val probe = files
-            .filter { it.relativePath.endsWith(CRYPT_SUFFIX) }
-            .minByOrNull { it.documentFile.length() }
-        return if (probe == null) {
-            true
-        } else {
-            val key = keyFor(probe.documentFile, password, cache)
-            key != null && verifyPassword(probe, key)
+        val encrypted = files.filter { it.relativePath.endsWith(CRYPT_SUFFIX) }
+        val probes = PasswordProbe.selectCandidates(encrypted) { it.documentFile.length() }
+        val outcomes = mutableListOf<ProbeOutcome>()
+        for (probe in probes) {
+            // A proven-correct password makes the remaining probes pointless work, and a stop
+            // request makes all of them pointless.
+            val done = outcomes.lastOrNull() == ProbeOutcome.CORRECT_PASSWORD || runControl.shouldStop()
+            if (done) break
+            checkCancelled()
+            outcomes.add(probeOutcome(probe, password, cache))
+        }
+        return PasswordProbe.shouldProceed(outcomes)
+    }
+
+    /**
+     * Decrypts one probe to nowhere and classifies what that says about the password. A file whose
+     * header or stream cannot be read is [ProbeOutcome.INCONCLUSIVE] rather than a verdict: it is
+     * a broken file, and only the GCM tag check speaks about the key.
+     */
+    private fun probeOutcome(
+        entry: SourceFileEntry,
+        password: String,
+        cache: MutableMap<String, SecretKey>,
+    ): ProbeOutcome {
+        val result = try {
+            context.contentResolver.openInputStream(entry.documentFile.uri)?.use { input ->
+                cipher.decryptFile(input, NullOutputStream) { header -> cachedKey(header, password, cache) }
+            }
+        } catch (e: Exception) {
+            e.rethrowCancellation()
+            logger.warning(
+                "Failed to open probe ${FileNameRedactor.redact(entry.documentFile.name.orEmpty())}",
+                e,
+            )
+            null
+        }
+        return when (result?.getErrorOrNull()) {
+            null -> if (result == null) ProbeOutcome.INCONCLUSIVE else ProbeOutcome.CORRECT_PASSWORD
+            DecryptionError.INVALID_PASSWORD -> ProbeOutcome.WRONG_PASSWORD
+            else -> ProbeOutcome.INCONCLUSIVE
         }
     }
 
-    private fun verifyPassword(entry: SourceFileEntry, key: SecretKey): Boolean =
-        withInputStream(entry.documentFile) { input ->
-            cipher.decryptFile(key, input, NullOutputStream) is SuccessResult
-        }
-
     /**
-     * Returns the AES key for [file], deriving it from the file's FVC1 header parameters on first
-     * use and caching it by `salt + iterations` so repeated files share one expensive derivation
-     * (BUG-6). Returns `null` if the header cannot be read.
+     * Returns the AES key for a file's FVC1 [header], deriving it on first use and caching it by
+     * `salt + iterations` so every file sharing those parameters reuses one expensive derivation
+     * (BUG-6).
      */
-    private fun keyFor(
-        file: DocumentFile,
+    private fun cachedKey(
+        header: Fvc1Header,
         password: String,
         cache: MutableMap<String, SecretKey>,
-    ): SecretKey? =
-        readHeader(file)?.let { header ->
-            val cacheKey = "${Base64.getEncoder().encodeToString(header.salt)}:${header.iterations}"
-            cache.getOrPut(cacheKey) { cipher.deriveKey(password, header.salt, header.iterations) }
-        }
+    ): SecretKey {
+        val cacheKey = "${Base64.getEncoder().encodeToString(header.salt)}:${header.iterations}"
+        return cache.getOrPut(cacheKey) { cipher.deriveKey(password, header.salt, header.iterations) }
+    }
 
     /**
-     * Parses the FVC1 header of [file], returning `null` on any failure. Pass
-     * `warnOnFailure = false` where a non-parsing file is an expected outcome (the single-file
-     * decrypt-vs-copy probe) rather than a broken backup entry.
+     * Reads the source's FVC1 header and classifies what happened, so the single-file flow can
+     * tell a file it *cannot open* apart from one that simply is not encrypted.
+     *
+     * The distinction matters because the two deserve different messages and different moments.
+     * `DocumentFile.fromSingleUri` never returns null above API 19, so the null check that was
+     * meant to catch an inaccessible source was unreachable; a genuinely unopenable source — a
+     * grant the user revoked, a cloud provider that is offline — instead failed later, at
+     * stream-open time inside the copy or decrypt, and was reported as "Failed to copy the file"
+     * or "Failed to read or decrypt the file". Classifying here reports "Cannot access the
+     * selected file" instead, and does it *before* the output document is opened and truncated.
+     *
+     * Only a failure to *open* counts as [HeaderProbe.Unreadable]. A stream that opens but holds
+     * no valid header is [HeaderProbe.NotEncrypted] — that is an ordinary plain file (or a damaged
+     * one), and the caller's `.crypt` suffix check decides which.
      */
-    private fun readHeader(file: DocumentFile, warnOnFailure: Boolean = true): Fvc1Header? =
-        try {
-            context.contentResolver.openInputStream(file.uri)?.use { Fvc1Header.readFrom(it) }
+    private fun probeSourceHeader(file: DocumentFile): HeaderProbe {
+        val stream = try {
+            context.contentResolver.openInputStream(file.uri)
         } catch (e: Exception) {
             e.rethrowCancellation()
-            if (warnOnFailure) {
-                logger.warning("Failed to read FVC1 header for ${FileNameRedactor.redact(file.name.orEmpty())}", e)
-            } else {
+            logger.warning("Cannot open ${FileNameRedactor.redact(file.name.orEmpty())} for reading", e)
+            null
+        }
+        return stream?.use { input ->
+            try {
+                HeaderProbe.Parsed(Fvc1Header.readFrom(input))
+            } catch (e: Exception) {
+                e.rethrowCancellation()
                 // The exception message is uncontrolled and may embed the content URI (file name
                 // included), so it goes through redactPathsIn before reaching the breadcrumb sinks.
                 logger.info(
                     "No parseable FVC1 header in ${FileNameRedactor.redact(file.name.orEmpty())}: " +
                         FileNameRedactor.redactPathsIn(e.message.orEmpty()),
                 )
+                HeaderProbe.NotEncrypted
             }
-            null
-        }
+        } ?: HeaderProbe.Unreadable
+    }
 
     /**
      * Resolves the concrete output [DocumentFile] for a source entry, applying [policy] on
@@ -452,61 +686,69 @@ class RestoreEngine(
      * was rejected), and [OutputResolution.Resolved].
      */
     private fun resolveOutputFile(
-        outputRoot: DocumentFile,
+        outputTree: OutputTreeCache,
         relPath: String,
         policy: RestoreCollisionPolicy,
     ): OutputResolution {
         val parts = relPath.split("/")
         val fileName = parts.last()
-        val dirParts = parts.dropLast(1)
 
-        var dir = outputRoot
-        for (part in dirParts) {
-            dir = dir.findFile(part)?.takeIf { it.isDirectory }
-                ?: dir.createDirectory(part)
-                ?: return OutputResolution.Failed
-        }
+        val dir = outputTree.resolveDirectory(parts.dropLast(1)) ?: return OutputResolution.Failed
 
-        val existing = dir.findFile(fileName)
+        val existing = outputTree.findChild(dir, fileName)
         return when {
-            existing == null -> createOutput(dir, fileName)
+            existing == null -> createOutput(outputTree, dir, fileName)
             policy == RestoreCollisionPolicy.SKIP -> OutputResolution.Skip
-            policy == RestoreCollisionPolicy.OVERWRITE ->
-                if (existing.delete()) createOutput(dir, fileName) else OutputResolution.Failed
-            else -> resolveWithSuffix(dir, fileName)
+            policy == RestoreCollisionPolicy.OVERWRITE -> {
+                // Name read before the delete — afterwards the provider reports none.
+                val existingName = outputTree.nameOf(existing)
+                if (existing.delete()) {
+                    outputTree.forgetChild(dir, existingName)
+                    createOutput(outputTree, dir, fileName)
+                } else {
+                    OutputResolution.Failed
+                }
+            }
+            else -> resolveWithSuffix(outputTree, dir, fileName)
         }
     }
 
-    private fun createOutput(dir: DocumentFile, name: String): OutputResolution =
-        dir.createFile(MIME_OCTET_STREAM, name)
-            ?.let { OutputResolution.Resolved(it) }
+    private fun createOutput(outputTree: OutputTreeCache, dir: DocumentFile, name: String): OutputResolution =
+        outputTree.createChild(dir, MIME_OCTET_STREAM, name)
+            ?.let { OutputResolution.Resolved(dir, it) }
             ?: OutputResolution.Failed
-
-    /**
-     * Resolves a fresh output file for the single-file flow: [fileName] if the folder has no such
-     * file yet, otherwise a suffixed variant via [resolveWithSuffix] (`name_restored`, …). Always
-     * creates a brand-new document, so restoring never overwrites an existing file.
-     */
-    private fun resolveUniqueOutput(dir: DocumentFile, fileName: String): OutputResolution =
-        if (dir.findFile(fileName) == null) createOutput(dir, fileName) else resolveWithSuffix(dir, fileName)
 
     /**
      * For [RestoreCollisionPolicy.RENAME_WITH_SUFFIX], loops `_restored`, `_restored_2`, … until a
      * name that does not already exist is found, so a repeated restore does not silently collide
      * with a previously restored copy (BUG-7).
      */
-    private fun resolveWithSuffix(dir: DocumentFile, fileName: String): OutputResolution {
+    private fun resolveWithSuffix(
+        outputTree: OutputTreeCache,
+        dir: DocumentFile,
+        fileName: String,
+    ): OutputResolution {
         var index = 1
         var candidate = RestorePathResolver.indexedRestoreName(fileName, index)
-        while (dir.findFile(candidate) != null) {
+        while (outputTree.findChild(dir, candidate) != null) {
             index++
             candidate = RestorePathResolver.indexedRestoreName(fileName, index)
         }
-        return createOutput(dir, candidate)
+        return createOutput(outputTree, dir, candidate)
     }
 
-    private fun decryptEntry(source: DocumentFile, output: DocumentFile, key: SecretKey): Boolean =
-        decryptEntryDetailed(source, output, key) is SuccessResult
+    /**
+     * Decrypts one entry of a folder restore. The key comes from the file's own header via
+     * [cachedKey], resolved inside the single stream open rather than from a separate
+     * header-reading pass — that pass used to double the SAF stream opens of every restore.
+     */
+    private fun decryptEntry(
+        source: DocumentFile,
+        output: DocumentFile,
+        password: String,
+        cache: MutableMap<String, SecretKey>,
+    ): Boolean =
+        decryptEntryDetailed(source, output) { header -> cachedKey(header, password, cache) } is SuccessResult
 
     /**
      * Decrypts [source] into [output], reporting *why* a failure happened — unlike the Boolean
@@ -519,15 +761,15 @@ class RestoreEngine(
     private fun decryptEntryDetailed(
         source: DocumentFile,
         output: DocumentFile,
-        key: SecretKey,
         onOutputOpened: () -> Unit = {},
         wrapInput: (InputStream) -> InputStream = { it },
+        keyProvider: (Fvc1Header) -> SecretKey,
     ): BinaryResult<Unit, DecryptionError> =
         try {
             context.contentResolver.openInputStream(source.uri)?.use { input ->
                 context.contentResolver.openOutputStream(output.uri, OUTPUT_STREAM_MODE)
                     ?.also { onOutputOpened() }
-                    ?.use { out -> cipher.decryptFile(key, wrapInput(input), out) }
+                    ?.use { out -> cipher.decryptFile(wrapInput(input), out, keyProvider) }
             } ?: ErrorResult(DecryptionError.UNKNOWN)
         } catch (e: Exception) {
             e.rethrowCancellation()

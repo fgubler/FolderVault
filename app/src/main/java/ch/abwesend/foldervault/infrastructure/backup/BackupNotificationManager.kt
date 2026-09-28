@@ -77,6 +77,9 @@ class BackupNotificationManager(
                 if (result.summary.hitTimeBudget) null else BackupRunOutcome.SUCCESS
             is RunResult.AuthLost -> null
             is RunResult.FatalError -> BackupRunOutcome.FAILURE
+            // No usable network: the worker retries on WorkManager's backoff and surfaces the
+            // failure notification itself only once the retry cap is reached, so stay silent here.
+            is RunResult.NetworkUnavailable -> null
             is RunResult.SkippedConcurrentRun -> null // nothing ran, nothing to announce
         }
 
@@ -176,6 +179,13 @@ class BackupNotificationManager(
         return notification
     }
 
+    /**
+     * Posts the coalesced "backup had issues" notification for the run [runId] just finished — one
+     * per run per config (spec §8.3), listing only the notifying message types *that run* produced,
+     * each subject to the cross-run throttle. Messages left over from earlier runs are deliberately
+     * ignored: they were announced when they happened, and counting them here would report every
+     * later clean run as failed until the user dismisses them.
+     */
     suspend fun postProblemNotificationIfNeeded(
         configId: String,
         configName: String,
@@ -191,7 +201,7 @@ class BackupNotificationManager(
             val state = notificationThrottleStateDao.getState(configId, type)
             if (!shouldNotify(state, now)) continue
 
-            val count = backupMessageDao.getCountForType(configId, type)
+            val count = backupMessageDao.getCountForRunAndType(runId, configId, type)
             if (count > 0) {
                 pendingTypes.add(type)
             }

@@ -155,7 +155,7 @@ class RestoreScreenStateTest {
             FolderVaultTheme {
                 RestoreScreen(
                     onBack = {},
-                    onRestoreSucceeded = { mode, result -> successes += mode to result },
+                    onRestoreSuccess = { mode, result -> successes += mode to result },
                     viewModel = viewModel,
                 )
             }

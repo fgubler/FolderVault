@@ -100,7 +100,7 @@ class RestoreProgressDialogTest {
     ) {
         composeTestRule.setContent {
             FolderVaultTheme {
-                RestoreScreen(onBack = onBack, viewModel = viewModel, onRestoreSucceeded = onRestoreSucceeded)
+                RestoreScreen(onBack = onBack, viewModel = viewModel, onRestoreSuccess = onRestoreSucceeded)
             }
         }
     }

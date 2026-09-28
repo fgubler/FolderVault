@@ -42,6 +42,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -68,7 +69,7 @@ import org.koin.androidx.compose.koinViewModel
 @Composable
 fun RestoreScreen(
     onBack: () -> Unit,
-    onRestoreSucceeded: (RestoreMode, RestoreResult.Success) -> Unit,
+    onRestoreSuccess: (RestoreMode, RestoreResult.Success) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: RestoreViewModel = koinViewModel(),
 ) {
@@ -82,9 +83,10 @@ fun RestoreScreen(
     // in the same mode, and the coordinator's result is acknowledged exactly once. Failures stay
     // inline, with the controls, so the user can correct the input and retry.
     val state = uiState.state
+    val currentOnRestoreSuccess by rememberUpdatedState(onRestoreSuccess)
     LaunchedEffect(state) {
         if (state is RestoreState.Done && state.result is RestoreResult.Success) {
-            onRestoreSucceeded(uiState.mode, state.result)
+            currentOnRestoreSuccess(uiState.mode, state.result)
             viewModel.reset()
         }
     }

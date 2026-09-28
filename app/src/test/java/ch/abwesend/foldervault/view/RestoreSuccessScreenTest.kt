@@ -71,7 +71,7 @@ class RestoreSuccessScreenTest {
                     mode = mode,
                     result = result,
                     onRestoreAnother = { calls += "another" },
-                    onDone = { calls += "done" },
+                    onFinish = { calls += "done" },
                 )
             }
         }

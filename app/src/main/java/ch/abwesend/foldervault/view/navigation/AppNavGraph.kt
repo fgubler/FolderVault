@@ -49,82 +49,83 @@ fun AppNavGraph(
             rememberSaveableStateHolderNavEntryDecorator(),
             rememberViewModelStoreNavEntryDecorator(),
         ),
-        entryProvider = { key ->
-            when (key) {
-                is AppDestination.Onboarding -> NavEntry(key) {
-                    OnboardingScreen(
-                        onComplete = {
-                            backStack.removeLastOrNull()
-                            if (backStack.isEmpty()) backStack.add(AppDestination.Home)
-                        },
-                    )
-                }
-                is AppDestination.Home -> NavEntry(key) {
-                    HomeScreen(
-                        onOpenSettings = { backStack.add(AppDestination.Settings) },
-                        onAddBackup = { backStack.add(AppDestination.AddEditBackup()) },
-                        onOpenDetail = { configId -> backStack.add(AppDestination.BackupDetail(configId)) },
-                        onOpenRestore = { backStack.add(AppDestination.Restore) },
-                    )
-                }
-                is AppDestination.Settings -> NavEntry(key) {
-                    SettingsScreen(
-                        onBack = { backStack.removeLastOrNull() },
-                        onShowOnboarding = { backStack.add(AppDestination.Onboarding) },
-                    )
-                }
-                is AppDestination.BackupDetail -> NavEntry(key) {
-                    BackupDetailScreen(
-                        configId = key.configId,
-                        autoStartBackup = key.autoStartBackup,
-                        onBack = { backStack.removeLastOrNull() },
-                        onEdit = { backStack.add(AppDestination.AddEditBackup(key.configId)) },
-                        onDelete = { backStack.removeLastOrNull() },
-                        onShowRunHistory = { backStack.add(AppDestination.BackupRunHistory(key.configId)) },
-                    )
-                }
-                is AppDestination.BackupRunHistory -> NavEntry(key) {
-                    BackupRunHistoryScreen(
-                        configId = key.configId,
-                        onBack = { backStack.removeLastOrNull() },
-                    )
-                }
-                is AppDestination.AddEditBackup -> NavEntry(key) {
-                    AddEditBackupScreen(
-                        configId = key.configId,
-                        onBack = { backStack.removeLastOrNull() },
-                        onSave = { configId, isNewConfig ->
-                            backStack.removeLastOrNull()
-                            // A freshly created config lands on its detail screen, which starts
-                            // the initial upload (foreground service) after the usual prompts.
-                            if (isNewConfig) {
-                                backStack.add(AppDestination.BackupDetail(configId, autoStartBackup = true))
-                            }
-                        },
-                    )
-                }
-                is AppDestination.Restore -> NavEntry(key) {
-                    RestoreScreen(
-                        onBack = { backStack.removeLastOrNull() },
-                        onRestoreSucceeded = { mode, result ->
-                            backStack.add(AppDestination.RestoreSuccess.of(mode, result))
-                        },
-                    )
-                }
-                is AppDestination.RestoreSuccess -> NavEntry(key) {
-                    RestoreSuccessScreen(
-                        mode = key.mode,
-                        result = key.result,
-                        // The restore form below was reset when it handed over, so popping back
-                        // to it is "restore another": same mode, clean selection.
-                        onRestoreAnother = { backStack.removeLastOrNull() },
-                        onDone = { backStack.returnHome() },
-                    )
-                }
-                else -> error("Unknown destination: $key")
-            }
-        },
+        entryProvider = { key -> backStack.entryFor(key) },
     )
+}
+
+/** Maps a destination [key] to its screen. Kept out of [AppNavGraph] to keep that function short. */
+private fun NavBackStack<NavKey>.entryFor(key: NavKey): NavEntry<NavKey> = when (key) {
+    is AppDestination.Onboarding -> NavEntry(key) {
+        OnboardingScreen(
+            onComplete = {
+                removeLastOrNull()
+                if (isEmpty()) add(AppDestination.Home)
+            },
+        )
+    }
+    is AppDestination.Home -> NavEntry(key) {
+        HomeScreen(
+            onOpenSettings = { add(AppDestination.Settings) },
+            onAddBackup = { add(AppDestination.AddEditBackup()) },
+            onOpenDetail = { configId -> add(AppDestination.BackupDetail(configId)) },
+            onOpenRestore = { add(AppDestination.Restore) },
+        )
+    }
+    is AppDestination.Settings -> NavEntry(key) {
+        SettingsScreen(
+            onBack = { removeLastOrNull() },
+            onShowOnboarding = { add(AppDestination.Onboarding) },
+        )
+    }
+    is AppDestination.BackupDetail -> NavEntry(key) {
+        BackupDetailScreen(
+            configId = key.configId,
+            autoStartBackup = key.autoStartBackup,
+            onBack = { removeLastOrNull() },
+            onEdit = { add(AppDestination.AddEditBackup(key.configId)) },
+            onDelete = { removeLastOrNull() },
+            onShowRunHistory = { add(AppDestination.BackupRunHistory(key.configId)) },
+        )
+    }
+    is AppDestination.BackupRunHistory -> NavEntry(key) {
+        BackupRunHistoryScreen(
+            configId = key.configId,
+            onBack = { removeLastOrNull() },
+        )
+    }
+    is AppDestination.AddEditBackup -> NavEntry(key) {
+        AddEditBackupScreen(
+            configId = key.configId,
+            onBack = { removeLastOrNull() },
+            onSave = { configId, isNewConfig ->
+                removeLastOrNull()
+                // A freshly created config lands on its detail screen, which starts
+                // the initial upload (foreground service) after the usual prompts.
+                if (isNewConfig) {
+                    add(AppDestination.BackupDetail(configId, autoStartBackup = true))
+                }
+            },
+        )
+    }
+    is AppDestination.Restore -> NavEntry(key) {
+        RestoreScreen(
+            onBack = { removeLastOrNull() },
+            onRestoreSuccess = { mode, result ->
+                add(AppDestination.RestoreSuccess.of(mode, result))
+            },
+        )
+    }
+    is AppDestination.RestoreSuccess -> NavEntry(key) {
+        RestoreSuccessScreen(
+            mode = key.mode,
+            result = key.result,
+            // The restore form below was reset when it handed over, so popping back
+            // to it is "restore another": same mode, clean selection.
+            onRestoreAnother = { removeLastOrNull() },
+            onFinish = { returnHome() },
+        )
+    }
+    else -> error("Unknown destination: $key")
 }
 
 /**

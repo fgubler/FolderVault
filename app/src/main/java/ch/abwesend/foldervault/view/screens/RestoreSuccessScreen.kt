@@ -47,7 +47,7 @@ fun RestoreSuccessScreen(
     mode: RestoreMode,
     result: RestoreResult.Success,
     onRestoreAnother: () -> Unit,
-    onDone: () -> Unit,
+    onFinish: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -84,7 +84,7 @@ fun RestoreSuccessScreen(
             )
 
             Spacer(modifier = Modifier.height(32.dp))
-            Button(onClick = onDone, modifier = Modifier.fillMaxWidth()) {
+            Button(onClick = onFinish, modifier = Modifier.fillMaxWidth()) {
                 Text(stringResource(R.string.button_done))
             }
             Spacer(modifier = Modifier.height(12.dp))
@@ -131,7 +131,7 @@ private fun RestoreSuccessScreenPreview() {
             mode = RestoreMode.WHOLE_FOLDER,
             result = RestoreResult.Success(decrypted = 12, copied = 3, skipped = 0, failed = 0),
             onRestoreAnother = {},
-            onDone = {},
+            onFinish = {},
         )
     }
 }

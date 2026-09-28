@@ -342,7 +342,7 @@
     <string name="restore_explanation_body">1. Pick your backup folder. If the Google Drive app is installed, you can select the folder directly on Google Drive in the file picker — no download needed. Otherwise, download it to local storage first.\n2. Pick an empty output folder.\n3. Enter your backup password — every file will be decrypted locally.</string>
     <string name="restore_step1_header">Step 1: backup folder</string>
     <string name="restore_pick_backup_folder">Pick backup folder</string>
-    <string name="restore_scanning">Scanning…</string>
+    <string name="restore_scanning">Analyzing backup folder…</string>
     <string name="restore_no_encrypted_files">No encrypted files found. Your %1$d file(s) are already usable without decryption.</string>
     <string name="restore_found_encrypted">Found %1$d encrypted file(s).</string>
     <string name="restore_found_encrypted_and_other">Found %1$d encrypted file(s) and %2$d other file(s).</string>
@@ -409,6 +409,10 @@
     <string name="restore_single_cancelled">The restore was stopped. The partly decrypted file was removed, so nothing was left behind.</string>
     <string name="restore_single_progress_percent">Decrypting the file — %1$d%%</string>
     <string name="restore_single_success_copied">The file was not encrypted, so it was saved as an unchanged copy.</string>
+    <string name="restore_success_title">Restore complete</string>
+    <string name="button_restore_another_file">Restore another file</string>
+    <string name="button_restore_another_folder">Restore another folder</string>
+    <string name="button_done">Done</string>
 
     <!-- Restore collision policy display names -->
     <string name="collision_skip">Skip existing files</string>

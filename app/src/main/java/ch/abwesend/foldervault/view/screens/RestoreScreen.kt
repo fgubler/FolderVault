@@ -34,6 +34,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -63,6 +64,7 @@ import org.koin.androidx.compose.koinViewModel
 @Composable
 fun RestoreScreen(
     onBack: () -> Unit,
+    onRestoreSucceeded: (RestoreMode, RestoreResult.Success) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: RestoreViewModel = koinViewModel(),
 ) {
@@ -70,6 +72,18 @@ fun RestoreScreen(
     val unexpectedError by viewModel.unexpectedError.collectAsState()
 
     UnexpectedErrorDialog(error = unexpectedError, onDismiss = viewModel::dismissUnexpectedError)
+
+    // Success is not a state of this form. The result goes to the dedicated success screen, and
+    // the form is reset in the same step: coming back ("restore another") lands on a clean screen
+    // in the same mode, and the coordinator's result is acknowledged exactly once. Failures stay
+    // inline, with the controls, so the user can correct the input and retry.
+    val state = uiState.state
+    LaunchedEffect(state) {
+        if (state is RestoreState.Done && state.result is RestoreResult.Success) {
+            onRestoreSucceeded(uiState.mode, state.result)
+            viewModel.reset()
+        }
+    }
 
     val actions = rememberRestoreLaunchActions(
         viewModel = viewModel,
@@ -271,6 +285,15 @@ private fun RestoreModeSelector(mode: RestoreMode, onModeChange: (RestoreMode) -
     }
 }
 
+/**
+ * True for the moment between a run finishing successfully and [RestoreScreen]'s hand-off to the
+ * success screen (which also resets this form). Both flows use it to keep their input controls out
+ * of composition during that frame: a password field left mounted under the closing progress
+ * dialog would regain focus and pop the keyboard just as the screen changes.
+ */
+private val RestoreState.succeeded: Boolean
+    get() = this is RestoreState.Done && result is RestoreResult.Success
+
 @Suppress("LongParameterList", "MultipleEmitters")
 @Composable
 private fun WholeFolderContent(
@@ -299,7 +322,7 @@ private fun WholeFolderContent(
         (
             state == RestoreState.SourceReady ||
                 state == RestoreState.ReadyToStart ||
-                state is RestoreState.Done
+                (state is RestoreState.Done && !state.succeeded)
             )
 
     if (showOutputAndRestore) {
@@ -307,7 +330,7 @@ private fun WholeFolderContent(
         OutputFolderSection(outputUri = uiState.outputUri, onPickOutput = onPickOutput)
     }
 
-    if (showOutputAndRestore && uiState.outputUri != null && state != RestoreState.Scanning) {
+    if (showOutputAndRestore && uiState.outputUri != null) {
         HorizontalDivider()
         PasswordAndStartSection(
             collisionPolicy = uiState.collisionPolicy,
@@ -317,7 +340,7 @@ private fun WholeFolderContent(
         )
     }
 
-    if (state is RestoreState.Done) {
+    if (state is RestoreState.Done && !state.succeeded) {
         HorizontalDivider()
         RestoreResultSection(mode = RestoreMode.WHOLE_FOLDER, result = state.result, onReset = onReset)
     }
@@ -341,8 +364,8 @@ private fun SingleFileContent(
     HorizontalDivider()
     SingleFileSourceSection(fileName = uiState.sourceFileName, onPickSourceFile = onPickSourceFile)
 
-    val sourceReady = uiState.sourceFileUri != null
-    if (sourceReady) {
+    val showPassword = uiState.sourceFileUri != null && !state.succeeded
+    if (showPassword) {
         HorizontalDivider()
         SingleFilePasswordSection(
             password = uiState.singleFilePassword,
@@ -352,7 +375,7 @@ private fun SingleFileContent(
         )
     }
 
-    if (state is RestoreState.Done) {
+    if (state is RestoreState.Done && !state.succeeded) {
         HorizontalDivider()
         RestoreResultSection(mode = RestoreMode.SINGLE_FILE, result = state.result, onReset = onReset)
     }
@@ -378,15 +401,18 @@ private fun SourceFolderSection(
     onPickSource: () -> Unit,
 ) {
     Text(stringResource(R.string.restore_step1_header), style = MaterialTheme.typography.labelLarge)
-    OutlinedButton(onClick = onPickSource, modifier = Modifier.fillMaxWidth()) {
+    // Scanning walks the whole picked tree (a network round-trip per directory on a cloud
+    // provider), so a second pick must wait, and the wait must look like work in progress rather
+    // than a muted hint that nothing is happening.
+    OutlinedButton(
+        onClick = onPickSource,
+        enabled = state != RestoreState.Scanning,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
         Text(stringResource(R.string.restore_pick_backup_folder))
     }
     when (state) {
-        RestoreState.Scanning -> Text(
-            stringResource(R.string.restore_scanning),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        RestoreState.Scanning -> IndeterminateProgress(R.string.restore_scanning)
         RestoreState.SourceReady, RestoreState.ReadyToStart, is RestoreState.Done -> {
             if (cryptFileCount == 0 && otherFileCount > 0) {
                 Text(
@@ -516,26 +542,8 @@ private fun SingleFilePasswordSection(
 private fun RestoreResultSection(mode: RestoreMode, result: RestoreResult, onReset: () -> Unit) {
     Text(stringResource(R.string.restore_result_header), style = MaterialTheme.typography.labelLarge)
     when (result) {
-        is RestoreResult.Success -> {
-            // The single-file flow handled exactly one file — the counter-based folder message
-            // ("Restored 0 encrypted file(s), copied 1 plain file(s).") would read oddly here.
-            val msg = if (mode == RestoreMode.SINGLE_FILE) {
-                if (result.copied > 0) {
-                    stringResource(R.string.restore_single_success_copied)
-                } else {
-                    stringResource(R.string.restore_single_success_decrypted)
-                }
-            } else {
-                buildString {
-                    append(stringResource(R.string.restore_success_base, result.decrypted))
-                    if (result.copied > 0) append(stringResource(R.string.restore_success_and_copied, result.copied))
-                    if (result.skipped > 0) append(stringResource(R.string.restore_success_and_skipped, result.skipped))
-                    if (result.failed > 0) append(stringResource(R.string.restore_success_and_failed, result.failed))
-                    append(".")
-                }
-            }
-            Text(msg, style = MaterialTheme.typography.bodyMedium)
-        }
+        // A success is shown by RestoreSuccessScreen; RestoreScreen hands over before this renders.
+        is RestoreResult.Success -> Unit
         RestoreResult.InvalidPassword -> {
             // "No files were modified" holds for the folder flow (it probes the password before
             // writing anything) but not for the single-file one: the output document was already
@@ -697,6 +705,13 @@ private fun IndeterminateProgress(mode: RestoreMode) {
     } else {
         R.string.restore_verifying_password
     }
+    IndeterminateProgress(textRes)
+}
+
+/** A labelled indeterminate bar: the one shape every "please wait" on this screen shares. */
+@Suppress("MultipleEmitters")
+@Composable
+private fun IndeterminateProgress(@StringRes textRes: Int) {
     Text(stringResource(textRes), style = MaterialTheme.typography.bodyMedium)
     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
 }

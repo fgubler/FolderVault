@@ -20,7 +20,7 @@ change):
    composition on `Done`, window focus fell back to the field and the IME popped up over the
    result (the ViewModel had just cleared the password on success, so it was empty as well, and the
    button was re-enabled). Fix: the password section leaves composition once the run *succeeded*
-   (`(state as? Done)?.result !is Success`), which disposes the focused node; a failed run keeps
+   (a private `RestoreState.succeeded` extension), which disposes the focused node; a failed run keeps
    the section and the typed password for a retry, as before. Whole-folder mode escaped the bug
    only because its password section is unmounted during `Running`; for consistency it now also
    hides its output/password/start controls after success (result + "Start over" only), and the
@@ -38,6 +38,25 @@ password/start controls, folder failure keeps them; picking a folder disables th
 shows the scanning status until the (gated) scan ends. Gradle cannot run in this sandbox (the home
 directory is read-only, so the wrapper cannot create its distribution cache) — build, detekt and
 tests were handed to the user to run outside it.
+
+**Follow-up (same day) — success gets its own screen.** The user preferred not to hide sections of
+the form on success ("make things simpler … navigate to a new 'restoration success' screen which
+only shows the information we need, plus two buttons: restore another, and done"). Added
+`AppDestination.RestoreSuccess(mode, decrypted, copied, skipped, failed)` (counters, not the
+non-serializable domain result) and `RestoreSuccessScreen` (check icon, "Restore complete", the
+success sentence that used to live in `RestoreResultSection`, a filled "Done" and an outlined
+"Restore another file/folder"). `RestoreScreen` gained `onRestoreSucceeded`: a `LaunchedEffect` on
+the run state hands a `Done(Success)` to the nav graph and calls `viewModel.reset()` in the same
+step, so "Restore another" (pop, also the back gesture) lands on a clean form in the same mode and
+the coordinator's result is acknowledged once; "Done" pops everything above Home
+(`returnHome`, which also covers a deep-linked stack without Home). The `Success` branch of the
+inline result section is gone; failures are unchanged. The `RestoreState.succeeded` guard stays,
+now only for the hand-off frame, so the password field is never in composition while the progress
+dialog closes (see the CLAUDE.md bullet). Tests: `RestoreScreenStateTest`'s two success cases now
+assert the hand-off (mode + result) and the reset form; new `RestoreSuccessScreenTest` pins the
+three message shapes, the mode-specific button label and both callbacks. Still unverified in the
+sandbox (no Gradle); the `NavBackStack.removeAll` call in `returnHome` is the one API use worth a
+look if the host compile complains.
 
 ## 2026-09-28 — Bug: "Backup problem … upload failed" after a run whose log shows nothing failed
 

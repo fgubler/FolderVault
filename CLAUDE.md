@@ -105,6 +105,15 @@ Crashlytics confinement: ONLY `infrastructure/logging/CrashlyticsSink.kt` may im
   run, which defeats the foreground service. `RestoreProgressDialog` takes an `onLeaveScreen`
   driving both `onDismissRequest` and a confirm button. Safe for both flows now that the coordinator
   owns both runs — it was not, and must not become so again for a run scoped to a ViewModel.
+- **A successful restore leaves the restore form.** `RestoreScreen` hands a `Done(Success)` to the
+  `AppDestination.RestoreSuccess` screen (result + "Restore another" / "Done") and calls
+  `viewModel.reset()` in the same `LaunchedEffect`, so the form underneath is already clean (same
+  mode) when the user pops back, and the coordinator's result is acknowledged exactly once.
+  Failures stay inline with the controls for a retry. During the hand-off frame the password/start
+  and result sections are kept out of composition (`RestoreState.succeeded`): the modal progress
+  dialog is its own window, so a text field left mounted underneath stays the main window's focused
+  node and regains focus (keyboard up) the moment the dialog closes. Nothing in the app requests
+  focus — never re-introduce a success state that keeps the password field mounted.
 - **Restore progress is two shapes**: `RestoreProgress.Files` (folder: one unit per file) and
   `RestoreProgress.Bytes` (single file: one unit per byte of the *source*, `totalBytes = null` when
   the provider reports no size). Reporting a single file as "0 / 1 files" would sit at 0 for the
@@ -138,6 +147,11 @@ Crashlytics confinement: ONLY `infrastructure/logging/CrashlyticsSink.kt` may im
   every window (continuations + cancellations included), a progressing run is never mis-flagged.
   Emits one `WATCHDOG_TRIGGERED_RUN` message per config, throttled by presence
   (`getCountForType`), since a null-`runId` message cannot coalesce.
+- **The per-run problem notification is scoped to the run's own messages**
+  (`BackupMessageDao.getCountForRunAndType`, spec §8.3). Never decide it with the config-wide
+  `getCountForType`: undismissed warnings of earlier runs would make every later clean run
+  re-announce "upload failed" once per throttle window. `getCountForType` is for presence checks
+  (`clearResolvedThrottles`, the watchdog breadcrumb) only.
 - **Kotest** spec DSL for unit tests (e.g. `StringSpec`, `FunSpec`). Set
   `isolationMode = IsolationMode.InstancePerTest` when using MockK to get a fresh mock per test.
 - **Konsist** architecture tests live in `src/test/.../architecture/`.

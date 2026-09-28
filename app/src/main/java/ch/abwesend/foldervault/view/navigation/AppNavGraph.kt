@@ -7,7 +7,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
+import androidx.navigation3.runtime.NavBackStack
 import androidx.navigation3.runtime.NavEntry
+import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
@@ -18,6 +20,7 @@ import ch.abwesend.foldervault.view.screens.BackupRunHistoryScreen
 import ch.abwesend.foldervault.view.screens.HomeScreen
 import ch.abwesend.foldervault.view.screens.OnboardingScreen
 import ch.abwesend.foldervault.view.screens.RestoreScreen
+import ch.abwesend.foldervault.view.screens.RestoreSuccessScreen
 import ch.abwesend.foldervault.view.screens.SettingsScreen
 import kotlinx.coroutines.flow.first
 import org.koin.compose.koinInject
@@ -101,10 +104,34 @@ fun AppNavGraph(
                     )
                 }
                 is AppDestination.Restore -> NavEntry(key) {
-                    RestoreScreen(onBack = { backStack.removeLastOrNull() })
+                    RestoreScreen(
+                        onBack = { backStack.removeLastOrNull() },
+                        onRestoreSucceeded = { mode, result ->
+                            backStack.add(AppDestination.RestoreSuccess.of(mode, result))
+                        },
+                    )
+                }
+                is AppDestination.RestoreSuccess -> NavEntry(key) {
+                    RestoreSuccessScreen(
+                        mode = key.mode,
+                        result = key.result,
+                        // The restore form below was reset when it handed over, so popping back
+                        // to it is "restore another": same mode, clean selection.
+                        onRestoreAnother = { backStack.removeLastOrNull() },
+                        onDone = { backStack.returnHome() },
+                    )
                 }
                 else -> error("Unknown destination: $key")
             }
         },
     )
+}
+
+/**
+ * Pops everything above the home screen, or starts a fresh one when the stack began elsewhere
+ * (a notification deep link opens straight on a backup's detail screen).
+ */
+private fun NavBackStack<NavKey>.returnHome() {
+    removeAll { it != AppDestination.Home }
+    if (isEmpty()) add(AppDestination.Home)
 }

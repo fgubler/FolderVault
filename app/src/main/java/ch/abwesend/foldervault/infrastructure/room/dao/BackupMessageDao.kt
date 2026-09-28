@@ -70,6 +70,17 @@ interface BackupMessageDao {
     @Query("SELECT COUNT(*) FROM BackupMessage WHERE backupConfigId = :configId AND type = :type AND dismissed = 0")
     suspend fun getCountForType(configId: String, type: MessageType): Int
 
+    /**
+     * Undismissed messages of [type] that *this* run produced. The per-run problem notification
+     * must consult this rather than [getCountForType]: the config-wide count also sees the
+     * still-undismissed warnings of earlier runs, which would report a clean run as failed.
+     */
+    @Query(
+        """SELECT COUNT(*) FROM BackupMessage
+           WHERE runId = :runId AND backupConfigId = :configId AND type = :type AND dismissed = 0"""
+    )
+    suspend fun getCountForRunAndType(runId: String, configId: String, type: MessageType): Int
+
     // ── Coalescing ─────────────────────────────────────────────────────────────
 
     @Query(

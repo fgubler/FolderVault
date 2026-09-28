@@ -7,6 +7,73 @@ Started from the first real coding task; the review/planning conversation is out
 
 <!-- New entries go here -->
 
+## 2026-09-28 — Restore screen: password field refocus after a single-file restore; scanning state
+
+Two user reports on the restore screen, fixed in `RestoreScreen.kt` only (no ViewModel or domain
+change):
+
+1. *"When single file restore is finished, the password field is focused again. Should just show the
+   success message."* Nothing in the app requests focus — the field simply never *lost* it.
+   `SingleFileContent` kept `SingleFilePasswordSection` mounted whenever a source file was picked,
+   i.e. also through `Running` and `Done`. The modal `RestoreProgressDialog` is a separate window,
+   so the field stayed the main window's focused node underneath it; when the dialog left
+   composition on `Done`, window focus fell back to the field and the IME popped up over the
+   result (the ViewModel had just cleared the password on success, so it was empty as well, and the
+   button was re-enabled). Fix: the password section leaves composition once the run *succeeded*
+   (`(state as? Done)?.result !is Success`), which disposes the focused node; a failed run keeps
+   the section and the typed password for a retry, as before. Whole-folder mode escaped the bug
+   only because its password section is unmounted during `Running`; for consistency it now also
+   hides its output/password/start controls after success (result + "Start over" only), and the
+   `state != Scanning` guard on the password section became redundant and was dropped.
+2. *"After selecting a folder to restore, the button should be disabled and the status text shown
+   more prominently until the folder is analyzed."* The scan is a full SAF tree walk. The "Pick
+   backup folder" button is now `enabled = state != Scanning`, and the scanning status reuses the
+   progress dialog's labelled `LinearProgressIndicator` (`IndeterminateProgress` gained a
+   `@StringRes` overload) instead of a muted `bodySmall` one-liner. `restore_scanning` reworded from
+   "Scanning…" to "Analyzing backup folder…".
+
+Tests (written first, Robolectric + Compose, `RestoreScreenStateTest`): single-file success hides
+the password field and shows only the result; wrong password keeps it; folder success hides the
+password/start controls, folder failure keeps them; picking a folder disables the pick button and
+shows the scanning status until the (gated) scan ends. Gradle cannot run in this sandbox (the home
+directory is read-only, so the wrapper cannot create its distribution cache) — build, detekt and
+tests were handed to the user to run outside it.
+
+## 2026-09-28 — Bug: "Backup problem … upload failed" after a run whose log shows nothing failed
+
+The user's log showed two periodic runs, one transient `uploadFile(...) failed (attempt 1/5)` that
+the retry (or its idempotency probe) resolved, two clean `Uploaded file to Drive` lines — and yet a
+"failed" notification. Every path to the *completion* "Backup failed" notification logs at ERROR
+(`FatalError`, the worker's fatal catch, the network give-up), so the log excerpt ruled those out.
+
+### Root cause
+`BackupNotificationManager.postProblemNotificationIfNeeded` decided per notifying `MessageType`
+with `backupMessageDao.getCountForType(configId, type)` — the count of **all undismissed** messages
+of that type for the config, regardless of run. An `UPLOAD_FAILED` warning from an earlier run stays
+undismissed until the user dismisses it (WARNINGs are only pruned after 30 days), so after every
+later clean run it re-posted "Backup 'X' had issues: upload failed — tap to review", once per 24 h
+throttle window. Spec §8.3 is explicit: one notification per run, "if *that run* produced any
+`notifies` messages".
+
+### Fix
+- `BackupMessageDao.getCountForRunAndType(runId, configId, type)` — the run-scoped count.
+- `postProblemNotificationIfNeeded` uses it; the cross-run throttle is unchanged (a recurring
+  condition still alerts at most once per window). `getCountForType` stays for the two callers that
+  legitimately want config-wide presence: `clearResolvedThrottles` and the watchdog breadcrumb.
+- Tests: `ProblemNotificationScopeTest` (Robolectric + MockK DAOs; stale-warning run stays silent,
+  this-run warning notifies, throttle still applies) and a `MessageCoalescingTest` case for the
+  DAO query (SQLite-backed — host only).
+
+### Not changed, worth knowing
+`BackupWorker.handleNetworkUnavailable`'s give-up branch also calls the problem notification, but
+`markNetworkUnavailable` deliberately emits no message, so that call was only ever firing on stale
+messages from other runs; with the fix it is silent and the "Backup failed" completion notification
+(if enabled) is what informs the user. Emitting a run-scoped message there would be a separate,
+deliberate behaviour change.
+
+The sandbox had no Gradle cache (`/home/agent` read-only), so compile / tests / detekt were run by
+the user on the host.
+
 ## 2026-09-06 — Review round 6 fixes: the coordinator gets tests, the restore notification gets a rate limit
 
 Round 6 of `/code-review` found no blockers but two Suggestions, both on the host seam the
